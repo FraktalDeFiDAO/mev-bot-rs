@@ -57,7 +57,12 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
       - run: forge fmt --check
       - run: forge build --sizes
-      - run: forge test
+      # Network-free: unit, fuzz, invariant (mocks).
+      - run: forge test --match-path test/ArbExecutorUnit.t.sol
+      # Fork tests against live Arbitrum state (public RPC).
+      - run: forge test --match-path test/ArbExecutor.t.sol
+        env:
+          ARBITRUM_HTTP_URL: https://arb1.arbitrum.io/rpc
 
   secrets:
     runs-on: ubuntu-latest

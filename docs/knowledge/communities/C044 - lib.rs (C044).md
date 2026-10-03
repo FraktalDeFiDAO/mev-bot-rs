@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "44"
-graphify-node-count: 28
-graphify-internal-edges: 38
+graphify-node-count: 27
+graphify-internal-edges: 37
 tags:
   - graphify/community
 ---
@@ -17,7 +17,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - `graph` — 6 nodes
 - `crates/mev-lending-aave-v3/src/lib.rs` — 1 node
 - `crates/mev-lending-compound-v3/src/lib.rs` — 1 node
-- `crates/mev-lending-dolomite/src/lib.rs` — 1 node
 - `crates/mev-lending-fluid/src/lib.rs` — 1 node
 - `crates/mev-lending-morpho/src/lib.rs` — 1 node
 - `crates/mev-lending-silo/src/lib.rs` — 1 node
@@ -25,7 +24,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - `crates/mev-lending/src/lib.rs` — 1 node
 - `crates/mev-liquidate/src/lib.rs` — 1 node
 
-## Nodes (28)
+## Nodes (27)
 
 - **AdapterStatus** — `crates/mev-lending/src/lib.rs:L20`
 - **Adapter** — `crates/mev-lending-radiant/src/lib.rs:L18`
@@ -44,7 +43,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.index()** — `crates/mev-lending-radiant/src/lib.rs:L38`
 - **.status()** — `crates/mev-lending-aave-v3/src/lib.rs:L198`
 - **.status()** — `crates/mev-lending-compound-v3/src/lib.rs:L325`
-- **.status()** — `crates/mev-lending-dolomite/src/lib.rs:L40`
 - **.status()** — `crates/mev-lending-fluid/src/lib.rs:L225`
 - **.status()** — `crates/mev-lending-morpho/src/lib.rs:L258`
 - **.status()** — `crates/mev-lending-radiant/src/lib.rs:L32`
@@ -58,8 +56,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 10 cross-community edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 1 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 6 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 5 cross-community edges
 - [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 1 cross-community edges

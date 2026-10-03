@@ -101,11 +101,38 @@ impl Sender {
     /// Sign once and broadcast the same raw tx to every endpoint; first success wins.
     async fn send_calldata(&self, calldata: Vec<u8>, gas_limit: u64) -> Result<TxHash> {
         let base_fee = self.reader.get_gas_price().await?;
+        match self
+            .sign_and_broadcast(&calldata, gas_limit, base_fee)
+            .await
+        {
+            // The wallet was used outside the bot (or a tx was dropped): the cached nonce is stale.
+            // Resync from the chain and re-sign once.
+            Err(e) if is_nonce_error(&e) => {
+                let n = self
+                    .reader
+                    .get_transaction_count(self.address)
+                    .pending()
+                    .await?;
+                warn!(resynced_nonce = n, error = %e, "stale nonce; resyncing and retrying once");
+                self.nonce.store(n, Ordering::SeqCst);
+                self.sign_and_broadcast(&calldata, gas_limit, base_fee)
+                    .await
+            }
+            other => other,
+        }
+    }
+
+    async fn sign_and_broadcast(
+        &self,
+        calldata: &[u8],
+        gas_limit: u64,
+        base_fee: u128,
+    ) -> Result<TxHash> {
         let nonce = self.nonce.fetch_add(1, Ordering::SeqCst);
         let tx = TransactionRequest::default()
             .with_from(self.address)
             .with_to(self.executor)
-            .with_input(calldata)
+            .with_input(calldata.to_vec())
             .with_nonce(nonce)
             .with_chain_id(self.chain_id)
             .with_gas_limit(gas_limit)
@@ -121,7 +148,7 @@ impl Sender {
         });
         let results = futures_join_all(sends).await;
         if results.iter().all(|r| r.is_err()) {
-            // Nothing accepted it — reuse the nonce.
+            // Nothing accepted it — give the nonce back.
             self.nonce.fetch_sub(1, Ordering::SeqCst);
             bail!(
                 "all broadcasts failed: {:?}",
@@ -158,6 +185,15 @@ impl Sender {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
+}
+
+/// Node rejections meaning our nonce is out of sync with the chain.
+pub fn is_nonce_error(e: &anyhow::Error) -> bool {
+    let s = format!("{e:#}").to_lowercase();
+    s.contains("nonce too low")
+        || s.contains("nonce too high")
+        || s.contains("invalid nonce")
+        || s.contains("already known")
 }
 
 /// Executor calldata for an arbitrage (pure; unit-tested against the ABI).
@@ -209,6 +245,18 @@ mod tests {
             zero_for_one: false,
             fee_bps: 0,
         }
+    }
+
+    #[test]
+    fn recognizes_nonce_errors_from_nodes() {
+        let low = anyhow::anyhow!(
+            "all broadcasts failed: ErrorResp {{ code: -32003, message: \"nonce too low\" }}"
+        );
+        assert!(is_nonce_error(&low));
+        assert!(is_nonce_error(&anyhow::anyhow!("Invalid nonce")));
+        assert!(!is_nonce_error(&anyhow::anyhow!(
+            "insufficient funds for gas"
+        )));
     }
 
     #[test]

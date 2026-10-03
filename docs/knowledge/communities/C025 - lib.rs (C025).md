@@ -2,7 +2,7 @@
 graphify-generated: true
 graphify-community: "25"
 graphify-node-count: 41
-graphify-internal-edges: 83
+graphify-internal-edges: 74
 tags:
   - graphify/community
 ---
@@ -13,60 +13,65 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-lending-aave-v3/src/lib.rs` — 15 nodes
-- `crates/mev-lending-aave-v3/src/math.rs` — 13 nodes
-- `graph` — 13 nodes
+- `graph` — 19 nodes
+- `crates/mev-lending-aave-v3/src/lib.rs` — 16 nodes
+- `crates/mev-lending/src/lib.rs` — 6 nodes
 
 ## Nodes (41)
 
+- **AccountRef** — `crates/mev-lending/src/lib.rs:L32`
+- **Plan** — `crates/mev-lending/src/lib.rs:L73`
 - **AaveV3Adapter** — `crates/mev-lending-aave-v3/src/lib.rs:L41`
-- **math.rs** — `crates/mev-lending-aave-v3/src/math.rs:L1`
-- **plan()** — `crates/mev-lending-aave-v3/src/math.rs:L64`
+- **AdapterRpc** — `crates/mev-lending/src/lib.rs:L90`
 - **.new()** — `crates/mev-lending-aave-v3/src/lib.rs:L51`
 - **.plan()** — `crates/mev-lending-aave-v3/src/lib.rs:L251`
 - **Address** — `graph`
 - **.reserves_info()** — `crates/mev-lending-aave-v3/src/lib.rs:L117`
-- **ReserveInfo** — `crates/mev-lending-aave-v3/src/math.rs:L12`
+- **lib.rs** — `crates/mev-lending/src/lib.rs:L1`
 - **Vec** — `graph`
 - **.health()** — `crates/mev-lending-aave-v3/src/lib.rs:L221`
 - **.position()** — `crates/mev-lending-aave-v3/src/lib.rs:L158`
-- **reserves()** — `crates/mev-lending-aave-v3/src/math.rs:L128`
+- **ProtocolCall** — `crates/mev-lending/src/lib.rs:L63`
 - **Result** — `graph`
 - **migrate_v1_cache()** — `crates/mev-lending-aave-v3/src/lib.rs:L303`
-- **pos()** — `crates/mev-lending-aave-v3/src/math.rs:L147`
-- **Position** — `crates/mev-lending-aave-v3/src/math.rs:L38`
 - **.account()** — `crates/mev-lending-aave-v3/src/lib.rs:L109`
 - **.accounts()** — `crates/mev-lending-aave-v3/src/lib.rs:L214`
-- **Address** — `graph`
-- **full_close_factor_below_095_capped_by_collateral()** — `crates/mev-lending-aave-v3/src/math.rs:L171`
-- **half_close_factor_above_095()** — `crates/mev-lending-aave-v3/src/math.rs:L162`
 - **lib.rs** — `crates/mev-lending-aave-v3/src/lib.rs:L1`
-- **small_positions_close_fully()** — `crates/mev-lending-aave-v3/src/math.rs:L178`
 - **.assets()** — `crates/mev-lending-aave-v3/src/lib.rs:L297`
+- **.fmt()** — `crates/mev-lending/src/lib.rs:L40`
+- **.index()** — `crates/mev-lending-aave-v3/src/lib.rs:L202`
 - **.price_feeds()** — `crates/mev-lending-aave-v3/src/lib.rs:L289`
 - **.targets()** — `crates/mev-lending-aave-v3/src/lib.rs:L293`
-- **LiquidationPlan** — `crates/mev-lending-aave-v3/src/math.rs:L48`
+- **Address** — `graph`
 - **.id()** — `crates/mev-lending-aave-v3/src/lib.rs:L194`
-- **.raw()** — `crates/mev-lending-aave-v3/src/math.rs:L27`
-- **.usd()** — `crates/mev-lending-aave-v3/src/math.rs:L24`
+- **U256** — `graph`
 - **v1_cache_is_migrated_to_market_account_pairs()** — `crates/mev-lending-aave-v3/src/lib.rs:L335`
-- **Vec** — `graph`
+- **Bytes** — `graph`
+- **Display** — `graph`
+- **DynProvider** — `graph`
+- **Formatter** — `graph`
 - **HashMap** — `graph`
-- **healthy_position_has_no_plan()** — `crates/mev-lending-aave-v3/src/math.rs:L157`
-- **Option** — `graph`
 - **Option** — `graph`
 - **Path** — `graph`
 - **PathBuf** — `graph`
 - **Position** — `graph`
 - **ProtocolId** — `graph`
+- **ProtocolId** — `graph`
+- **Result** — `graph`
 - **Self** — `graph`
+- **Vec** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 7 cross-community edges
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 16 cross-community edges
+- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 9 cross-community edges
+- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 5 cross-community edges
+- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 5 cross-community edges
+- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 5 cross-community edges
+- [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 3 cross-community edges
-- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 1 cross-community edges
+- [[docs/knowledge/communities/C034 - Engine|Engine]] — 3 cross-community edges
+- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C045 - lib.rs (C045)|lib.rs (C045)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C048 - Adapter|Adapter]] — 3 cross-community edges

@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "20"
-graphify-node-count: 17
-graphify-internal-edges: 36
+graphify-node-count: 16
+graphify-internal-edges: 35
 tags:
   - graphify/community
 ---
@@ -13,35 +13,29 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-state/src/lib.rs` — 12 nodes
-- `graph` — 5 nodes
+- `crates/mev-lending-aave-v3/src/math.rs` — 13 nodes
+- `graph` — 3 nodes
 
-## Nodes (17)
+## Nodes (16)
 
-- **PoolStore** — `crates/mev-state/src/lib.rs:L11`
+- **math.rs** — `crates/mev-lending-aave-v3/src/math.rs:L1`
+- **plan()** — `crates/mev-lending-aave-v3/src/math.rs:L64`
+- **ReserveInfo** — `crates/mev-lending-aave-v3/src/math.rs:L12`
+- **reserves()** — `crates/mev-lending-aave-v3/src/math.rs:L128`
+- **pos()** — `crates/mev-lending-aave-v3/src/math.rs:L147`
+- **Position** — `crates/mev-lending-aave-v3/src/math.rs:L38`
 - **Address** — `graph`
-- **.pools_for()** — `crates/mev-state/src/lib.rs:L57`
-- **.get()** — `crates/mev-state/src/lib.rs:L29`
-- **.siblings()** — `crates/mev-state/src/lib.rs:L50`
-- **.apply_log()** — `crates/mev-state/src/lib.rs:L78`
-- **.rate()** — `crates/mev-state/src/lib.rs:L131`
-- **.usd_per_raw_unit()** — `crates/mev-state/src/lib.rs:L110`
-- **Option** — `graph`
-- **rpc_log()** — `crates/mev-state/src/lib.rs:L172`
+- **full_close_factor_below_095_capped_by_collateral()** — `crates/mev-lending-aave-v3/src/math.rs:L171`
+- **half_close_factor_above_095()** — `crates/mev-lending-aave-v3/src/math.rs:L162`
+- **small_positions_close_fully()** — `crates/mev-lending-aave-v3/src/math.rs:L178`
+- **LiquidationPlan** — `crates/mev-lending-aave-v3/src/math.rs:L48`
+- **.raw()** — `crates/mev-lending-aave-v3/src/math.rs:L27`
+- **.usd()** — `crates/mev-lending-aave-v3/src/math.rs:L24`
 - **Vec** — `graph`
-- **.addresses()** — `crates/mev-state/src/lib.rs:L41`
-- **.set_state()** — `crates/mev-state/src/lib.rs:L71`
-- **Log** — `graph`
-- **.is_empty()** — `crates/mev-state/src/lib.rs:L37`
-- **.len()** — `crates/mev-state/src/lib.rs:L33`
-- **LogData** — `graph`
+- **healthy_position_has_no_plan()** — `crates/mev-lending-aave-v3/src/math.rs:L157`
+- **Option** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C051 - lib.rs (C051)|lib.rs (C051)]] — 8 cross-community edges
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 7 cross-community edges
-- [[docs/knowledge/communities/C049 - lib.rs (C049)|lib.rs (C049)]] — 4 cross-community edges
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C034 - Engine|Engine]] — 2 cross-community edges
-- [[docs/knowledge/communities/C052 - lib.rs (C052)|lib.rs (C052)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C054 - .pools|.pools]] — 1 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 1 cross-community edges
+- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 1 cross-community edges
