@@ -21,9 +21,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **math.rs** — `crates/mev-lending-aave-v3/src/math.rs:L1`
 - **plan()** — `crates/mev-lending-aave-v3/src/math.rs:L64`
 - **ReserveInfo** — `crates/mev-lending-aave-v3/src/math.rs:L12`
-- **Position** — `crates/mev-lending-aave-v3/src/math.rs:L38`
 - **reserves()** — `crates/mev-lending-aave-v3/src/math.rs:L128`
 - **pos()** — `crates/mev-lending-aave-v3/src/math.rs:L147`
+- **Position** — `crates/mev-lending-aave-v3/src/math.rs:L38`
 - **Address** — `graph`
 - **full_close_factor_below_095_capped_by_collateral()** — `crates/mev-lending-aave-v3/src/math.rs:L171`
 - **half_close_factor_above_095()** — `crates/mev-lending-aave-v3/src/math.rs:L162`
@@ -37,5 +37,5 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 1 cross-community edges

@@ -24,7 +24,7 @@ use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
     ProtocolId,
 };
-use mev_lending_index::{EventIndex, IndexConfig, topic_address};
+use mev_lending_index::{EventIndex, IndexConfig, market_key, topic_address};
 use mev_rpc::{call, decode, multicall};
 use tracing::info;
 
@@ -205,7 +205,7 @@ impl LiquidationAdapter for AaveV3Adapter {
         self.index
             .step(&self.rpc.scan, |l| {
                 topic_address(l, 2)
-                    .map(|u| vec![(pool, u)])
+                    .map(|u| vec![(market_key(pool), u)])
                     .unwrap_or_default()
             })
             .await

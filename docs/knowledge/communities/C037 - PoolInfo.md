@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "37"
-graphify-node-count: 28
-graphify-internal-edges: 47
+graphify-node-count: 23
+graphify-internal-edges: 61
 tags:
   - graphify/community
 ---
@@ -13,46 +13,35 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `graph` — 10 nodes
-- `crates/mev-types/src/lib.rs` — 8 nodes
-- `crates/mev-sim/src/lib.rs` — 7 nodes
-- `crates/mev-bindings/src/lib.rs` — 3 nodes
+- `crates/mev-lending-compound-v3/src/math.rs` — 20 nodes
+- `graph` — 3 nodes
 
-## Nodes (28)
+## Nodes (23)
 
-- **PoolInfo** — `crates/mev-types/src/lib.rs:L34`
-- **Opportunity** — `crates/mev-types/src/lib.rs:L69`
-- **Simulator** — `crates/mev-sim/src/lib.rs:L18`
-- **.simulate_liquidation()** — `crates/mev-sim/src/lib.rs:L53`
-- **.simulate()** — `crates/mev-sim/src/lib.rs:L35`
-- **Hop** — `crates/mev-types/src/lib.rs:L58`
-- **SimOutcome** — `crates/mev-sim/src/lib.rs:L13`
-- **.new()** — `crates/mev-sim/src/lib.rs:L25`
+- **math.rs** — `crates/mev-lending-compound-v3/src/math.rs:L1`
+- **Market** — `crates/mev-lending-compound-v3/src/math.rs:L23`
+- **.asset()** — `crates/mev-lending-compound-v3/src/math.rs:L60`
+- **.health()** — `crates/mev-lending-compound-v3/src/math.rs:L69`
+- **.quote()** — `crates/mev-lending-compound-v3/src/math.rs:L110`
 - **Address** — `graph`
-- **lib.rs** — `crates/mev-sim/src/lib.rs:L1`
-- **lib.rs** — `crates/mev-types/src/lib.rs:L1`
-- **PoolKind** — `crates/mev-types/src/lib.rs:L8`
-- **short()** — `crates/mev-sim/src/lib.rs:L80`
-- **Result** — `graph`
-- **U256** — `graph`
-- **.has()** — `crates/mev-types/src/lib.rs:L51`
-- **.other()** — `crates/mev-types/src/lib.rs:L43`
-- **Address** — `graph`
-- **DynProvider** — `graph`
-- **lib.rs** — `crates/mev-bindings/src/lib.rs:L1`
-- **String** — `graph`
-- **to_sol_call()** — `crates/mev-bindings/src/lib.rs:L139`
-- **to_sol_hop()** — `crates/mev-bindings/src/lib.rs:L128`
-- **.hop_kind()** — `crates/mev-types/src/lib.rs:L23`
-- **Self** — `graph`
-- **String** — `graph`
-- **U256** — `graph`
+- **.storefront()** — `crates/mev-lending-compound-v3/src/math.rs:L124`
+- **.best_collateral()** — `crates/mev-lending-compound-v3/src/math.rs:L92`
+- **.discount()** — `crates/mev-lending-compound-v3/src/math.rs:L104`
+- **.value_units()** — `crates/mev-lending-compound-v3/src/math.rs:L64`
+- **AssetParams** — `crates/mev-lending-compound-v3/src/math.rs:L12`
+- **Position** — `crates/mev-lending-compound-v3/src/math.rs:L33`
+- **usdc_comet()** — `crates/mev-lending-compound-v3/src/math.rs:L149`
+- **Option** — `graph`
+- **eth_priced_comet_converts_to_usd()** — `crates/mev-lending-compound-v3/src/math.rs:L226`
+- **health_matches_comet_liquidation_condition()** — `crates/mev-lending-compound-v3/src/math.rs:L175`
+- **no_borrow_is_infinitely_healthy()** — `crates/mev-lending-compound-v3/src/math.rs:L198`
+- **quote_applies_storefront_discount()** — `crates/mev-lending-compound-v3/src/math.rs:L207`
+- **HealthOut** — `crates/mev-lending-compound-v3/src/math.rs:L39`
+- **Quote** — `crates/mev-lending-compound-v3/src/math.rs:L46`
+- **Storefront** — `crates/mev-lending-compound-v3/src/math.rs:L54`
 - **Vec** — `graph`
+- **best_collateral_is_highest_value()** — `crates/mev-lending-compound-v3/src/math.rs:L217`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 7 cross-community edges
-- [[docs/knowledge/communities/C034 - Engine|Engine]] — 7 cross-community edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 1 cross-community edges

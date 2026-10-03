@@ -16,8 +16,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-/// (market, account) pairs; market = the contract the account lives in (pool, comet, morpho...).
-pub type Key = (Address, Address);
+/// (market, account) pairs. `market` is a 32-byte id: a market contract address left-padded
+/// (`Address::into_word`) for Aave/Comet-style venues, or the native market id (Morpho `bytes32`).
+pub type Key = (B256, Address);
 
 #[derive(Debug, Clone)]
 pub struct IndexConfig {
@@ -53,11 +54,12 @@ pub struct EventIndex {
 }
 
 impl EventIndex {
-    /// Load progress from the cache (or start fresh).
+    /// Load progress from the cache (or start fresh). Caches written with address-typed market
+    /// keys (pre-B256) are migrated in place.
     pub fn open(cfg: IndexConfig) -> Self {
         let state = std::fs::read(&cfg.cache_path)
             .ok()
-            .and_then(|b| serde_json::from_slice::<State>(&b).ok())
+            .and_then(|b| parse_state(&b))
             .unwrap_or_default();
         info!(
             index = cfg.name,
@@ -185,6 +187,33 @@ impl EventIndex {
     }
 }
 
+fn parse_state(bytes: &[u8]) -> Option<State> {
+    if let Ok(s) = serde_json::from_slice::<State>(bytes) {
+        return Some(s);
+    }
+    #[derive(Deserialize)]
+    struct AddressKeyed {
+        next_block: u64,
+        back_block: u64,
+        accounts: BTreeSet<(Address, Address)>,
+    }
+    let old: AddressKeyed = serde_json::from_slice(bytes).ok()?;
+    Some(State {
+        next_block: old.next_block,
+        back_block: old.back_block,
+        accounts: old
+            .accounts
+            .into_iter()
+            .map(|(m, a)| (m.into_word(), a))
+            .collect(),
+    })
+}
+
+/// Market key for venues whose markets are contracts.
+pub fn market_key(address: Address) -> B256 {
+    address.into_word()
+}
+
 /// Address from an indexed topic.
 pub fn topic_address(log: &Log, i: usize) -> Option<Address> {
     log.topics().get(i).map(|t| Address::from_word(*t))
@@ -214,7 +243,10 @@ mod tests {
         let mut idx = EventIndex::open(cfg(path.clone()));
         assert!(idx.is_empty());
         assert!(!idx.backfilled(), "uninitialized index is not backfilled");
-        idx.insert((Address::with_last_byte(1), Address::with_last_byte(2)));
+        idx.insert((
+            market_key(Address::with_last_byte(1)),
+            Address::with_last_byte(2),
+        ));
         idx.state.next_block = 500;
         idx.state.back_block = 100;
         idx.save().unwrap();
@@ -222,6 +254,18 @@ mod tests {
         let idx2 = EventIndex::open(cfg(path));
         assert_eq!(idx2.len(), 1);
         assert!(idx2.backfilled());
+    }
+
+    #[test]
+    fn address_keyed_cache_is_migrated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("idx.json");
+        let (m, a) = (Address::with_last_byte(0xaa), Address::with_last_byte(1));
+        let old = serde_json::json!({ "next_block": 9, "back_block": 100, "accounts": [[m, a]] });
+        std::fs::write(&path, old.to_string()).unwrap();
+        let idx = EventIndex::open(cfg(path));
+        assert_eq!(idx.accounts().next(), Some(&(market_key(m), a)));
+        assert!(idx.backfilled());
     }
 
     #[test]

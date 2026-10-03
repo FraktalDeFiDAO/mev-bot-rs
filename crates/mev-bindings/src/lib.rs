@@ -94,6 +94,11 @@ sol! {
         function aggregator() external view returns (address);
         function ASSET_TO_USD_AGGREGATOR() external view returns (address);
         function BASE_TO_USD_AGGREGATOR() external view returns (address);
+        // MorphoChainlinkOracleV2
+        function BASE_FEED_1() external view returns (address);
+        function BASE_FEED_2() external view returns (address);
+        function QUOTE_FEED_1() external view returns (address);
+        function QUOTE_FEED_2() external view returns (address);
     }
 
     #[sol(rpc)]

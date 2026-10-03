@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "39"
-graphify-node-count: 3
-graphify-internal-edges: 3
+graphify-node-count: 31
+graphify-internal-edges: 81
 tags:
   - graphify/community
 ---
@@ -13,14 +13,49 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-lending-compound-v3/src/lib.rs` — 3 nodes
+- `crates/mev-lending-compound-v3/src/lib.rs` — 19 nodes
+- `graph` — 11 nodes
+- `crates/mev-lending/src/lib.rs` — 1 node
 
-## Nodes (3)
+## Nodes (31)
 
-- **add()** — `crates/mev-lending-compound-v3/src/lib.rs:L1`
-- **it_works()** — `crates/mev-lending-compound-v3/src/lib.rs:L10`
+- **CompoundV3Adapter** — `crates/mev-lending-compound-v3/src/lib.rs:L97`
+- **.plan()** — `crates/mev-lending-compound-v3/src/lib.rs:L414`
+- **.health()** — `crates/mev-lending-compound-v3/src/lib.rs:L356`
+- **.positions()** — `crates/mev-lending-compound-v3/src/lib.rs:L253`
+- **Address** — `graph`
+- **Comet** — `crates/mev-lending-compound-v3/src/lib.rs:L79`
+- **.storefront_state()** — `crates/mev-lending-compound-v3/src/lib.rs:L212`
+- **.new()** — `crates/mev-lending-compound-v3/src/lib.rs:L106`
+- **.prices()** — `crates/mev-lending-compound-v3/src/lib.rs:L170`
+- **Vec** — `graph`
+- **Result** — `graph`
+- **.market()** — `crates/mev-lending-compound-v3/src/lib.rs:L298`
+- **AdapterRpc** — `crates/mev-lending/src/lib.rs:L90`
+- **.comet()** — `crates/mev-lending-compound-v3/src/lib.rs:L166`
 - **lib.rs** — `crates/mev-lending-compound-v3/src/lib.rs:L1`
+- **Prices** — `crates/mev-lending-compound-v3/src/lib.rs:L91`
+- **Option** — `graph`
+- **.accounts()** — `crates/mev-lending-compound-v3/src/lib.rs:L340`
+- **.assets()** — `crates/mev-lending-compound-v3/src/lib.rs:L502`
+- **.index()** — `crates/mev-lending-compound-v3/src/lib.rs:L329`
+- **.price_feeds()** — `crates/mev-lending-compound-v3/src/lib.rs:L494`
+- **.targets()** — `crates/mev-lending-compound-v3/src/lib.rs:L498`
+- **Asset** — `crates/mev-lending-compound-v3/src/lib.rs:L70`
+- **DynProvider** — `graph`
+- **.id()** — `crates/mev-lending-compound-v3/src/lib.rs:L321`
+- **HashMap** — `graph`
+- **DynProvider** — `graph`
+- **PathBuf** — `graph`
+- **Position** — `graph`
+- **ProtocolId** — `graph`
+- **Self** — `graph`
 
 ## Related communities
 
-- No selected community has a direct edge to this one.
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 8 cross-community edges
+- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 2 cross-community edges
+- [[docs/knowledge/communities/C037 - PoolInfo|PoolInfo]] — 1 cross-community edges

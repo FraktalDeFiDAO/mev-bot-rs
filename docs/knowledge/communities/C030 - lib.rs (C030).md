@@ -19,8 +19,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Nodes (48)
 
-- **Rpc** — `crates/mev-rpc/src/lib.rs:L15`
 - **call()** — `crates/mev-rpc/src/lib.rs:L144`
+- **Rpc** — `crates/mev-rpc/src/lib.rs:L15`
 - **lib.rs** — `crates/mev-discovery/src/lib.rs:L1`
 - **lib.rs** — `crates/mev-rpc/src/lib.rs:L1`
 - **active_tokens()** — `crates/mev-discovery/src/lib.rs:L251`
@@ -70,9 +70,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 6 cross-community edges
+- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 9 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 4 cross-community edges
-- [[docs/knowledge/communities/C037 - PoolInfo|PoolInfo]] — 3 cross-community edges
+- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 1 cross-community edges

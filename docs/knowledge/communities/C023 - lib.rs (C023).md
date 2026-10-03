@@ -48,5 +48,5 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Related communities
 
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 3 cross-community edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C037 - PoolInfo|PoolInfo]] — 2 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 2 cross-community edges

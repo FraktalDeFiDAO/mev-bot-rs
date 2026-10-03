@@ -30,7 +30,7 @@ use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
     ProtocolId,
 };
-use mev_lending_index::{EventIndex, IndexConfig, topic_address};
+use mev_lending_index::{EventIndex, IndexConfig, market_key, topic_address};
 use mev_rpc::{call, decode, multicall};
 use tracing::info;
 
@@ -331,7 +331,7 @@ impl LiquidationAdapter for CompoundV3Adapter {
         self.index
             .step(&self.rpc.scan, |l| {
                 topic_address(l, 1)
-                    .map(|src| vec![(l.address(), src)])
+                    .map(|src| vec![(market_key(l.address()), src)])
                     .unwrap_or_default()
             })
             .await
@@ -339,7 +339,7 @@ impl LiquidationAdapter for CompoundV3Adapter {
 
     fn accounts(&self) -> Vec<AccountRef> {
         let borrowers = self.index.accounts().map(|(m, a)| AccountRef {
-            market: *m,
+            market: Address::from_word(*m),
             account: *a,
             sub_id: BORROWER,
         });

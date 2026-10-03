@@ -15,6 +15,8 @@ use tracing::debug;
 
 /// How deep to follow adapter -> proxy -> aggregator chains.
 const MAX_DEPTH: usize = 4;
+/// Getter calls per contract per resolution round.
+const GETTERS: usize = 7;
 
 /// Map each underlying aggregator to the original sources (e.g. Aave oracle sources) it feeds.
 pub async fn resolve_aggregators(
@@ -30,32 +32,43 @@ pub async fn resolve_aggregators(
         if frontier.is_empty() {
             break;
         }
-        let mut calls = Vec::with_capacity(frontier.len() * 3);
+        let mut calls = Vec::with_capacity(frontier.len() * GETTERS);
         for (c, _) in &frontier {
             calls.push(call(*c, IPriceSource::aggregatorCall {}));
             calls.push(call(*c, IPriceSource::ASSET_TO_USD_AGGREGATORCall {}));
             calls.push(call(*c, IPriceSource::BASE_TO_USD_AGGREGATORCall {}));
+            calls.push(call(*c, IPriceSource::BASE_FEED_1Call {}));
+            calls.push(call(*c, IPriceSource::BASE_FEED_2Call {}));
+            calls.push(call(*c, IPriceSource::QUOTE_FEED_1Call {}));
+            calls.push(call(*c, IPriceSource::QUOTE_FEED_2Call {}));
         }
         let res = multicall(p, &calls, 200).await?;
         let mut next = Vec::new();
         for (i, (c, origin)) in frontier.iter().enumerate() {
-            let agg = decode::<IPriceSource::aggregatorCall>(&res[3 * i]).filter(|a| !a.is_zero());
-            let asset_usd = decode::<IPriceSource::ASSET_TO_USD_AGGREGATORCall>(&res[3 * i + 1])
-                .filter(|a| !a.is_zero());
-            let base_usd = decode::<IPriceSource::BASE_TO_USD_AGGREGATORCall>(&res[3 * i + 2])
-                .filter(|a| !a.is_zero());
-            match (agg, asset_usd, base_usd) {
+            let r = &res[GETTERS * i..GETTERS * (i + 1)];
+            let nz = |a: Option<Address>| a.filter(|a| !a.is_zero());
+            let agg = nz(decode::<IPriceSource::aggregatorCall>(&r[0]));
+            // Adapters / composite oracles: the proxies they wrap.
+            let wrapped: Vec<Address> = [
+                nz(decode::<IPriceSource::ASSET_TO_USD_AGGREGATORCall>(&r[1])),
+                nz(decode::<IPriceSource::BASE_TO_USD_AGGREGATORCall>(&r[2])),
+                nz(decode::<IPriceSource::BASE_FEED_1Call>(&r[3])),
+                nz(decode::<IPriceSource::BASE_FEED_2Call>(&r[4])),
+                nz(decode::<IPriceSource::QUOTE_FEED_1Call>(&r[5])),
+                nz(decode::<IPriceSource::QUOTE_FEED_2Call>(&r[6])),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if let Some(a) = agg {
                 // A Chainlink proxy: `aggregator()` is the contract receiving price updates.
-                (Some(a), _, _) => out.entry(a).or_default().push(*origin),
-                // Adapters: follow to the proxies they wrap.
-                (None, a, b) if a.is_some() || b.is_some() => {
-                    next.extend(a.into_iter().chain(b).map(|x| (x, *origin)));
-                }
-                // Neither: treat the contract itself as the feed (custom oracle) — harmless if unused.
-                _ => {
-                    debug!(source = %c, "price source has no known aggregator getter; watching it directly");
-                    out.entry(*c).or_default().push(*origin);
-                }
+                out.entry(a).or_default().push(*origin);
+            } else if !wrapped.is_empty() {
+                next.extend(wrapped.into_iter().map(|x| (x, *origin)));
+            } else {
+                // Unknown shape (custom oracle): watch the contract itself — harmless if unused.
+                debug!(source = %c, "price source has no known aggregator getter; watching it directly");
+                out.entry(*c).or_default().push(*origin);
             }
         }
         frontier = next;
