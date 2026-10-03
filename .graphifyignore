@@ -1,0 +1,8 @@
+# Generated from the graph itself. Re-ingesting it would amplify its own labels on every rebuild.
+docs/knowledge/
+# Build output and vendored code — not ours, and large.
+target/
+contracts/lib/
+contracts/out/
+contracts/cache/
+contracts/broadcast/

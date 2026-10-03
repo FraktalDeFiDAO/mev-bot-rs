@@ -1,0 +1,26 @@
+# Rust / Foundry build output
+target/
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Secrets — keys come from the environment, never files in the repo
+.env
+.env.*
+!.env.example
+
+# Regenerable graph output. Keep the semantic cache: it costs LLM tokens to rebuild.
+graphify-out/*
+!graphify-out/cache/
+graphify-out/cache/*
+!graphify-out/cache/semantic/
+!graphify-out/memory/
+!graphify-out/reflections/
+
+# Tool/editor state
+.claude/*
+!.claude/settings.json
+!.claude/helpers/
+.claude-flow/
+.obsidian/
+.DS_Store

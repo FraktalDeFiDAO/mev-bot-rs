@@ -1,0 +1,20 @@
+name: Bug
+description: Something broken, or a loss/failed tx that shouldn't have happened
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened vs. expected }
+    validations: { required: true }
+  - type: input
+    id: tx
+    attributes: { label: Chain + tx hash / block (if on-chain), placeholder: "arbitrum 0x…" }
+  - type: textarea
+    id: repro
+    attributes: { label: Repro / logs, description: Short excerpt only, render: text }
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options: ["S1 — funds at risk / losing money", "S2 — missing opportunities", "S3 — minor"]
+    validations: { required: true }

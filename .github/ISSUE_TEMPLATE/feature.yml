@@ -1,0 +1,15 @@
+name: Feature / task
+description: New capability, strategy, crate work, or infra change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What and why, description: Link the plan section in docs/planning/ if any }
+    validations: { required: true }
+  - type: input
+    id: crates
+    attributes: { label: Crates affected, placeholder: "mev-liquidate, mev-lending" }
+  - type: textarea
+    id: done
+    attributes: { label: Done when, description: Acceptance criteria / measurable result }
+    validations: { required: true }

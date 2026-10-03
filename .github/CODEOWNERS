@@ -1,0 +1,6 @@
+# Every change needs owner review. Contracts and execution/risk code hold funds — never merge without it.
+*                         @FraktalDeFiDAO
+/contracts/               @FraktalDeFiDAO
+/crates/mev-exec/         @FraktalDeFiDAO
+/crates/mev-risk/         @FraktalDeFiDAO
+/.github/                 @FraktalDeFiDAO

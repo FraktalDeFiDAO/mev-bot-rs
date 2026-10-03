@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./target/**)",
+      "Read(./contracts/lib/**)",
+      "Read(./contracts/out/**)",
+      "Read(./contracts/cache/**)",
+      "Read(./contracts/broadcast/**)",
+      "Read(./graphify-out/graph.json)",
+      "Read(./graphify-out/*.html)",
+      "Read(./graphify-out/cache/**)",
+      "Read(./Cargo.lock)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  }
+}

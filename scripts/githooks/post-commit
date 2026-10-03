@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Keep the knowledge graph current (AST-only, no LLM cost). Runs in background so commits stay fast.
+cd "$(git rev-parse --show-toplevel)" || exit 0
+command -v graphify >/dev/null && (scripts/graph.sh optimize >/dev/null 2>&1 &)
+exit 0

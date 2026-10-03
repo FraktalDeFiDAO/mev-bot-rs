@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Enforce Conventional Commits: type(scope)!: subject
+msg=$(head -1 "$1")
+re='^(feat|fix|perf|refactor|test|docs|build|ci|chore|revert|security)(\([a-z0-9_-]+\))?!?: .{1,100}$'
+if [[ ! $msg =~ $re ]] && [[ ! $msg =~ ^(Merge|Revert|fixup!|squash!) ]]; then
+  echo "commit-msg: not a Conventional Commit:" >&2
+  echo "  $msg" >&2
+  echo "  expected: type(scope): subject   e.g. feat(mev-liquidate): add Aave v3 adapter" >&2
+  exit 1
+fi
