@@ -20,8 +20,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Nodes (41)
 
 - **AaveV3Adapter** — `crates/mev-lending-aave-v3/src/lib.rs:L56`
-- **Plan** — `crates/mev-lending/src/lib.rs:L73`
 - **AccountRef** — `crates/mev-lending/src/lib.rs:L32`
+- **Plan** — `crates/mev-lending/src/lib.rs:L73`
 - **.new()** — `crates/mev-lending-aave-v3/src/lib.rs:L67`
 - **.plan()** — `crates/mev-lending-aave-v3/src/lib.rs:L329`
 - **Address** — `graph`
@@ -63,11 +63,14 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 15 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 18 cross-community edges
 - [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C020 - Simulator|Simulator]] — 3 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C022 - main|main]] — 2 cross-community edges
+- [[docs/knowledge/communities/C034 - Engine|Engine]] — 3 cross-community edges
+- [[docs/knowledge/communities/C040 - lib.rs (C040)|lib.rs (C040)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C031 - lib.rs (C031)|lib.rs (C031)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C034 - Engine|Engine]] — 1 cross-community edges
+- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 1 cross-community edges

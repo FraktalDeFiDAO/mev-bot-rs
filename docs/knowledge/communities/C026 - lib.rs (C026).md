@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "26"
-graphify-node-count: 53
-graphify-internal-edges: 121
+graphify-node-count: 67
+graphify-internal-edges: 158
 tags:
   - graphify/community
 ---
@@ -13,70 +13,91 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-liquidate/src/lib.rs` — 31 nodes
+- `crates/mev-liquidate/src/lib.rs` — 42 nodes
 - `graph` — 17 nodes
 - `crates/mev-lending/src/lib.rs` — 4 nodes
 - `crates/mev-lending-aave-v3/src/lib.rs` — 1 node
+- `crates/mev-lending-gearbox/src/lib.rs` — 1 node
+- `crates/mev-lending-radiant/src/lib.rs` — 1 node
+- `crates/mev-lending-spark/src/lib.rs` — 1 node
 
-## Nodes (53)
+## Nodes (67)
 
-- **Runner** — `crates/mev-liquidate/src/lib.rs:L63`
-- **Fake** — `crates/mev-liquidate/src/lib.rs:L287`
-- **lib.rs** — `crates/mev-liquidate/src/lib.rs:L1`
-- **.new()** — `crates/mev-liquidate/src/lib.rs:L72`
-- **Address** — `graph`
 - **Health** — `crates/mev-lending/src/lib.rs:L46`
-- **RunnerEvent** — `crates/mev-liquidate/src/lib.rs:L45`
-- **Slot** — `crates/mev-liquidate/src/lib.rs:L56`
+- **lib.rs** — `crates/mev-liquidate/src/lib.rs:L1`
+- **Runner** — `crates/mev-liquidate/src/lib.rs:L69`
+- **Fake** — `crates/mev-liquidate/src/lib.rs:L310`
+- **.new()** — `crates/mev-liquidate/src/lib.rs:L78`
+- **Address** — `graph`
 - **Vec** — `graph`
-- **.health()** — `crates/mev-liquidate/src/lib.rs:L311`
-- **.plan()** — `crates/mev-liquidate/src/lib.rs:L327`
-- **.poll()** — `crates/mev-liquidate/src/lib.rs:L168`
+- **Failing** — `crates/mev-liquidate/src/lib.rs:L401`
 - **LiquidationAdapter** — `crates/mev-lending/src/lib.rs:L97`
-- **.run()** — `crates/mev-liquidate/src/lib.rs:L222`
-- **.sweep()** — `crates/mev-liquidate/src/lib.rs:L142`
-- **cfg()** — `crates/mev-liquidate/src/lib.rs:L355`
-- **.on_feed_tx()** — `crates/mev-liquidate/src/lib.rs:L209`
-- **feed_tx_to_watched_contract_starts_a_burst()** — `crates/mev-liquidate/src/lib.rs:L423`
-- **Option** — `graph`
-- **RunnerConfig** — `crates/mev-liquidate/src/lib.rs:L31`
-- **sequenced()** — `crates/mev-liquidate/src/lib.rs:L447`
-- **.accounts()** — `crates/mev-liquidate/src/lib.rs:L304`
-- **.assets()** — `crates/mev-liquidate/src/lib.rs:L104`
-- **.assets()** — `crates/mev-liquidate/src/lib.rs:L350`
-- **.price_feeds()** — `crates/mev-liquidate/src/lib.rs:L344`
-- **.targets()** — `crates/mev-liquidate/src/lib.rs:L112`
-- **.targets()** — `crates/mev-liquidate/src/lib.rs:L347`
-- **.worth_watching()** — `crates/mev-liquidate/src/lib.rs:L124`
+- **Slot** — `crates/mev-liquidate/src/lib.rs:L56`
 - **AdapterStatus** — `crates/mev-lending/src/lib.rs:L20`
-- **healthy_accounts_are_not_at_risk_and_dust_is_ignored()** — `crates/mev-liquidate/src/lib.rs:L408`
-- **recv_opt()** — `crates/mev-liquidate/src/lib.rs:L272`
-- **sweep_then_poll_plans_liquidatable_account_once()** — `crates/mev-liquidate/src/lib.rs:L386`
-- **.index()** — `crates/mev-liquidate/src/lib.rs:L301`
-- **.status()** — `crates/mev-liquidate/src/lib.rs:L298`
-- **Box** — `graph`
-- **non_live_adapters_are_skipped()** — `crates/mev-liquidate/src/lib.rs:L378`
+- **RunnerEvent** — `crates/mev-liquidate/src/lib.rs:L45`
+- **.health()** — `crates/mev-liquidate/src/lib.rs:L418`
+- **.plan()** — `crates/mev-liquidate/src/lib.rs:L421`
+- **.poll()** — `crates/mev-liquidate/src/lib.rs:L191`
+- **cfg()** — `crates/mev-liquidate/src/lib.rs:L378`
+- **.plan()** — `crates/mev-liquidate/src/lib.rs:L350`
+- **.run()** — `crates/mev-liquidate/src/lib.rs:L245`
+- **.sweep()** — `crates/mev-liquidate/src/lib.rs:L165`
+- **Option** — `graph`
 - **Result** — `graph`
+- **.health()** — `crates/mev-liquidate/src/lib.rs:L334`
+- **.on_feed_tx()** — `crates/mev-liquidate/src/lib.rs:L232`
+- **feed_tx_to_watched_contract_starts_a_burst()** — `crates/mev-liquidate/src/lib.rs:L496`
+- **RunnerConfig** — `crates/mev-liquidate/src/lib.rs:L31`
+- **sequenced()** — `crates/mev-liquidate/src/lib.rs:L533`
+- **.accounts()** — `crates/mev-liquidate/src/lib.rs:L415`
+- **.assets()** — `crates/mev-liquidate/src/lib.rs:L112`
+- **.assets()** — `crates/mev-liquidate/src/lib.rs:L430`
+- **.price_feeds()** — `crates/mev-liquidate/src/lib.rs:L424`
+- **.targets()** — `crates/mev-liquidate/src/lib.rs:L120`
+- **.targets()** — `crates/mev-liquidate/src/lib.rs:L427`
+- **.worth_watching()** — `crates/mev-liquidate/src/lib.rs:L132`
+- **healthy_accounts_are_not_at_risk_and_dust_is_ignored()** — `crates/mev-liquidate/src/lib.rs:L481`
+- **recv_opt()** — `crates/mev-liquidate/src/lib.rs:L295`
+- **sweep_then_poll_plans_liquidatable_account_once()** — `crates/mev-liquidate/src/lib.rs:L459`
+- **.accounts()** — `crates/mev-liquidate/src/lib.rs:L327`
+- **.assets()** — `crates/mev-liquidate/src/lib.rs:L373`
+- **.index()** — `crates/mev-liquidate/src/lib.rs:L411`
+- **.price_feeds()** — `crates/mev-liquidate/src/lib.rs:L367`
+- **.status()** — `crates/mev-liquidate/src/lib.rs:L408`
+- **.targets()** — `crates/mev-liquidate/src/lib.rs:L370`
+- **Box** — `graph`
+- **index_errors_back_off_instead_of_hammering()** — `crates/mev-liquidate/src/lib.rs:L436`
+- **non_live_adapters_are_skipped()** — `crates/mev-liquidate/src/lib.rs:L451`
 - **UnboundedSender** — `graph`
-- **.id()** — `crates/mev-liquidate/src/lib.rs:L295`
-- **.index_all()** — `crates/mev-liquidate/src/lib.rs:L128`
+- **.id()** — `crates/mev-liquidate/src/lib.rs:L318`
+- **.id()** — `crates/mev-liquidate/src/lib.rs:L405`
+- **.index_all()** — `crates/mev-liquidate/src/lib.rs:L136`
+- **.index()** — `crates/mev-liquidate/src/lib.rs:L324`
 - **.status()** — `crates/mev-lending-aave-v3/src/lib.rs:L246`
+- **.status()** — `crates/mev-lending-gearbox/src/lib.rs:L40`
+- **.status()** — `crates/mev-lending-radiant/src/lib.rs:L32`
+- **.status()** — `crates/mev-lending-spark/src/lib.rs:L31`
+- **.status()** — `crates/mev-liquidate/src/lib.rs:L321`
+- **Arc** — `graph`
+- **Duration** — `graph`
 - **HashMap** — `graph`
 - **Instant** — `graph`
+- **Mutex** — `graph`
+- **ProtocolId** — `graph`
 - **Sync** — `graph`
 - **UnboundedReceiver** — `graph`
 - **.liquidatable()** — `crates/mev-lending/src/lib.rs:L55`
-- **Arc** — `graph`
-- **Duration** — `graph`
-- **Mutex** — `graph`
-- **ProtocolId** — `graph`
 - **Self** — `graph`
 - **Send** — `graph`
 - **T** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 15 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 18 cross-community edges
 - [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 4 cross-community edges
+- [[docs/knowledge/communities/C040 - lib.rs (C040)|lib.rs (C040)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 3 cross-community edges
 - [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 2 cross-community edges

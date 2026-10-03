@@ -1,7 +1,7 @@
 //! Radiant Capital (Arbitrum) — **inactive**.
 //!
 //! Radiant paused its Arbitrum lending markets after a $4.5M flash-loan exploit (Jan 2024) and a
-//! >$50M breach on BNB Chain and Arbitrum (Oct 2024). No live markets to liquidate as of
+//! more-than-$50M breach on BNB Chain and Arbitrum (Oct 2024). No live markets to liquidate as of
 //! 2026-10-03. Radiant v2 is an Aave v2 fork: if markets reopen, reuse the Aave adapter shape
 //! (`liquidationCall`) after verifying the LendingPool address, oracle, and that `liquidationCall`
 //! is not paused.
@@ -31,7 +31,7 @@ impl LiquidationAdapter for Adapter {
 
     fn status(&self) -> AdapterStatus {
         AdapterStatus::Inactive(
-            "Arbitrum markets halted after the Jan 2024 ($4.5M) and Oct 2024 (>$50M) exploits",
+            "Arbitrum markets halted after the Jan 2024 ($4.5M) and Oct 2024 ($50M+) exploits",
         )
     }
 

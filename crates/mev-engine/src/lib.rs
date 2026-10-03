@@ -688,6 +688,11 @@ async fn build_liquidation(
             mev_lending_aave_v3::AaveV3Adapter::new(a, arpc.clone(), cache).await?,
         ));
     }
+    // Venues not live on this chain report their status; the runner logs and skips them.
+    adapters.push(Box::new(mev_lending_radiant::Adapter::new()));
+    adapters.push(Box::new(mev_lending_spark::Adapter::new()));
+    adapters.push(Box::new(mev_lending_dolomite::Adapter::new()));
+    adapters.push(Box::new(mev_lending_gearbox::Adapter::new()));
     let via: Vec<Address> = lcfg
         .route_via
         .iter()
