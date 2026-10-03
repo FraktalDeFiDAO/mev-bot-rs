@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "21"
-graphify-node-count: 34
-graphify-internal-edges: 79
+graphify-node-count: 33
+graphify-internal-edges: 76
 tags:
   - graphify/community
 ---
@@ -13,10 +13,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-config/src/lib.rs` — 24 nodes
+- `crates/mev-config/src/lib.rs` — 23 nodes
 - `graph` — 10 nodes
 
-## Nodes (34)
+## Nodes (33)
 
 - **ChainConfig** — `crates/mev-config/src/lib.rs:L133`
 - **lib.rs** — `crates/mev-config/src/lib.rs:L1`
@@ -28,7 +28,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Vec** — `graph`
 - **AaveConfig** — `crates/mev-config/src/lib.rs:L80`
 - **DexConfig** — `crates/mev-config/src/lib.rs:L20`
-- **MorphoConfig** — `crates/mev-config/src/lib.rs:L112`
 - **String** — `graph`
 - **.pair_addresses()** — `crates/mev-config/src/lib.rs:L194`
 - **.token()** — `crates/mev-config/src/lib.rs:L186`

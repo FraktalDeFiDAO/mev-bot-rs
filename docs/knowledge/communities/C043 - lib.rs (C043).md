@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "43"
-graphify-node-count: 33
-graphify-internal-edges: 75
+graphify-node-count: 34
+graphify-internal-edges: 76
 tags:
   - graphify/community
 ---
@@ -15,15 +15,16 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - `crates/mev-lending-morpho/src/lib.rs` — 19 nodes
 - `graph` — 13 nodes
-- `crates/mev-rpc/src/lib.rs` — 1 node
+- `crates/mev-config/src/lib.rs` — 1 node
+- `crates/mev-lending/src/lib.rs` — 1 node
 
-## Nodes (33)
+## Nodes (34)
 
 - **MorphoAdapter** — `crates/mev-lending-morpho/src/lib.rs:L76`
-- **call()** — `crates/mev-rpc/src/lib.rs:L144`
 - **.health()** — `crates/mev-lending-morpho/src/lib.rs:L286`
 - **.plan()** — `crates/mev-lending-morpho/src/lib.rs:L352`
 - **.market_states()** — `crates/mev-lending-morpho/src/lib.rs:L191`
+- **AdapterRpc** — `crates/mev-lending/src/lib.rs:L90`
 - **.new()** — `crates/mev-lending-morpho/src/lib.rs:L91`
 - **.market_ids()** — `crates/mev-lending-morpho/src/lib.rs:L132`
 - **lib.rs** — `crates/mev-lending-morpho/src/lib.rs:L1`
@@ -32,6 +33,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.load_params()** — `crates/mev-lending-morpho/src/lib.rs:L142`
 - **Address** — `graph`
 - **B256** — `graph`
+- **MorphoConfig** — `crates/mev-config/src/lib.rs:L112`
 - **.accounts()** — `crates/mev-lending-morpho/src/lib.rs:L274`
 - **short_id()** — `crates/mev-lending-morpho/src/lib.rs:L86`
 - **loan_usd()** — `crates/mev-lending-morpho/src/lib.rs:L248`
@@ -44,7 +46,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **MarketState** — `crates/mev-lending-morpho/src/lib.rs:L68`
 - **.id()** — `crates/mev-lending-morpho/src/lib.rs:L254`
 - **HashMap** — `graph`
-- **C** — `graph`
+- **DynProvider** — `graph`
 - **DynProvider** — `graph`
 - **Mutex** — `graph`
 - **Option** — `graph`
@@ -55,11 +57,11 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 8 cross-community edges
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 7 cross-community edges
-- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 5 cross-community edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 6 cross-community edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 2 cross-community edges
-- [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 1 cross-community edges
+- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C048 - Adapter|Adapter]] — 1 cross-community edges

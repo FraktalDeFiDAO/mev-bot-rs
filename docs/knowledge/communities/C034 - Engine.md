@@ -75,8 +75,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 7 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 6 cross-community edges
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 6 cross-community edges
 - [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 5 cross-community edges
 - [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C027 - lib.rs (C027)|lib.rs (C027)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 2 cross-community edges

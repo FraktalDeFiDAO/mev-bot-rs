@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "6"
-graphify-node-count: 7
-graphify-internal-edges: 6
+graphify-node-count: 4
+graphify-internal-edges: 3
 tags:
   - graphify/community
 ---
@@ -13,16 +13,13 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `.ai/STATE.md` — 7 nodes
+- `.ai/STATE.md` — 4 nodes
 
-## Nodes (7)
+## Nodes (4)
 
 - **Session state** — `.ai/STATE.md:L1`
-- **Diagnosis 2026-10-03 (see DECISIONS #19–21)** — `.ai/STATE.md:L22`
-- **Done and verified** — `.ai/STATE.md:L13`
-- **Known limits** — `.ai/STATE.md:L42`
-- **Latest finding (DECISIONS #23)** — `.ai/STATE.md:L29`
-- **Next** — `.ai/STATE.md:L35`
+- **Done and verified** — `.ai/STATE.md:L11`
+- **Next** — `.ai/STATE.md:L21`
 - **STATE.md** — `.ai/STATE.md:L1`
 
 ## Related communities

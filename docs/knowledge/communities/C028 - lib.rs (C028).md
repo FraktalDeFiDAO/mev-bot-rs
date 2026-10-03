@@ -45,4 +45,4 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 1 cross-community edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 1 cross-community edges

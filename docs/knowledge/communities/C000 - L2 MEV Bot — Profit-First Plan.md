@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "0"
-graphify-node-count: 42
-graphify-internal-edges: 43
+graphify-node-count: 43
+graphify-internal-edges: 44
 tags:
   - graphify/community
 ---
@@ -15,18 +15,18 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - `docs/planning/INFRASTRUCTURE.md` — 17 nodes
 - `docs/planning/PLAN.md` — 14 nodes
-- `docs/planning/CRATES.md` — 4 nodes
+- `docs/planning/CRATES.md` — 5 nodes
 - `docs/planning/DECISIONS.md` — 4 nodes
 - `docs/planning/README.md` — 3 nodes
 
-## Nodes (42)
+## Nodes (43)
 
 - **L2 MEV Bot — Profit-First Plan** — `docs/planning/PLAN.md:L1`
 - **Infrastructure & Cost Plan** — `docs/planning/INFRASTRUCTURE.md:L1`
 - **Stage 3: own node near the sequencer — trigger: 30-day profit ≥ 3× node cost AND shadow logs show latency is losing us trades** — `docs/planning/INFRASTRUCTURE.md:L62`
 - **README.md** — `docs/planning/README.md:L1`
-- **PLAN.md** — `docs/planning/PLAN.md:L1`
 - **Cargo Workspace Layout** — `docs/planning/CRATES.md:L1`
+- **PLAN.md** — `docs/planning/PLAN.md:L1`
 - **CRATES.md** — `docs/planning/CRATES.md:L1`
 - **Decision Log** — `docs/planning/DECISIONS.md:L1`
 - **INFRASTRUCTURE.md** — `docs/planning/INFRASTRUCTURE.md:L1`
@@ -43,6 +43,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Data sources (all free)** — `docs/planning/INFRASTRUCTURE.md:L38`
 - **Guiding principle** — `docs/planning/PLAN.md:L5`
 - **Key finding: we can't afford our own L2 node yet, and that's OK** — `docs/planning/INFRASTRUCTURE.md:L6`
+- **Liquidation building blocks (added 2026-10-03)** — `docs/planning/CRATES.md:L76`
 - **Monthly cost summary** — `docs/planning/INFRASTRUCTURE.md:L137`
 - **Next action** — `docs/planning/PLAN.md:L153`
 - **Option A: pre-built managed dedicated node (no node ops — "RPC node already built")** — `docs/planning/INFRASTRUCTURE.md:L78`

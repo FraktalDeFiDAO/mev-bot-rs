@@ -39,4 +39,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 7 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C048 - Adapter|Adapter]] — 1 cross-community edges
