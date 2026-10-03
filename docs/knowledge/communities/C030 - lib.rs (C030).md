@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "30"
-graphify-node-count: 49
-graphify-internal-edges: 105
+graphify-node-count: 48
+graphify-internal-edges: 104
 tags:
   - graphify/community
 ---
@@ -16,9 +16,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - `graph` — 21 nodes
 - `crates/mev-rpc/src/lib.rs` — 17 nodes
 - `crates/mev-discovery/src/lib.rs` — 10 nodes
-- `crates/mev-dex/src/lib.rs` — 1 node
 
-## Nodes (49)
+## Nodes (48)
 
 - **Rpc** — `crates/mev-rpc/src/lib.rs:L15`
 - **call()** — `crates/mev-rpc/src/lib.rs:L144`
@@ -53,7 +52,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Address** — `graph`
 - **http_provider()** — `crates/mev-rpc/src/lib.rs:L81`
 - **Option** — `graph`
-- **sqrt_price_from_x96()** — `crates/mev-dex/src/lib.rs:L119`
 - **.reset()** — `crates/mev-rpc/src/lib.rs:L119`
 - **Duration** — `graph`
 - **HashMap** — `graph`
@@ -72,8 +70,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 10 cross-community edges
+- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 6 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 4 cross-community edges
+- [[docs/knowledge/communities/C037 - PoolInfo|PoolInfo]] — 3 cross-community edges
 - [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 1 cross-community edges

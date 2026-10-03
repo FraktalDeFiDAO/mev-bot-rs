@@ -36,6 +36,28 @@ interface IERC20Approve {
     function allowance(address, address) external view returns (uint256);
 }
 
+interface ICometFull {
+    struct AssetInfo {
+        uint8 offset;
+        address asset;
+        address priceFeed;
+        uint64 scale;
+        uint64 borrowCollateralFactor;
+        uint64 liquidateCollateralFactor;
+        uint64 liquidationFactor;
+        uint128 supplyCap;
+    }
+
+    function supply(address asset, uint256 amount) external;
+    function withdraw(address asset, uint256 amount) external;
+    function getAssetInfoByAddress(address asset) external view returns (AssetInfo memory);
+    function getPrice(address priceFeed) external view returns (uint256);
+    function isLiquidatable(address account) external view returns (bool);
+    function storeFrontPriceFactor() external view returns (uint256);
+    function absorb(address absorber, address[] calldata accounts) external;
+    function buyCollateral(address asset, uint256 minAmount, uint256 baseAmount, address recipient) external;
+}
+
 interface IAlgebraFactory {
     function poolByPair(address, address) external view returns (address);
 }
@@ -327,5 +349,65 @@ contract ArbExecutorForkTest is Test {
         vm.prank(attacker);
         vm.expectRevert(ArbExecutor.NotOwner.selector);
         exec.setTarget(attacker, true);
+    }
+
+    // ---------------------------------------------------------------- Compound III (Comet)
+
+    address constant COMET_USDC = 0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf;
+
+    /// Real Comet position (1 WETH collateral, USDC borrowed near the limit), then the WETH price
+    /// feed is mocked down 15% so the account becomes absorbable. Returns the mocked price (8 dec).
+    function _cometPosition() internal returns (uint256 mockedPrice, ICometFull.AssetInfo memory info) {
+        ICometFull comet = ICometFull(COMET_USDC);
+        info = comet.getAssetInfoByAddress(WETH);
+        uint256 px = comet.getPrice(info.priceFeed);
+        deal(WETH, borrower, 1 ether);
+        vm.startPrank(borrower);
+        IERC20Approve(WETH).approve(COMET_USDC, 1 ether);
+        comet.supply(WETH, 1 ether);
+        uint256 borrowUsdc = px * uint256(info.borrowCollateralFactor) / 1e18 * 98 / 100 / 100; // 8dec -> 6dec
+        comet.withdraw(USDC, borrowUsdc);
+        vm.stopPrank();
+
+        mockedPrice = px * 85 / 100;
+        vm.mockCall(
+            info.priceFeed,
+            abi.encodeWithSignature("latestRoundData()"),
+            abi.encode(uint80(1), int256(mockedPrice), uint256(0), block.timestamp, uint80(1))
+        );
+        assertTrue(comet.isLiquidatable(borrower), "position should be absorbable");
+    }
+
+    function test_compoundAbsorbAndBuyCollateralForProfit() public {
+        (uint256 mockedPrice, ICometFull.AssetInfo memory info) = _cometPosition();
+        uint256 discount = ICometFull(COMET_USDC).storeFrontPriceFactor() * (1e18 - info.liquidationFactor) / 1e18;
+        // Base to pay for 1 WETH at the storefront price, with the adapter's 0.1% haircut.
+        uint256 baseAmount = mockedPrice * (1e18 - discount) / 1e18 / 100 * 999 / 1000;
+
+        ArbExecutor.ProtocolCall[] memory calls = new ArbExecutor.ProtocolCall[](2);
+        address[] memory accounts = new address[](1);
+        accounts[0] = borrower;
+        calls[0] = ArbExecutor.ProtocolCall(
+            COMET_USDC, abi.encodeCall(ICometFull.absorb, (address(exec), accounts)), address(0), 0
+        );
+        calls[1] = ArbExecutor.ProtocolCall(
+            COMET_USDC,
+            abi.encodeCall(ICometFull.buyCollateral, (WETH, 0.99 ether, baseAmount, address(exec))),
+            COMET_USDC,
+            baseAmount
+        );
+        ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        vm.prank(owner);
+        exec.setTarget(COMET_USDC, true);
+
+        vm.prank(owner);
+        uint256 profit = exec.liquidate(USDC, WETH, baseAmount, 1e6, calls, hops);
+
+        assertGt(profit, 1e6, "expected >1 USDC profit");
+        assertFalse(ICometFull(COMET_USDC).isLiquidatable(borrower), "borrower absorbed");
+        assertEq(IERC20Full(USDC).balanceOf(address(exec)), 0, "executor holds no USDC");
+        assertEq(IERC20Full(WETH).balanceOf(address(exec)), 0, "executor holds no WETH");
+        assertEq(IERC20Approve(USDC).allowance(address(exec), COMET_USDC), 0, "approval reset");
+        emit log_named_decimal_uint("comet absorb+buy profit USDC", profit, 6);
     }
 }

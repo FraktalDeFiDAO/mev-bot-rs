@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "29"
-graphify-node-count: 20
-graphify-internal-edges: 34
+graphify-node-count: 19
+graphify-internal-edges: 33
 tags:
   - graphify/community
 ---
@@ -13,10 +13,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-risk/src/lib.rs` — 17 nodes
+- `crates/mev-risk/src/lib.rs` — 16 nodes
 - `graph` — 3 nodes
 
-## Nodes (20)
+## Nodes (19)
 
 - **lib.rs** — `crates/mev-risk/src/lib.rs:L1`
 - **RiskGuard** — `crates/mev-risk/src/lib.rs:L23`
@@ -32,7 +32,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **RiskLimits** — `crates/mev-risk/src/lib.rs:L8`
 - **.mark_sent()** — `crates/mev-risk/src/lib.rs:L71`
 - **Block** — `crates/mev-risk/src/lib.rs:L15`
-- **loan_cap()** — `crates/mev-risk/src/lib.rs:L102`
 - **.spent_today_usd()** — `crates/mev-risk/src/lib.rs:L87`
 - **blocks_below_min_profit()** — `crates/mev-risk/src/lib.rs:L138`
 - **loan_cap_takes_the_tighter_limit()** — `crates/mev-risk/src/lib.rs:L121`

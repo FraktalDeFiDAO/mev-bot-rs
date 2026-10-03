@@ -44,6 +44,25 @@ oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"
 from_block = 7700000             # Aave v3 Arbitrum deployment
 scan_step = 2000000
 
+[compound_v3]
+enabled = true
+from_block = 87000000            # first Arbitrum Comet (USDC.e), May 2023
+scan_step = 2000000
+min_storefront_usd = 20.0
+
+[[compound_v3.comets]]
+address = "0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf"   # USDC
+
+[[compound_v3.comets]]
+address = "0xd98Be00b5D27fc98112BdE293e487f8D4cA57d07"   # USDT0
+
+[[compound_v3.comets]]
+address = "0x6f7D514bbD4aFf3BcD1140B7344b32f063dEe486"   # WETH (prices in ETH)
+usd_feed = "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612" # Chainlink ETH/USD
+
+[[compound_v3.comets]]
+address = "0xA5EDBDD9646f8dFF606d7448e414884C7d905dCA"   # USDC.e
+
 [risk]
 min_profit_usd = 0.05          # net of gas
 max_gas_usd_per_day = 3.0

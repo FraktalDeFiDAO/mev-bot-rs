@@ -688,6 +688,12 @@ async fn build_liquidation(
             mev_lending_aave_v3::AaveV3Adapter::new(a, arpc.clone(), cache).await?,
         ));
     }
+    if let Some(c) = cfg.compound_v3.clone().filter(|c| c.enabled) {
+        let cache = data_dir.join("compound_v3_borrowers.json");
+        adapters.push(Box::new(
+            mev_lending_compound_v3::CompoundV3Adapter::new(c, arpc.clone(), cache).await?,
+        ));
+    }
     // Venues not live on this chain report their status; the runner logs and skips them.
     adapters.push(Box::new(mev_lending_radiant::Adapter::new()));
     adapters.push(Box::new(mev_lending_spark::Adapter::new()));

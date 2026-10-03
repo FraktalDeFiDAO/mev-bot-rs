@@ -87,6 +87,26 @@ pub struct AaveConfig {
     pub scan_step: u64,
 }
 
+/// One Compound III (Comet) market.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CometConfig {
+    pub address: Address,
+    /// Chainlink feed converting the Comet's price unit to USD (only for non-USD-priced Comets,
+    /// e.g. the WETH Comet prices in ETH).
+    pub usd_feed: Option<Address>,
+}
+
+/// Compound III adapter.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CompoundV3Config {
+    pub enabled: bool,
+    pub from_block: u64,
+    pub scan_step: u64,
+    /// Discounted protocol collateral reserves worth less than this (USD) are ignored.
+    pub min_storefront_usd: f64,
+    pub comets: Vec<CometConfig>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChainConfig {
     pub name: String,
@@ -111,6 +131,7 @@ pub struct ChainConfig {
     pub sequencer_feed: Option<String>,
     pub liquidation: Option<LiquidationConfig>,
     pub aave: Option<AaveConfig>,
+    pub compound_v3: Option<CompoundV3Config>,
 }
 
 impl ChainConfig {
