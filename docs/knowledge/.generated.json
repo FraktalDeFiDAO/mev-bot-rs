@@ -2,9 +2,9 @@
   "files": [
     "communities/C000 - L2 MEV Bot — Profit-First Plan.md",
     "communities/C001 - README.md.md",
+    "communities/C010 - Contributing - Git workflow.md",
     "communities/C002 - Context policy.md",
     "communities/C003 - Infrastructure & Cost Plan.md",
-    "communities/C010 - Contributing - Git workflow.md",
     "communities/C004 - graphify-obsidian.mjs.md",
     "communities/C005 - Stage 3- own node near the sequencer — trigger- 30-day profit ≥ 3× node cost AND.md",
     "communities/C011 - pull_request_template.md.md",
@@ -15,6 +15,7 @@
     "communities/C014 - pre-commit.md",
     "communities/C015 - setup-dev.sh.md",
     "communities/C016 - SECURITY.md.md",
+    "communities/C018 - pre-push.md",
     "communities/C008 - SUBAGENT_PREAMBLE.md.md",
     "communities/C009 - graph.sh.md",
     "communities/C017 - auto-memory-hook.mjs.md",
