@@ -190,6 +190,7 @@ impl Engine {
     }
 
     fn log_summary(&self) {
+        self.metrics.heartbeat();
         let c = self.metrics.snapshot();
         info!(
             updates = c.updates,

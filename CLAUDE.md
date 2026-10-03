@@ -6,6 +6,7 @@ L2 MEV bot (arbitrage + liquidations via flash loans). No sandwiching.
 - Planning docs live in `docs/planning/`; record decisions in `docs/planning/DECISIONS.md`.
 - Rust only off-chain; Solidity/Foundry only for the executor in `contracts/`.
 - Every component is its own crate under `crates/` (`docs/planning/CRATES.md`); dependencies point only to lower layers.
+- **Podman is the standard** (same conventions as ~/projects/AI_Chatbot): build/test with `scripts/dev.sh <cmd>` (Rust + Foundry toolchain container), run the bot with `scripts/run.sh shadow|live|status|halt|stop` (compose, read-only, caps dropped). Don't run the bot directly on the host.
 - Budget: $200 starting capital, no owned server — keep infra ~$0/month until profitable.
 
 ## Token discipline

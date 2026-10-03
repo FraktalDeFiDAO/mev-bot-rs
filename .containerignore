@@ -1,0 +1,13 @@
+.git
+.ai
+.claude
+.claude-flow
+docs
+graphify-out
+target
+data
+contracts
+scripts
+*.log
+.env
+.env.*

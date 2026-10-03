@@ -8,6 +8,17 @@ Trunk-based development with short-lived branches and protected `main`.
 scripts/setup-dev.sh   # enables hooks: conventional commits, secret scan, fmt, graph update
 ```
 
+## Containers (podman)
+
+Everything builds and runs in podman, following the conventions in `~/projects/AI_Chatbot`
+(pinned Arch base, multi-stage build, `userns_mode: keep-id`, read-only rootfs, `cap_drop: ALL`).
+
+```bash
+scripts/dev.sh cargo test -q -p mev-dex                 # any cargo command in the toolchain container
+scripts/dev.sh bash -c 'cd contracts && forge test'    # Foundry
+scripts/run.sh shadow | live | status | logs | halt | resume | stop
+```
+
 ## Branches
 
 - `main` is always deployable. Direct pushes are blocked by the local `pre-push` hook; everything lands via PR.

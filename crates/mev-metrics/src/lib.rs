@@ -64,6 +64,14 @@ impl Metrics {
         f(&mut self.counters.lock().unwrap());
     }
 
+    /// Touch `heartbeat` (unix seconds) so a container healthcheck can tell the loop is alive.
+    pub fn heartbeat(&self) {
+        let now = Utc::now().timestamp().to_string();
+        if let Err(e) = std::fs::write(self.dir.join("heartbeat"), now) {
+            tracing::error!(error = %e, "writing heartbeat failed");
+        }
+    }
+
     pub fn snapshot(&self) -> Counters {
         self.counters.lock().unwrap().clone()
     }
