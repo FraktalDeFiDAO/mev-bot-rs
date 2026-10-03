@@ -5,9 +5,13 @@ use alloy::{
     providers::{DynProvider, Provider, ProviderBuilder, WsConnect},
     sol_types::SolCall,
 };
-use std::{future::Future, time::Duration};
+pub mod meter;
 
+use std::{future::Future, sync::Arc, time::Duration};
+
+use alloy::rpc::client::ClientBuilder;
 use anyhow::{Context, Result};
+pub use meter::{MeterLayer, RpcMeter};
 use mev_bindings::{IMulticall3, MULTICALL3};
 use tracing::warn;
 
@@ -15,18 +19,20 @@ use tracing::warn;
 pub struct Rpc {
     pub http: DynProvider,
     pub ws: DynProvider,
+    /// Requests made through `http` (the paid, latency-critical endpoint).
+    pub meter: Arc<RpcMeter>,
     ws_url: String,
 }
 
 impl Rpc {
     pub async fn connect(http_url: &str, ws_url: &str) -> Result<Self> {
-        let http = ProviderBuilder::new()
-            .connect_http(http_url.parse().context("invalid HTTP URL")?)
-            .erased();
+        let meter = RpcMeter::new();
+        let http = metered_http_provider(http_url, meter.clone())?;
         let ws = connect_ws(ws_url).await?;
         Ok(Self {
             http,
             ws,
+            meter,
             ws_url: ws_url.to_string(),
         })
     }
@@ -75,6 +81,14 @@ pub async fn multicall(
 pub fn is_rate_limit(e: &anyhow::Error) -> bool {
     let s = format!("{e:#}");
     s.contains("429") || s.contains("Too Many Requests") || s.contains("rate limit")
+}
+
+/// HTTP provider whose requests are counted on `meter`.
+pub fn metered_http_provider(url: &str, meter: Arc<RpcMeter>) -> Result<DynProvider> {
+    let client = ClientBuilder::default()
+        .layer(MeterLayer(meter))
+        .http(url.parse().context("invalid HTTP URL")?);
+    Ok(ProviderBuilder::new().connect_client(client).erased())
 }
 
 /// HTTP-only provider (e.g. a public RPC used for heavy scans).

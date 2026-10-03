@@ -16,25 +16,26 @@ than reading any of this.
 
 ## Communities
 
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 73 nodes, 173 internal edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 65 nodes, 110 internal edges
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 61 nodes, 150 internal edges
-- [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 54 nodes, 94 internal edges
+- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 83 nodes, 190 internal edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 81 nodes, 176 internal edges
 - [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 50 nodes, 109 internal edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 49 nodes, 108 internal edges
+- [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 44 nodes, 78 internal edges
 - [[docs/knowledge/communities/C000 - L2 MEV Bot — Profit-First Plan|L2 MEV Bot — Profit-First Plan]] — 43 nodes, 44 internal edges
+- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 41 nodes, 82 internal edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 38 nodes, 68 internal edges
 - [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 36 nodes, 66 internal edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 33 nodes, 76 internal edges
-- [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 32 nodes, 66 internal edges
-- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 32 nodes, 73 internal edges
+- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 33 nodes, 76 internal edges
 - [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 29 nodes, 78 internal edges
-- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 28 nodes, 64 internal edges
 - [[docs/knowledge/communities/C037 - PoolInfo|PoolInfo]] — 23 nodes, 61 internal edges
 - [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 22 nodes, 41 internal edges
+- [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 22 nodes, 52 internal edges
 - [[docs/knowledge/communities/C027 - lib.rs (C027)|lib.rs (C027)]] — 20 nodes, 33 internal edges
 - [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 20 nodes, 34 internal edges
-- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 19 nodes, 29 internal edges
-- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 19 nodes, 29 internal edges
+- [[docs/knowledge/communities/C051 - Adapter (C051)|Adapter (C051)]] — 19 nodes, 29 internal edges
+- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 18 nodes, 28 internal edges
+- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 18 nodes, 28 internal edges
 - [[docs/knowledge/communities/C045 - lib.rs (C045)|lib.rs (C045)]] — 18 nodes, 28 internal edges
 - [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 18 nodes, 28 internal edges
 - [[docs/knowledge/communities/C020 - Simulator|Simulator]] — 16 nodes, 35 internal edges
@@ -46,7 +47,7 @@ than reading any of this.
 - [[docs/knowledge/communities/C004 - graphify-obsidian.mjs|graphify-obsidian.mjs]] — 8 nodes, 13 internal edges
 - [[docs/knowledge/communities/C032 - lib.rs (C032)|lib.rs (C032)]] — 7 nodes, 11 internal edges
 - [[docs/knowledge/communities/C035 - main.rs|main.rs]] — 6 nodes, 8 internal edges
-- [[docs/knowledge/communities/C048 - Adapter|Adapter]] — 6 nodes, 8 internal edges
+- [[docs/knowledge/communities/C048 - Adapter (C048)|Adapter (C048)]] — 6 nodes, 8 internal edges
 - [[docs/knowledge/communities/C049 - test-e2e.sh|test-e2e.sh]] — 6 nodes, 6 internal edges
 - [[docs/knowledge/communities/C011 - pull_request_template.md|pull_request_template.md]] — 5 nodes, 4 internal edges
 - [[docs/knowledge/communities/C050 - Testing|Testing]] — 5 nodes, 4 internal edges
@@ -64,6 +65,7 @@ than reading any of this.
 - [[docs/knowledge/communities/C016 - SECURITY.md|SECURITY.md]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C018 - pre-push|pre-push]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C036 - dev.sh|dev.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C052 - test-integration.sh|test-integration.sh]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C008 - SUBAGENT_PREAMBLE.md|SUBAGENT_PREAMBLE.md]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C009 - graph.sh|graph.sh]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C017 - auto-memory-hook.mjs|auto-memory-hook.mjs]] — 1 nodes, 0 internal edges

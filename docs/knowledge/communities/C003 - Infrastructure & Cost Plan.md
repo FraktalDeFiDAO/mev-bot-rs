@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "3"
-graphify-node-count: 32
-graphify-internal-edges: 66
+graphify-node-count: 22
+graphify-internal-edges: 52
 tags:
   - graphify/community
 ---
@@ -13,14 +13,12 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-sequencer/src/lib.rs` — 19 nodes
-- `graph` — 11 nodes
-- `crates/mev-sequencer/src/bin/mev-feed-probe.rs` — 2 nodes
+- `crates/mev-sequencer/src/lib.rs` — 17 nodes
+- `graph` — 5 nodes
 
-## Nodes (32)
+## Nodes (22)
 
 - **lib.rs** — `crates/mev-sequencer/src/lib.rs:L1`
-- **SequencedTx** — `crates/mev-sequencer/src/lib.rs:L37`
 - **decode_l2_message()** — `crates/mev-sequencer/src/lib.rs:L108`
 - **parse_broadcast()** — `crates/mev-sequencer/src/lib.rs:L87`
 - **signed_msg()** — `crates/mev-sequencer/src/lib.rs:L220`
@@ -38,19 +36,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Broadcast** — `crates/mev-sequencer/src/lib.rs:L56`
 - **FeedMessage** — `crates/mev-sequencer/src/lib.rs:L63`
 - **MessageWithMeta** — `crates/mev-sequencer/src/lib.rs:L69`
-- **.selector()** — `crates/mev-sequencer/src/lib.rs:L50`
 - **Header** — `crates/mev-sequencer/src/lib.rs:L82`
-- **main()** — `crates/mev-sequencer/src/bin/mev-feed-probe.rs:L11`
-- **mev-feed-probe.rs** — `crates/mev-sequencer/src/bin/mev-feed-probe.rs:L1`
-- **Option** — `graph`
 - **Result** — `graph`
 - **String** — `graph`
 - **UnboundedSender** — `graph`
-- **Address** — `graph`
-- **B256** — `graph`
-- **Bytes** — `graph`
-- **Instant** — `graph`
-- **Result** — `graph`
 
 ## Related communities
 

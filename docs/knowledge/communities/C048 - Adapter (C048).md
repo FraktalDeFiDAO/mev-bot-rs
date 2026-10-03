@@ -7,7 +7,7 @@ tags:
   - graphify/community
 ---
 
-# Adapter
+# Adapter (C048)
 
 Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 

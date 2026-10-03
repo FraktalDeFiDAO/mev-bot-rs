@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "26"
-graphify-node-count: 61
-graphify-internal-edges: 150
+graphify-node-count: 81
+graphify-internal-edges: 176
 tags:
   - graphify/community
 ---
@@ -13,20 +13,32 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-liquidate/src/lib.rs` — 41 nodes
-- `graph` — 17 nodes
-- `crates/mev-lending/src/lib.rs` — 3 nodes
+- `crates/mev-liquidate/src/lib.rs` — 42 nodes
+- `graph` — 23 nodes
+- `crates/mev-lending/src/lib.rs` — 4 nodes
+- `crates/mev-sequencer/src/bin/mev-feed-probe.rs` — 2 nodes
+- `crates/mev-sequencer/src/lib.rs` — 2 nodes
+- `crates/mev-lending-aave-v3/src/lib.rs` — 1 node
+- `crates/mev-lending-compound-v3/src/lib.rs` — 1 node
+- `crates/mev-lending-fluid/src/lib.rs` — 1 node
+- `crates/mev-lending-gearbox/src/lib.rs` — 1 node
+- `crates/mev-lending-morpho/src/lib.rs` — 1 node
+- `crates/mev-lending-radiant/src/lib.rs` — 1 node
+- `crates/mev-lending-silo/src/lib.rs` — 1 node
+- `crates/mev-lending-spark/src/lib.rs` — 1 node
 
-## Nodes (61)
+## Nodes (81)
 
 - **Health** — `crates/mev-lending/src/lib.rs:L46`
 - **lib.rs** — `crates/mev-liquidate/src/lib.rs:L1`
 - **Runner** — `crates/mev-liquidate/src/lib.rs:L69`
 - **Fake** — `crates/mev-liquidate/src/lib.rs:L310`
 - **LiquidationAdapter** — `crates/mev-lending/src/lib.rs:L97`
+- **SequencedTx** — `crates/mev-sequencer/src/lib.rs:L37`
 - **.new()** — `crates/mev-liquidate/src/lib.rs:L78`
 - **Address** — `graph`
 - **Vec** — `graph`
+- **AdapterStatus** — `crates/mev-lending/src/lib.rs:L20`
 - **Failing** — `crates/mev-liquidate/src/lib.rs:L401`
 - **Slot** — `crates/mev-liquidate/src/lib.rs:L56`
 - **RunnerEvent** — `crates/mev-liquidate/src/lib.rs:L45`
@@ -68,29 +80,48 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.id()** — `crates/mev-liquidate/src/lib.rs:L405`
 - **.index_all()** — `crates/mev-liquidate/src/lib.rs:L136`
 - **.index()** — `crates/mev-liquidate/src/lib.rs:L324`
+- **.selector()** — `crates/mev-sequencer/src/lib.rs:L50`
+- **.status()** — `crates/mev-lending-aave-v3/src/lib.rs:L198`
+- **.status()** — `crates/mev-lending-compound-v3/src/lib.rs:L325`
+- **.status()** — `crates/mev-lending-fluid/src/lib.rs:L225`
+- **.status()** — `crates/mev-lending-gearbox/src/lib.rs:L40`
+- **.status()** — `crates/mev-lending-morpho/src/lib.rs:L263`
+- **.status()** — `crates/mev-lending-radiant/src/lib.rs:L32`
+- **.status()** — `crates/mev-lending-silo/src/lib.rs:L39`
+- **.status()** — `crates/mev-lending-spark/src/lib.rs:L31`
+- **.status()** — `crates/mev-liquidate/src/lib.rs:L321`
 - **Arc** — `graph`
 - **Duration** — `graph`
 - **HashMap** — `graph`
 - **Instant** — `graph`
+- **main()** — `crates/mev-sequencer/src/bin/mev-feed-probe.rs:L11`
+- **mev-feed-probe.rs** — `crates/mev-sequencer/src/bin/mev-feed-probe.rs:L1`
 - **Mutex** — `graph`
+- **Option** — `graph`
 - **ProtocolId** — `graph`
 - **Sync** — `graph`
 - **UnboundedReceiver** — `graph`
 - **.liquidatable()** — `crates/mev-lending/src/lib.rs:L55`
+- **Address** — `graph`
+- **B256** — `graph`
+- **Bytes** — `graph`
+- **Instant** — `graph`
+- **Result** — `graph`
 - **Self** — `graph`
 - **Send** — `graph`
 - **T** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 22 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 18 cross-community edges
 - [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 4 cross-community edges
+- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C045 - lib.rs (C045)|lib.rs (C045)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C051 - Adapter (C051)|Adapter (C051)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 3 cross-community edges
-- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C045 - lib.rs (C045)|lib.rs (C045)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 2 cross-community edges

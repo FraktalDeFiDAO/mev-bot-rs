@@ -24,7 +24,7 @@ use mev_lending::{AdapterRpc, LiquidationAdapter, Plan};
 use mev_liquidate::{Runner, RunnerConfig, RunnerEvent};
 use mev_metrics::Metrics;
 use mev_risk::{RiskGuard, RiskLimits, loan_cap};
-use mev_rpc::{Backoff, Rpc};
+use mev_rpc::{Backoff, Rpc, RpcMeter};
 use mev_search::{SearchParams, best_route, two_pool_arbs};
 pub use mev_sim::SimOutcome;
 use mev_sim::Simulator;
@@ -60,6 +60,10 @@ pub struct Engine {
     last_sim: HashMap<(Address, Address), Instant>,
     mode: Mode,
     liq: Option<LiqCtx>,
+    /// Request meters per provider ("fast" = paid), drained into the minute summary.
+    meters: Vec<(&'static str, Arc<RpcMeter>)>,
+    /// Cached L2 gas price (wei) and when it was read: one RPC call per 10 s, not per simulation.
+    gas_price: Option<(Instant, f64)>,
 }
 
 /// Liquidation side of the engine (the runner and its adapters run as their own task).
@@ -108,8 +112,15 @@ impl Engine {
         let mut pairs = mev_discovery::candidate_pairs(&rpc, &cfg).await?;
 
         // Liquidation adapters; their assets need swap routes (seized collateral -> debt asset).
-        let liq_setup =
-            build_liquidation(&cfg, &rpc, &data_dir, secrets.executor.unwrap_or_default()).await?;
+        let mut meters = vec![("fast", rpc.meter.clone())];
+        let liq_setup = build_liquidation(
+            &cfg,
+            &rpc,
+            &data_dir,
+            secrets.executor.unwrap_or_default(),
+            &mut meters,
+        )
+        .await?;
         if let Some((runner, via)) = &liq_setup {
             for a in runner.assets() {
                 for v in via {
@@ -206,6 +217,8 @@ impl Engine {
             last_sim: HashMap::new(),
             mode,
             liq,
+            meters,
+            gas_price: None,
         })
     }
 
@@ -317,6 +330,24 @@ impl Engine {
         self.store.len()
     }
 
+    /// L2 gas price, cached for 10 s (simulations come in bursts; each fetch is a paid call).
+    async fn gas_price(&mut self) -> f64 {
+        if let Some((at, wei)) = self.gas_price
+            && at.elapsed() < Duration::from_secs(10)
+        {
+            return wei;
+        }
+        let wei = self
+            .rpc
+            .http
+            .get_gas_price()
+            .await
+            .map(|g| g as f64)
+            .unwrap_or(10_000_000.0);
+        self.gas_price = Some((Instant::now(), wei));
+        wei
+    }
+
     fn price(&self, token: Address) -> Option<f64> {
         self.store
             .usd_per_raw_unit(token, self.usd, self.usd_decimals, self.native)
@@ -324,6 +355,29 @@ impl Engine {
 
     fn log_summary(&self) {
         self.metrics.heartbeat();
+        // RPC usage since the last summary (≈ per minute): the data-efficiency scoreboard.
+        let mut usage = serde_json::Map::new();
+        for (name, m) in &self.meters {
+            let by_method = m.drain();
+            let total: u64 = by_method.iter().map(|(_, n)| n).sum();
+            let top: Vec<String> = by_method
+                .iter()
+                .take(4)
+                .map(|(k, n)| format!("{k}={n}"))
+                .collect();
+            info!(
+                provider = name,
+                calls = total,
+                top = top.join(" "),
+                "rpc usage (last minute)"
+            );
+            usage.insert(
+                (*name).to_string(),
+                json!({ "calls": total, "by_method": by_method }),
+            );
+        }
+        self.metrics
+            .event("rpc_usage", serde_json::Value::Object(usage));
         let c = self.metrics.snapshot();
         info!(
             updates = c.updates,
@@ -390,7 +444,7 @@ impl Engine {
                 return;
             }
         };
-        let gas_price = self.rpc.http.get_gas_price().await.unwrap_or(10_000_000) as f64;
+        let gas_price = self.gas_price().await;
         let gas_usd = gas as f64 * gas_price * native_px;
         let profit_usd = f64::from(profit) * loan_px;
         let net_usd = profit_usd - gas_usd;
@@ -519,7 +573,7 @@ impl Engine {
         };
         let profit_usd = f64::from(profit) * debt_px;
         let native_px = self.price(self.native).unwrap_or(0.0);
-        let gas_price = self.rpc.http.get_gas_price().await.unwrap_or(10_000_000) as f64;
+        let gas_price = self.gas_price().await;
         let gas_usd = gas as f64 * gas_price * native_px;
         let net_usd = profit_usd - gas_usd;
         self.metrics.update(|c| c.liq_profitable += 1);
@@ -672,14 +726,15 @@ async fn build_liquidation(
     rpc: &Rpc,
     data_dir: &std::path::Path,
     executor: Address,
+    meters: &mut Vec<(&'static str, Arc<RpcMeter>)>,
 ) -> Result<Option<(Runner, Vec<Address>)>> {
     let Some(lcfg) = cfg.liquidation.clone().filter(|l| l.enabled) else {
         return Ok(None);
     };
     let arpc = AdapterRpc {
         fast: rpc.http.clone(),
-        scan: mev_rpc::http_provider(&lcfg.scan_rpc)?,
-        sweep: mev_rpc::http_provider(&lcfg.sweep_rpc)?,
+        scan: metered(&lcfg.scan_rpc, "scan", meters)?,
+        sweep: metered(&lcfg.sweep_rpc, "sweep", meters)?,
     };
     let mut adapters: Vec<Box<dyn LiquidationAdapter>> = Vec::new();
     if let Some(a) = cfg.aave.clone().filter(|a| a.enabled) {
@@ -724,6 +779,16 @@ async fn build_liquidation(
         executor,
     };
     Ok(Some((Runner::new(rcfg, adapters), via)))
+}
+
+fn metered(
+    url: &str,
+    name: &'static str,
+    meters: &mut Vec<(&'static str, Arc<RpcMeter>)>,
+) -> Result<alloy::providers::DynProvider> {
+    let m = RpcMeter::new();
+    meters.push((name, m.clone()));
+    mev_rpc::metered_http_provider(url, m)
 }
 
 /// Warn (with the exact fix) about liquidation targets the executor hasn't allowlisted.

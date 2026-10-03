@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "33"
-graphify-node-count: 73
-graphify-internal-edges: 173
+graphify-node-count: 83
+graphify-internal-edges: 190
 tags:
   - graphify/community
 ---
@@ -14,17 +14,19 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Source files
 
 - `crates/mev-state/src/lib.rs` — 23 nodes
+- `graph` — 19 nodes
 - `crates/mev-dex/src/lib.rs` — 17 nodes
-- `graph` — 17 nodes
 - `crates/mev-search/src/lib.rs` — 11 nodes
+- `crates/mev-types/src/lib.rs` — 8 nodes
 - `crates/mev-analytics/src/lib.rs` — 5 nodes
 
-## Nodes (73)
+## Nodes (83)
 
 - **PoolStore** — `crates/mev-state/src/lib.rs:L11`
 - **Pool** — `crates/mev-dex/src/lib.rs:L20`
 - **lib.rs** — `crates/mev-search/src/lib.rs:L1`
 - **Address** — `graph`
+- **PoolInfo** — `crates/mev-types/src/lib.rs:L34`
 - **lib.rs** — `crates/mev-state/src/lib.rs:L1`
 - **two_pool_arbs()** — `crates/mev-search/src/lib.rs:L20`
 - **lib.rs** — `crates/mev-dex/src/lib.rs:L1`
@@ -40,6 +42,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.get()** — `crates/mev-state/src/lib.rs:L29`
 - **.siblings()** — `crates/mev-state/src/lib.rs:L50`
 - **Address** — `graph`
+- **lib.rs** — `crates/mev-types/src/lib.rs:L1`
 - **run()** — `crates/mev-search/src/lib.rs:L163`
 - **SearchParams** — `crates/mev-search/src/lib.rs:L10`
 - **.apply_log()** — `crates/mev-state/src/lib.rs:L78`
@@ -47,7 +50,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.reserves()** — `crates/mev-dex/src/lib.rs:L52`
 - **.usd_per_raw_unit()** — `crates/mev-state/src/lib.rs:L110`
 - **Address** — `graph`
+- **Address** — `graph`
 - **pair_spreads()** — `crates/mev-analytics/src/lib.rs:L19`
+- **PoolKind** — `crates/mev-types/src/lib.rs:L8`
 - **v2()** — `crates/mev-search/src/lib.rs:L146`
 - **.fee()** — `crates/mev-dex/src/lib.rs:L69`
 - **.marginal_rate()** — `crates/mev-dex/src/lib.rs:L88`
@@ -77,6 +82,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **v2()** — `crates/mev-analytics/src/lib.rs:L65`
 - **v2()** — `crates/mev-dex/src/lib.rs:L193`
 - **Vec** — `graph`
+- **.has()** — `crates/mev-types/src/lib.rs:L51`
+- **.other()** — `crates/mev-types/src/lib.rs:L43`
 - **.replace()** — `crates/mev-state/src/lib.rs:L65`
 - **.with_directional_fees()** — `crates/mev-dex/src/lib.rs:L45`
 - **Address** — `graph`
@@ -87,17 +94,21 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **no_arb_when_prices_match()** — `crates/mev-search/src/lib.rs:L200`
 - **Option** — `graph`
 - **Self** — `graph`
+- **.hop_kind()** — `crates/mev-types/src/lib.rs:L23`
 - **.is_empty()** — `crates/mev-state/src/lib.rs:L37`
 - **.len()** — `crates/mev-state/src/lib.rs:L33`
 - **.price0()** — `crates/mev-dex/src/lib.rs:L98`
+- **hop_kinds_match_executor_constants()** — `crates/mev-types/src/lib.rs:L86`
 - **Item** — `graph`
 - **Iterator** — `graph`
 - **LogData** — `graph`
+- **pool_info_other_and_has()** — `crates/mev-types/src/lib.rs:L96`
+- **String** — `graph`
 - **Vec** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 8 cross-community edges
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 7 cross-community edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 10 cross-community edges
+- [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 7 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 5 cross-community edges
 - [[docs/knowledge/communities/C020 - Simulator|Simulator]] — 1 cross-community edges
