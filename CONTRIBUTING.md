@@ -10,7 +10,8 @@ scripts/setup-dev.sh   # enables hooks: conventional commits, secret scan, fmt, 
 
 ## Branches
 
-- `main` is always deployable. Direct pushes are blocked; everything lands via PR.
+- `main` is always deployable. Direct pushes are blocked by the local `pre-push` hook; everything lands via PR.
+  (Server-side rules need GitHub Pro for private repos — see "Server-side protection" below.)
 - Branch from `main`, keep branches small and short-lived (≤ 2–3 days):
 
 | Prefix | Use |
@@ -56,3 +57,14 @@ docs(planning): record node provider decision
 
 Private keys, mnemonics, RPC URLs containing API keys, `.env` files. Config takes secrets from env vars.
 The pre-commit hook and CI gitleaks job block common patterns; they are a backstop, not a guarantee.
+
+## Server-side protection
+
+GitHub's free plan does not enforce branch rules on private repos. Until the account is upgraded to
+GitHub Pro, protection is local: the `pre-push` hook refuses pushes to `main`, and CI must be green
+before you merge (check with `gh pr checks`). After upgrading, apply the ruleset in
+`.github/rulesets/protect-main.json`:
+
+```bash
+gh api -X POST repos/FraktalDeFiDAO/mev-bot-rs/rulesets --input .github/rulesets/protect-main.json
+```

@@ -37,10 +37,19 @@
       "height": 220
     },
     {
+      "id": "community-10",
+      "type": "file",
+      "file": "docs/knowledge/communities/C010 - Contributing - Git workflow.md",
+      "x": 0,
+      "y": 300,
+      "width": 360,
+      "height": 220
+    },
+    {
       "id": "community-4",
       "type": "file",
       "file": "docs/knowledge/communities/C004 - graphify-obsidian.mjs.md",
-      "x": 0,
+      "x": 420,
       "y": 300,
       "width": 360,
       "height": 220
@@ -49,7 +58,16 @@
       "id": "community-5",
       "type": "file",
       "file": "docs/knowledge/communities/C005 - Stage 3- own node near the sequencer — trigger- 30-day profit ≥ 3× node cost AND.md",
-      "x": 420,
+      "x": 840,
+      "y": 300,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-11",
+      "type": "file",
+      "file": "docs/knowledge/communities/C011 - pull_request_template.md.md",
+      "x": 1260,
       "y": 300,
       "width": 360,
       "height": 220
@@ -58,8 +76,8 @@
       "id": "community-6",
       "type": "file",
       "file": "docs/knowledge/communities/C006 - Session state.md",
-      "x": 840,
-      "y": 300,
+      "x": 0,
+      "y": 600,
       "width": 360,
       "height": 220
     },
@@ -67,8 +85,53 @@
       "id": "community-7",
       "type": "file",
       "file": "docs/knowledge/communities/C007 - mev-bot.md",
+      "x": 420,
+      "y": 600,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-12",
+      "type": "file",
+      "file": "docs/knowledge/communities/C012 - commit-msg.md",
+      "x": 840,
+      "y": 600,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-13",
+      "type": "file",
+      "file": "docs/knowledge/communities/C013 - post-commit.md",
       "x": 1260,
-      "y": 300,
+      "y": 600,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-14",
+      "type": "file",
+      "file": "docs/knowledge/communities/C014 - pre-commit.md",
+      "x": 0,
+      "y": 900,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-15",
+      "type": "file",
+      "file": "docs/knowledge/communities/C015 - setup-dev.sh.md",
+      "x": 420,
+      "y": 900,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-16",
+      "type": "file",
+      "file": "docs/knowledge/communities/C016 - SECURITY.md.md",
+      "x": 840,
+      "y": 900,
       "width": 360,
       "height": 220
     },
@@ -76,8 +139,8 @@
       "id": "community-8",
       "type": "file",
       "file": "docs/knowledge/communities/C008 - SUBAGENT_PREAMBLE.md.md",
-      "x": 0,
-      "y": 600,
+      "x": 1260,
+      "y": 900,
       "width": 360,
       "height": 220
     },
@@ -85,8 +148,17 @@
       "id": "community-9",
       "type": "file",
       "file": "docs/knowledge/communities/C009 - graph.sh.md",
+      "x": 0,
+      "y": 1200,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-17",
+      "type": "file",
+      "file": "docs/knowledge/communities/C017 - auto-memory-hook.mjs.md",
       "x": 420,
-      "y": 600,
+      "y": 1200,
       "width": 360,
       "height": 220
     }

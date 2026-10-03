@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Branch protection fallback: GitHub's free plan can't enforce rules on private repos,
+# so block direct pushes to main locally. Land changes via PR (CONTRIBUTING.md).
+while read -r _ _ remote_ref _; do
+  if [[ $remote_ref == refs/heads/main ]] && [[ -z ${ALLOW_MAIN_PUSH:-} ]]; then
+    echo "pre-push: direct push to main is blocked — open a PR (gh pr create)." >&2
+    exit 1
+  fi
+done
+exit 0
