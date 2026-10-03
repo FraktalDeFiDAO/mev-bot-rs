@@ -22,6 +22,8 @@ futures = "0.3"
 dotenvy = "0.15"
 clap = { version = "4.6", features = ["derive", "env"] }
 chrono = { version = "0.4", features = ["serde"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+base64 = "0.23"
 
 mev-types = { path = "crates/mev-types" }
 mev-config = { path = "crates/mev-config" }
@@ -41,6 +43,7 @@ mev-exec = { path = "crates/mev-exec" }
 mev-metrics = { path = "crates/mev-metrics" }
 mev-analytics = { path = "crates/mev-analytics" }
 mev-engine = { path = "crates/mev-engine" }
+mev-sequencer = { path = "crates/mev-sequencer" }
 
 [profile.release]
 lto = "fat"

@@ -18,19 +18,19 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Nodes (19)
 
-- **Metrics** — `crates/mev-metrics/src/lib.rs:L28`
-- **open()** — `crates/mev-metrics/src/lib.rs:L80`
-- **.new()** — `crates/mev-metrics/src/lib.rs:L35`
+- **Metrics** — `crates/mev-metrics/src/lib.rs:L31`
+- **open()** — `crates/mev-metrics/src/lib.rs:L83`
+- **.new()** — `crates/mev-metrics/src/lib.rs:L38`
 - **Counters** — `crates/mev-metrics/src/lib.rs:L16`
 - **lib.rs** — `crates/mev-metrics/src/lib.rs:L1`
-- **.update()** — `crates/mev-metrics/src/lib.rs:L63`
+- **.update()** — `crates/mev-metrics/src/lib.rs:L66`
 - **Result** — `graph`
-- **.event()** — `crates/mev-metrics/src/lib.rs:L47`
-- **.snapshot()** — `crates/mev-metrics/src/lib.rs:L75`
+- **.event()** — `crates/mev-metrics/src/lib.rs:L50`
+- **.snapshot()** — `crates/mev-metrics/src/lib.rs:L78`
 - **BufWriter** — `graph`
 - **File** — `graph`
 - **PathBuf** — `graph`
-- **.heartbeat()** — `crates/mev-metrics/src/lib.rs:L68`
+- **.heartbeat()** — `crates/mev-metrics/src/lib.rs:L71`
 - **FnOnce** — `graph`
 - **Mutex** — `graph`
 - **Path** — `graph`

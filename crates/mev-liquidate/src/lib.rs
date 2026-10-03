@@ -29,7 +29,7 @@ const ACCOUNT_DATA_CHUNK: usize = 50;
 /// Log-scan requests per index tick, so catching up on history never blocks for long.
 const MAX_SCAN_CHUNKS_PER_TICK: usize = 20;
 /// Pause between scan requests: public RPCs rate-limit bursts (HTTP 429).
-const SCAN_THROTTLE: Duration = Duration::from_millis(250);
+const SCAN_THROTTLE: Duration = Duration::from_millis(500);
 /// How often to run an index step while history is still being back-filled.
 const BACKFILL_EVERY: Duration = Duration::from_secs(5);
 
@@ -63,8 +63,10 @@ pub struct AaveMonitor {
     cfg: AaveConfig,
     /// Fast reads (at-risk polling).
     fast: DynProvider,
-    /// Heavy reads (log scans, full sweeps).
+    /// Borrow log scans (needs complete wide-range getLogs).
     scan: DynProvider,
+    /// Full health sweeps (heavy eth_calls).
+    sweeper: DynProvider,
     cache_path: PathBuf,
     index: BorrowerIndex,
     /// Borrowers with debt, from the last sweep.
@@ -76,6 +78,7 @@ pub struct AaveMonitor {
 impl AaveMonitor {
     pub fn new(cfg: AaveConfig, fast: DynProvider, cache_path: PathBuf) -> Result<Self> {
         let scan = mev_rpc::http_provider(&cfg.scan_rpc)?;
+        let sweeper = mev_rpc::http_provider(&cfg.sweep_rpc)?;
         let index = std::fs::read(&cache_path)
             .ok()
             .and_then(|b| serde_json::from_slice::<BorrowerIndex>(&b).ok())
@@ -90,6 +93,7 @@ impl AaveMonitor {
             cfg,
             fast,
             scan,
+            sweeper,
             cache_path,
             index,
             active: vec![],
@@ -187,7 +191,7 @@ impl AaveMonitor {
     /// Health of every indexed borrower: keeps those with debt, and the at-risk subset.
     pub async fn sweep(&mut self) -> Result<()> {
         let users: Vec<Address> = self.index.borrowers.iter().copied().collect();
-        let data = self.account_data(&self.scan, &users).await?;
+        let data = self.account_data(&self.sweeper, &users).await?;
         self.active.clear();
         self.at_risk.clear();
         for (u, a) in users.into_iter().zip(data) {

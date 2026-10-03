@@ -64,8 +64,11 @@ pub struct AaveConfig {
     /// First block to index Borrow events from (pool deployment).
     pub from_block: u64,
     pub scan_step: u64,
-    /// RPC for log scans and full sweeps (public RPCs allow wide getLogs ranges).
+    /// RPC for Borrow log scans. Must return complete wide-range getLogs results — several public
+    /// RPCs silently truncate them (verified 2026-10-03: only arb1.arbitrum.io/rpc was complete).
     pub scan_rpc: String,
+    /// RPC for full health sweeps (eth_call only, so any public RPC works).
+    pub sweep_rpc: String,
     /// Borrowers below this health factor are polled every `poll_secs`.
     pub at_risk_hf: f64,
     /// Ignore positions with less debt than this (bonus wouldn't cover gas).
