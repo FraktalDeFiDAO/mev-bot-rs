@@ -21,3 +21,11 @@ Newest last. Each entry: decision, reason, and what would change it.
 | 13 | Preferred Stage 3 node: **RedSwitches dedicated node, Manassas VA** (pre-synced node + root access, bot on the same box, from $199/mo) | Only provider found offering a pre-built node plus a server we can deploy on | Better offer found; get exact quote first |
 | 14 | Alternatives kept: Chainstack Dedicated on AWS US East (managed, region choice); Argusnodes (Base, from $199, endpoint only); OVH Rise/Advance self-run (from ~$77) | Backup options | — |
 | 15 | Planning docs live in `docs/planning/` | User requirement | — |
+
+## 2026-10-03 — MVP deployment
+
+| # | Decision | Reason | Revisit when |
+|---|---|---|---|
+| 16 | `ArbExecutor` deployed on Arbitrum at `0xCc807Fb920c13145D5757D4C7DDBAa3f7Ce2E6AD` (owner = receiver = `0xe7322F17Ed69B9236f5103f8F62B302Cbf984447`, Balancer V2 vault lender) from branch `feat/mvp-live-arb` | User wanted live trades same day; fork tests passed immediately before deploy | Any contract change → new deployment + new row |
+| 17 | Hot wallet is a reused wallet (218 prior txs), not a fresh one; receiver = hot wallet | User's choice | Move to fresh hot wallet + separate cold receiver when scaling |
+| 18 | First shadow run with sim: 55 major pools, ~12 updates/min, 0 opportunities > $0.05 | Major pairs are efficiently arbitraged; Uniswap v4 / Pancake V3 / Algebra pools not covered yet | Next: widen pool coverage (long-tail pairs, lower liquidity floor, more DEX types) |
