@@ -1,4 +1,5 @@
 //! Solidity bindings for our executor and the external contracts we read.
+#![allow(clippy::too_many_arguments)] // sol!-generated constructors for wide events
 
 use alloy::sol;
 
@@ -39,6 +40,31 @@ sol! {
         function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked);
         function liquidity() external view returns (uint128);
         event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick);
+    }
+
+    #[sol(rpc)]
+    interface IPancakeV3Pool {
+        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint32 feeProtocol, bool unlocked);
+        event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint128 protocolFeesToken0, uint128 protocolFeesToken1);
+    }
+
+    #[sol(rpc)]
+    interface IAlgebraFactory {
+        function poolByPair(address tokenA, address tokenB) external view returns (address pool);
+    }
+
+    #[sol(rpc)]
+    interface IAlgebraPool {
+        /// Camelot's Algebra 1.9: directional fees in hundredths of a bip.
+        function globalState() external view returns (uint160 price, int24 tick, uint16 feeZto, uint16 feeOtz, uint16 timepointIndex, uint8 communityFeeToken0, uint8 communityFeeToken1, bool unlocked);
+    }
+
+    /// Metadata every V2/V3-style pool exposes; used to verify auto-discovered pools.
+    #[sol(rpc)]
+    interface IPoolMeta {
+        function token0() external view returns (address);
+        function token1() external view returns (address);
+        function factory() external view returns (address);
     }
 
     #[sol(rpc)]

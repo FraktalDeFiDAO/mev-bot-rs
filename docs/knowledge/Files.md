@@ -11,7 +11,7 @@ tags:
 Every indexed source file, and the communities its nodes fall into. Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - `.ai/CONTEXT_POLICY.md` — [[docs/knowledge/communities/C002 - Context policy|Context policy]] (9)
-- `.ai/STATE.md` — [[docs/knowledge/communities/C006 - Session state|Session state]] (5)
+- `.ai/STATE.md` — [[docs/knowledge/communities/C006 - Session state|Session state]] (6)
 - `.ai/SUBAGENT_PREAMBLE.md` — [[docs/knowledge/communities/C008 - SUBAGENT_PREAMBLE.md|SUBAGENT_PREAMBLE.md]] (2)
 - `.claude/helpers/auto-memory-hook.mjs` — [[docs/knowledge/communities/C017 - auto-memory-hook.mjs|auto-memory-hook.mjs]] (1)
 - `.github/pull_request_template.md` — [[docs/knowledge/communities/C011 - pull_request_template.md|pull_request_template.md]] (5)
@@ -22,7 +22,7 @@ Every indexed source file, and the communities its nodes fall into. Back to [[do
 - `crates/mev-analytics/src/lib.rs` — [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] (3)
 - `crates/mev-bindings/src/lib.rs` — [[docs/knowledge/communities/C020 - lib.rs (C020)|lib.rs (C020)]] (2)
 - `crates/mev-bot/src/main.rs` — [[docs/knowledge/communities/C035 - main.rs|main.rs]] (4)
-- `crates/mev-config/src/lib.rs` — [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] (11)
+- `crates/mev-config/src/lib.rs` — [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] (13)
 - `crates/mev-dex/src/lib.rs` — [[docs/knowledge/communities/C022 - lib.rs (C022)|lib.rs (C022)]] (16)
 - `crates/mev-discovery/src/lib.rs` — [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] (7)
 - `crates/mev-engine/src/lib.rs` — [[docs/knowledge/communities/C034 - Engine|Engine]] (12)
@@ -48,7 +48,7 @@ Every indexed source file, and the communities its nodes fall into. Back to [[do
 - `scripts/dev.sh` — [[docs/knowledge/communities/C036 - dev.sh|dev.sh]] (2)
 - `scripts/githooks/commit-msg` — [[docs/knowledge/communities/C012 - commit-msg|commit-msg]] (2)
 - `scripts/githooks/post-commit` — [[docs/knowledge/communities/C013 - post-commit|post-commit]] (2)
-- `scripts/githooks/pre-commit` — [[docs/knowledge/communities/C014 - pre-commit|pre-commit]] (2)
+- `scripts/githooks/pre-commit` — [[docs/knowledge/communities/C014 - pre-commit|pre-commit]] (3)
 - `scripts/githooks/pre-push` — [[docs/knowledge/communities/C018 - pre-push|pre-push]] (2)
 - `scripts/graph.sh` — [[docs/knowledge/communities/C009 - graph.sh|graph.sh]] (2)
 - `scripts/graphify-obsidian.mjs` — [[docs/knowledge/communities/C004 - graphify-obsidian.mjs|graphify-obsidian.mjs]] (8)

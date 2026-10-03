@@ -22,7 +22,7 @@ than reading any of this.
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 24 nodes, 33 internal edges
 - [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 24 nodes, 49 internal edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 24 nodes, 41 internal edges
-- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 21 nodes, 38 internal edges
+- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 23 nodes, 47 internal edges
 - [[docs/knowledge/communities/C022 - lib.rs (C022)|lib.rs (C022)]] — 21 nodes, 41 internal edges
 - [[docs/knowledge/communities/C027 - lib.rs (C027)|lib.rs (C027)]] — 19 nodes, 27 internal edges
 - [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 19 nodes, 33 internal edges
@@ -35,14 +35,14 @@ than reading any of this.
 - [[docs/knowledge/communities/C004 - graphify-obsidian.mjs|graphify-obsidian.mjs]] — 8 nodes, 13 internal edges
 - [[docs/knowledge/communities/C032 - lib.rs (C032)|lib.rs (C032)]] — 7 nodes, 11 internal edges
 - [[docs/knowledge/communities/C035 - main.rs|main.rs]] — 6 nodes, 8 internal edges
+- [[docs/knowledge/communities/C006 - Session state|Session state]] — 6 nodes, 5 internal edges
 - [[docs/knowledge/communities/C011 - pull_request_template.md|pull_request_template.md]] — 5 nodes, 4 internal edges
-- [[docs/knowledge/communities/C006 - Session state|Session state]] — 5 nodes, 4 internal edges
 - [[docs/knowledge/communities/C007 - mev-bot|mev-bot]] — 5 nodes, 4 internal edges
 - [[docs/knowledge/communities/C001 - deploy-executor.sh|deploy-executor.sh]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C014 - pre-commit|pre-commit]] — 3 nodes, 2 internal edges
 - [[docs/knowledge/communities/C019 - lib.rs (C019)|lib.rs (C019)]] — 3 nodes, 3 internal edges
 - [[docs/knowledge/communities/C012 - commit-msg|commit-msg]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C013 - post-commit|post-commit]] — 2 nodes, 1 internal edges
-- [[docs/knowledge/communities/C014 - pre-commit|pre-commit]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C015 - setup-dev.sh|setup-dev.sh]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C016 - SECURITY.md|SECURITY.md]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C018 - pre-push|pre-push]] — 2 nodes, 1 internal edges

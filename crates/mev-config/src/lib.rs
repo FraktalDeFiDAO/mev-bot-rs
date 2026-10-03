@@ -12,6 +12,8 @@ pub enum DexType {
     Univ2,
     Camelot,
     Univ3,
+    Pancakev3,
+    Algebra,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,6 +38,22 @@ pub struct RiskConfig {
     pub max_loan_usd: f64,
 }
 
+/// Find long-tail pairs from recent swap activity instead of only the fixed `pairs` list.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutoDiscovery {
+    pub enabled: bool,
+    /// Recent blocks to scan for Swap/Sync events.
+    pub blocks: u64,
+    /// Blocks per eth_getLogs request.
+    pub step: u64,
+    /// RPC used only for the log scan (free tiers often cap getLogs ranges).
+    pub log_rpc: String,
+    /// Each active token is paired with these (loan-able) tokens.
+    pub pair_with: Vec<String>,
+    /// Cap on active tokens taken from the scan (most active first).
+    pub max_tokens: usize,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChainConfig {
     pub name: String,
@@ -55,6 +73,7 @@ pub struct ChainConfig {
     pub pairs: Vec<[String; 2]>,
     pub dexes: Vec<DexConfig>,
     pub risk: RiskConfig,
+    pub auto_discovery: Option<AutoDiscovery>,
 }
 
 impl ChainConfig {
@@ -74,6 +93,11 @@ impl ChainConfig {
         {
             cfg.token(t)?;
         }
+        if let Some(ad) = &cfg.auto_discovery {
+            for t in &ad.pair_with {
+                cfg.token(t)?;
+            }
+        }
         Ok(cfg)
     }
 
@@ -82,6 +106,14 @@ impl ChainConfig {
             .get(symbol)
             .copied()
             .ok_or_else(|| anyhow!("unknown token symbol {symbol}"))
+    }
+
+    /// Configured pairs as addresses.
+    pub fn pair_addresses(&self) -> Result<Vec<(Address, Address)>> {
+        self.pairs
+            .iter()
+            .map(|[a, b]| Ok((self.token(a)?, self.token(b)?)))
+            .collect()
     }
 
     pub fn symbol(&self, addr: Address) -> String {

@@ -12,6 +12,10 @@ pub enum PoolKind {
     CamelotV2,
     /// Uniswap V3 / Sushi V3 concentrated liquidity. `fee` in hundredths of a bip (500 = 0.05%).
     UniV3 { fee: u32 },
+    /// PancakeSwap V3: Uniswap V3 math, different slot0 layout and Swap event.
+    PancakeV3 { fee: u32 },
+    /// Algebra (Camelot V3): one pool per pair, dynamic directional fees from `globalState()`.
+    AlgebraV3,
 }
 
 impl PoolKind {
@@ -20,7 +24,8 @@ impl PoolKind {
         match self {
             PoolKind::UniV2 { .. } => 0,
             PoolKind::CamelotV2 => 1,
-            PoolKind::UniV3 { .. } => 2,
+            // All V3-style pools share the executor's swap() path; only the callback name differs.
+            PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. } | PoolKind::AlgebraV3 => 2,
         }
     }
 }

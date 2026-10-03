@@ -3,7 +3,7 @@ chain_id = 42161
 balancer_vault = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
 # Raw txs also go straight to the Arbitrum sequencer (fastest path, no API key needed).
 sequencer_rpc = "https://arb1-sequencer.arbitrum.io/rpc"
-min_pool_liquidity_usd = 20000.0
+min_pool_liquidity_usd = 5000.0
 gas_limit_estimate = 1500000
 loan_tokens = ["WETH", "USDC", "USDT", "WBTC", "ARB", "DAI", "USDC.e"]
 usd_token = "USDC"
@@ -15,6 +15,14 @@ pairs = [
   ["ARB", "USDC"], ["ARB", "USDT"], ["WBTC", "USDC"], ["WBTC", "USDT"], ["USDC", "USDT"],
   ["USDC", "USDC.e"], ["USDC", "DAI"], ["GMX", "USDC"], ["LINK", "USDC"], ["PENDLE", "USDC"],
 ]
+
+[auto_discovery]
+enabled = true
+blocks = 2400            # ~10 min of Arbitrum blocks
+step = 200
+log_rpc = "https://arb1.arbitrum.io/rpc"   # official RPC allows wide getLogs ranges
+pair_with = ["WETH", "USDC", "USDT"]
+max_tokens = 150
 
 [risk]
 min_profit_usd = 0.05          # net of gas
@@ -64,3 +72,14 @@ fee_bps = 30
 name = "camelot_v2"
 type = "camelot"
 factory = "0x6EcCab422D763aC031210895C81787E87B43A652"
+
+[[dexes]]
+name = "pancake_v3"
+type = "pancakev3"
+factory = "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"
+fees = [100, 500, 2500, 10000]
+
+[[dexes]]
+name = "camelot_v3"
+type = "algebra"
+factory = "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"

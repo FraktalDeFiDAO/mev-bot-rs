@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use alloy::{rpc::types::Log, sol_types::SolEvent};
-use mev_bindings::{IUniswapV2Pair, IUniswapV3Pool};
+use mev_bindings::{IPancakeV3Pool, IUniswapV2Pair, IUniswapV3Pool};
 use mev_dex::{Pool, PoolState, sqrt_price_from_x96};
 use mev_types::{Address, B256};
 
@@ -61,6 +61,13 @@ impl PoolStore {
             .unwrap_or_default()
     }
 
+    /// Replace an existing pool's state and fees (e.g. after a resync). Unknown pools are ignored.
+    pub fn replace(&mut self, pool: Pool) {
+        if let Some(p) = self.pools.get_mut(&pool.info.address) {
+            *p = pool;
+        }
+    }
+
     pub fn set_state(&mut self, addr: &Address, state: PoolState) {
         if let Some(p) = self.pools.get_mut(addr) {
             p.state = state;
@@ -77,6 +84,13 @@ impl PoolStore {
             pool.state = PoolState::V2 {
                 reserve0: f64::from(ev.reserve0),
                 reserve1: f64::from(ev.reserve1),
+            };
+            Some(addr)
+        } else if topic0 == IPancakeV3Pool::Swap::SIGNATURE_HASH {
+            let ev = IPancakeV3Pool::Swap::decode_log_data(log.data()).ok()?;
+            pool.state = PoolState::V3 {
+                sqrt_price: sqrt_price_from_x96(f64::from(ev.sqrtPriceX96)),
+                liquidity: ev.liquidity as f64,
             };
             Some(addr)
         } else if topic0 == IUniswapV3Pool::Swap::SIGNATURE_HASH {

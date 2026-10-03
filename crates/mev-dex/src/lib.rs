@@ -29,8 +29,10 @@ impl Pool {
     pub fn new(info: PoolInfo, state: PoolState) -> Self {
         let fee = match info.kind {
             PoolKind::UniV2 { fee_bps } => fee_bps as f64 / 10_000.0,
-            PoolKind::UniV3 { fee } => fee as f64 / 1_000_000.0,
+            PoolKind::UniV3 { fee } | PoolKind::PancakeV3 { fee } => fee as f64 / 1_000_000.0,
             PoolKind::CamelotV2 => 0.003,
+            // Real fees come from globalState() via `with_directional_fees`.
+            PoolKind::AlgebraV3 => 0.003,
         };
         Self {
             info,

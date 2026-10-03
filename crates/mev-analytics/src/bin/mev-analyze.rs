@@ -25,7 +25,8 @@ async fn main() -> Result<()> {
     let usd = cfg.token(&cfg.usd_token)?;
     let native = cfg.token(&cfg.native_token)?;
 
-    let infos = mev_discovery::discover_pools(&rpc, &cfg).await?;
+    let pairs = mev_discovery::candidate_pairs(&rpc, &cfg).await?;
+    let infos = mev_discovery::discover_pools(&rpc, &cfg, &pairs).await?;
     let pools = mev_discovery::load_pools(&rpc, infos).await?;
     let decimals =
         mev_discovery::token_decimals(&rpc, &cfg.tokens.values().copied().collect::<Vec<_>>())

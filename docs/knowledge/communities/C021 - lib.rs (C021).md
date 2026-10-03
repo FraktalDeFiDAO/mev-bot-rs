@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "21"
-graphify-node-count: 21
-graphify-internal-edges: 38
+graphify-node-count: 23
+graphify-internal-edges: 47
 tags:
   - graphify/community
 ---
@@ -13,28 +13,30 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-config/src/lib.rs` — 11 nodes
+- `crates/mev-config/src/lib.rs` — 13 nodes
 - `graph` — 10 nodes
 
-## Nodes (21)
+## Nodes (23)
 
-- **ChainConfig** — `crates/mev-config/src/lib.rs:L40`
-- **Secrets** — `crates/mev-config/src/lib.rs:L98`
+- **ChainConfig** — `crates/mev-config/src/lib.rs:L58`
+- **Secrets** — `crates/mev-config/src/lib.rs:L127`
 - **Address** — `graph`
-- **DexConfig** — `crates/mev-config/src/lib.rs:L18`
 - **lib.rs** — `crates/mev-config/src/lib.rs:L1`
-- **.load()** — `crates/mev-config/src/lib.rs:L61`
-- **.token()** — `crates/mev-config/src/lib.rs:L80`
+- **DexConfig** — `crates/mev-config/src/lib.rs:L20`
+- **.load()** — `crates/mev-config/src/lib.rs:L80`
+- **.pair_addresses()** — `crates/mev-config/src/lib.rs:L112`
+- **.token()** — `crates/mev-config/src/lib.rs:L104`
 - **Result** — `graph`
 - **String** — `graph`
-- **.fmt()** — `crates/mev-config/src/lib.rs:L107`
-- **.from_env()** — `crates/mev-config/src/lib.rs:L120`
-- **.symbol()** — `crates/mev-config/src/lib.rs:L87`
+- **AutoDiscovery** — `crates/mev-config/src/lib.rs:L43`
+- **Vec** — `graph`
+- **.fmt()** — `crates/mev-config/src/lib.rs:L136`
+- **.from_env()** — `crates/mev-config/src/lib.rs:L149`
+- **.symbol()** — `crates/mev-config/src/lib.rs:L116`
 - **DexType** — `crates/mev-config/src/lib.rs:L11`
 - **Option** — `graph`
-- **RiskConfig** — `crates/mev-config/src/lib.rs:L32`
+- **RiskConfig** — `crates/mev-config/src/lib.rs:L34`
 - **Self** — `graph`
-- **Vec** — `graph`
 - **Debug** — `graph`
 - **Formatter** — `graph`
 - **HashMap** — `graph`

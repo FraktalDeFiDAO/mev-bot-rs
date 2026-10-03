@@ -83,9 +83,16 @@ impl Engine {
         let usd = cfg.token(&cfg.usd_token)?;
         let native = cfg.token(&cfg.native_token)?;
 
-        let infos = mev_discovery::discover_pools(&rpc, &cfg).await?;
+        let pairs = mev_discovery::candidate_pairs(&rpc, &cfg).await?;
+        let infos = mev_discovery::discover_pools(&rpc, &cfg, &pairs).await?;
         let pools = mev_discovery::load_pools(&rpc, infos).await?;
-        let tokens: Vec<Address> = cfg.tokens.values().copied().collect();
+        let tokens: Vec<Address> = pools
+            .iter()
+            .flat_map(|p| [p.info.token0, p.info.token1])
+            .chain(cfg.tokens.values().copied())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
         let decimals = mev_discovery::token_decimals(&rpc, &tokens).await?;
         let usd_decimals = *decimals.get(&usd).context("USD token decimals")?;
         let store = mev_discovery::build_store(

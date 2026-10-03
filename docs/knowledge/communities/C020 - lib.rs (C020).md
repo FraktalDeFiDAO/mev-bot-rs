@@ -20,27 +20,27 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Nodes (26)
 
-- **Opportunity** — `crates/mev-types/src/lib.rs:L64`
-- **PoolInfo** — `crates/mev-types/src/lib.rs:L29`
+- **Opportunity** — `crates/mev-types/src/lib.rs:L69`
+- **PoolInfo** — `crates/mev-types/src/lib.rs:L34`
 - **.simulate()** — `crates/mev-sim/src/lib.rs:L34`
 - **Simulator** — `crates/mev-sim/src/lib.rs:L17`
 - **.new()** — `crates/mev-sim/src/lib.rs:L24`
 - **Address** — `graph`
 - **lib.rs** — `crates/mev-sim/src/lib.rs:L1`
-- **Hop** — `crates/mev-types/src/lib.rs:L53`
+- **Hop** — `crates/mev-types/src/lib.rs:L58`
 - **lib.rs** — `crates/mev-types/src/lib.rs:L1`
 - **PoolKind** — `crates/mev-types/src/lib.rs:L8`
 - **SimOutcome** — `crates/mev-sim/src/lib.rs:L12`
 - **short()** — `crates/mev-sim/src/lib.rs:L50`
-- **.has()** — `crates/mev-types/src/lib.rs:L46`
-- **.other()** — `crates/mev-types/src/lib.rs:L38`
+- **.has()** — `crates/mev-types/src/lib.rs:L51`
+- **.other()** — `crates/mev-types/src/lib.rs:L43`
 - **Address** — `graph`
 - **DynProvider** — `graph`
 - **Result** — `graph`
 - **String** — `graph`
-- **to_sol_hop()** — `crates/mev-bindings/src/lib.rs:L68`
+- **to_sol_hop()** — `crates/mev-bindings/src/lib.rs:L93`
 - **U256** — `graph`
-- **.hop_kind()** — `crates/mev-types/src/lib.rs:L19`
+- **.hop_kind()** — `crates/mev-types/src/lib.rs:L23`
 - **lib.rs** — `crates/mev-bindings/src/lib.rs:L1`
 - **Self** — `graph`
 - **String** — `graph`
