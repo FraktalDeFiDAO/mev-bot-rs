@@ -2902,6 +2902,8 @@ dependencies = [
  "mev-discovery",
  "mev-exec",
  "mev-ingest",
+ "mev-lending",
+ "mev-liquidate",
  "mev-metrics",
  "mev-risk",
  "mev-rpc",
@@ -2942,14 +2944,26 @@ dependencies = [
 name = "mev-lending"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "mev-types",
+ "serde",
 ]
 
 [[package]]
 name = "mev-liquidate"
 version = "0.1.0"
 dependencies = [
+ "alloy",
+ "anyhow",
+ "mev-bindings",
+ "mev-config",
+ "mev-lending",
+ "mev-rpc",
  "mev-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

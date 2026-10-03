@@ -24,3 +24,5 @@ mev-search = { workspace = true }
 mev-risk = { workspace = true }
 mev-exec = { workspace = true }
 mev-metrics = { workspace = true }
+mev-lending = { workspace = true }
+mev-liquidate = { workspace = true }

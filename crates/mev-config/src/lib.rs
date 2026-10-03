@@ -54,6 +54,28 @@ pub struct AutoDiscovery {
     pub max_tokens: usize,
 }
 
+/// Aave v3 liquidation monitor.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AaveConfig {
+    pub enabled: bool,
+    pub pool: Address,
+    pub data_provider: Address,
+    pub oracle: Address,
+    /// First block to index Borrow events from (pool deployment).
+    pub from_block: u64,
+    pub scan_step: u64,
+    /// RPC for log scans and full sweeps (public RPCs allow wide getLogs ranges).
+    pub scan_rpc: String,
+    /// Borrowers below this health factor are polled every `poll_secs`.
+    pub at_risk_hf: f64,
+    /// Ignore positions with less debt than this (bonus wouldn't cover gas).
+    pub min_debt_usd: f64,
+    pub poll_secs: u64,
+    pub sweep_secs: u64,
+    /// Swap routes for seized collateral may go through these tokens.
+    pub route_via: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChainConfig {
     pub name: String,
@@ -74,6 +96,7 @@ pub struct ChainConfig {
     pub dexes: Vec<DexConfig>,
     pub risk: RiskConfig,
     pub auto_discovery: Option<AutoDiscovery>,
+    pub aave: Option<AaveConfig>,
 }
 
 impl ChainConfig {

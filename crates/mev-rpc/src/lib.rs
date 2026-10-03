@@ -40,27 +40,42 @@ impl Rpc {
 
     /// Batch many read calls into Multicall3 `aggregate3` requests. `None` = that call failed.
     pub async fn multicall(&self, calls: &[(Address, Bytes)]) -> Result<Vec<Option<Bytes>>> {
-        const CHUNK: usize = 200;
-        let mc = IMulticall3::new(MULTICALL3, &self.http);
-        let mut out = Vec::with_capacity(calls.len());
-        for chunk in calls.chunks(CHUNK) {
-            let batch: Vec<IMulticall3::Call3> = chunk
-                .iter()
-                .map(|(target, data)| IMulticall3::Call3 {
-                    target: *target,
-                    allowFailure: true,
-                    callData: data.clone(),
-                })
-                .collect();
-            let res = mc
-                .aggregate3(batch)
-                .call()
-                .await
-                .context("multicall failed")?;
-            out.extend(res.into_iter().map(|r| r.success.then_some(r.returnData)));
-        }
-        Ok(out)
+        multicall(&self.http, calls, 200).await
     }
+}
+
+/// Multicall3 batching on any provider, `chunk` calls per request (lower it for gas-heavy calls).
+pub async fn multicall(
+    provider: &DynProvider,
+    calls: &[(Address, Bytes)],
+    chunk: usize,
+) -> Result<Vec<Option<Bytes>>> {
+    let mc = IMulticall3::new(MULTICALL3, provider);
+    let mut out = Vec::with_capacity(calls.len());
+    for part in calls.chunks(chunk.max(1)) {
+        let batch: Vec<IMulticall3::Call3> = part
+            .iter()
+            .map(|(target, data)| IMulticall3::Call3 {
+                target: *target,
+                allowFailure: true,
+                callData: data.clone(),
+            })
+            .collect();
+        let res = mc
+            .aggregate3(batch)
+            .call()
+            .await
+            .context("multicall failed")?;
+        out.extend(res.into_iter().map(|r| r.success.then_some(r.returnData)));
+    }
+    Ok(out)
+}
+
+/// HTTP-only provider (e.g. a public RPC used for heavy scans).
+pub fn http_provider(url: &str) -> Result<DynProvider> {
+    Ok(ProviderBuilder::new()
+        .connect_http(url.parse().context("invalid HTTP URL")?)
+        .erased())
 }
 
 async fn connect_ws(url: &str) -> Result<DynProvider> {

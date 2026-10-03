@@ -23,6 +23,9 @@ pub struct Counters {
     pub landed_reverted: u64,
     pub profit_usd: f64,
     pub gas_usd: f64,
+    pub liq_flagged: u64,
+    pub liq_planned: u64,
+    pub liq_profitable: u64,
 }
 
 pub struct Metrics {

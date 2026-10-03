@@ -77,3 +77,17 @@ pub struct Opportunity {
     pub buy_pool: Address,
     pub sell_pool: Address,
 }
+
+/// An Aave liquidation ready to simulate/send through the executor.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LiquidationCall {
+    pub user: Address,
+    pub collateral: Address,
+    pub debt: Address,
+    /// Flash-borrowed debt asset (>= the user's debt in that asset, plus a rounding buffer).
+    pub flash_amount: U256,
+    /// Route selling seized collateral for the debt asset (empty when they're the same token).
+    pub hops: Vec<Hop>,
+    /// Planned bonus at oracle prices, USD (before swap costs and gas).
+    pub est_bonus_usd: f64,
+}

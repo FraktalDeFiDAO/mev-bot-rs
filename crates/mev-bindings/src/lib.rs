@@ -68,6 +68,25 @@ sol! {
     }
 
     #[sol(rpc)]
+    interface IAavePool {
+        function getUserAccountData(address user) external view returns (uint256 totalCollateralBase, uint256 totalDebtBase, uint256 availableBorrowsBase, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor);
+        function getReservesList() external view returns (address[] memory);
+        event Borrow(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint8 interestRateMode, uint256 borrowRate, uint16 indexed referralCode);
+    }
+
+    #[sol(rpc)]
+    interface IAaveDataProvider {
+        function getUserReserveData(address asset, address user) external view returns (uint256 currentATokenBalance, uint256 currentStableDebt, uint256 currentVariableDebt, uint256 principalStableDebt, uint256 scaledVariableDebt, uint256 stableBorrowRate, uint256 liquidityRate, uint40 stableRateLastUpdated, bool usageAsCollateralEnabled);
+        function getReserveConfigurationData(address asset) external view returns (uint256 decimals, uint256 ltv, uint256 liquidationThreshold, uint256 liquidationBonus, uint256 reserveFactor, bool usageAsCollateralEnabled, bool borrowingEnabled, bool stableBorrowRateEnabled, bool isActive, bool isFrozen);
+        function getLiquidationProtocolFee(address asset) external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    interface IAaveOracle {
+        function getAssetPrice(address asset) external view returns (uint256);
+    }
+
+    #[sol(rpc)]
     interface IMulticall3 {
         struct Call3 { address target; bool allowFailure; bytes callData; }
         struct Result { bool success; bytes returnData; }
@@ -78,6 +97,8 @@ sol! {
     interface ArbExecutor {
         struct Hop { uint8 kind; address pool; address tokenIn; address tokenOut; bool zeroForOne; uint16 feeBps; }
         function execute(address token, uint256 amount, uint256 minProfit, Hop[] calldata hops) external returns (uint256 profit);
+        function liquidate(address collateral, address debt, address user, uint256 flashAmount, uint256 minProfit, Hop[] calldata hops) external returns (uint256 profit);
+        function aavePool() external view returns (address);
         function owner() external view returns (address);
         function profitReceiver() external view returns (address);
         error NotOwner();

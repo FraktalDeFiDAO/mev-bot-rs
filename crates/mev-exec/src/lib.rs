@@ -16,7 +16,7 @@ use alloy::{
 };
 use anyhow::{Context, Result, bail};
 use mev_bindings::{ArbExecutor, to_sol_hop};
-use mev_types::Opportunity;
+use mev_types::{LiquidationCall, Opportunity};
 use tracing::warn;
 
 pub struct Sender {
@@ -68,7 +68,7 @@ impl Sender {
         Ok(self.reader.get_balance(self.address).await?)
     }
 
-    /// Sign once and broadcast the same raw tx to every endpoint; first success wins.
+    /// Send an arbitrage through the executor.
     pub async fn send(
         &self,
         opp: &Opportunity,
@@ -82,6 +82,30 @@ impl Sender {
             hops: opp.hops.iter().map(to_sol_hop).collect(),
         }
         .abi_encode();
+        self.send_calldata(calldata, gas_limit).await
+    }
+
+    /// Send an Aave liquidation through the executor.
+    pub async fn send_liquidation(
+        &self,
+        c: &LiquidationCall,
+        min_profit: U256,
+        gas_limit: u64,
+    ) -> Result<TxHash> {
+        let calldata = ArbExecutor::liquidateCall {
+            collateral: c.collateral,
+            debt: c.debt,
+            user: c.user,
+            flashAmount: c.flash_amount,
+            minProfit: min_profit,
+            hops: c.hops.iter().map(to_sol_hop).collect(),
+        }
+        .abi_encode();
+        self.send_calldata(calldata, gas_limit).await
+    }
+
+    /// Sign once and broadcast the same raw tx to every endpoint; first success wins.
+    async fn send_calldata(&self, calldata: Vec<u8>, gas_limit: u64) -> Result<TxHash> {
         let base_fee = self.reader.get_gas_price().await?;
         let nonce = self.nonce.fetch_add(1, Ordering::SeqCst);
         let tx = TransactionRequest::default()

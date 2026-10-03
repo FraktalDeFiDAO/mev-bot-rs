@@ -69,6 +69,44 @@ pub fn two_pool_arbs(
     out
 }
 
+/// Best route to sell `amount_in` of `token_in` for `token_out`: the best single pool, or the best
+/// two-hop path through any `via` token. Returns (hops, estimated output).
+pub fn best_route(
+    store: &PoolStore,
+    token_in: Address,
+    token_out: Address,
+    amount_in: f64,
+    via: &[Address],
+) -> Option<(Vec<Hop>, f64)> {
+    let best_pool = |a: Address, b: Address, amt: f64| -> Option<(&Pool, f64)> {
+        store
+            .pools_for(a, b)
+            .into_iter()
+            .map(|p| (p, p.amount_out(a, amt)))
+            .max_by(|x, y| x.1.total_cmp(&y.1))
+            .filter(|(_, out)| *out > 0.0)
+    };
+    let mut best: Option<(Vec<Hop>, f64)> = None;
+    if let Some((p, out)) = best_pool(token_in, token_out, amount_in) {
+        best = Some((vec![hop(p, token_in, token_out)], out));
+    }
+    for &mid in via {
+        if mid == token_in || mid == token_out {
+            continue;
+        }
+        let Some((p1, mid_out)) = best_pool(token_in, mid, amount_in) else {
+            continue;
+        };
+        let Some((p2, out)) = best_pool(mid, token_out, mid_out) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(_, b)| out > *b) {
+            best = Some((vec![hop(p1, token_in, mid), hop(p2, mid, token_out)], out));
+        }
+    }
+    best
+}
+
 fn hop(pool: &Pool, token_in: Address, token_out: Address) -> Hop {
     Hop {
         kind: pool.info.kind.hop_kind(),
@@ -145,6 +183,17 @@ mod tests {
         // Buy B cheaply... the best route borrows A on the pool that gives more B (11) and sells B on 10.
         assert_eq!(best.hops.len(), 2);
         assert_eq!(best.hops[0].token_in, best.hops[1].token_out);
+    }
+
+    #[test]
+    fn best_route_prefers_deeper_pool() {
+        let mut s = PoolStore::default();
+        s.insert(v2(10, 1_000.0, 2_000.0));
+        s.insert(v2(11, 1_000_000.0, 2_000_000.0));
+        let (hops, out) = best_route(&s, A, B, 100.0, &[]).unwrap();
+        assert_eq!(hops.len(), 1);
+        assert_eq!(hops[0].pool, Address::with_last_byte(11));
+        assert!(out > 199.0 && out < 200.0);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use alloy::{
 };
 use anyhow::Result;
 use mev_bindings::{ArbExecutor, to_sol_hop};
-use mev_types::Opportunity;
+use mev_types::{LiquidationCall, Opportunity};
 
 #[derive(Debug, Clone)]
 pub enum SimOutcome {
@@ -36,6 +36,35 @@ impl Simulator {
         let hops: Vec<_> = opp.hops.iter().map(to_sol_hop).collect();
         let builder = exec
             .execute(opp.loan_token, opp.amount_in, min_profit, hops)
+            .from(self.owner);
+        match builder.call().await {
+            Ok(profit) => match builder.estimate_gas().await {
+                Ok(gas) => Ok(SimOutcome::Profitable { profit, gas }),
+                Err(e) => Ok(SimOutcome::Reverted(format!("estimate_gas: {e}"))),
+            },
+            Err(e) => Ok(SimOutcome::Reverted(short(&e.to_string()))),
+        }
+    }
+}
+
+impl Simulator {
+    /// `eth_call` the executor's `liquidate` as its owner, then estimate gas if it succeeds.
+    pub async fn simulate_liquidation(
+        &self,
+        c: &LiquidationCall,
+        min_profit: U256,
+    ) -> Result<SimOutcome> {
+        let exec = ArbExecutor::new(self.executor, &self.provider);
+        let hops: Vec<_> = c.hops.iter().map(to_sol_hop).collect();
+        let builder = exec
+            .liquidate(
+                c.collateral,
+                c.debt,
+                c.user,
+                c.flash_amount,
+                min_profit,
+                hops,
+            )
             .from(self.owner);
         match builder.call().await {
             Ok(profit) => match builder.estimate_gas().await {
