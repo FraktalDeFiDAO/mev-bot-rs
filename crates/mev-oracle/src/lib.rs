@@ -67,6 +67,21 @@ pub async fn resolve_aggregators(
     Ok(out)
 }
 
+/// Chainlink node operators submit reports through per-operator `AuthorizedForwarder` contracts:
+/// the tx goes to the forwarder, calling `forward(address target, bytes data)` with the aggregator
+/// as `target` (verified on Arbitrum ETH/USD, 2026-10-03: every update had a different `to`).
+pub const FORWARD_SELECTOR: [u8; 4] = [0x6f, 0xad, 0xcf, 0x72];
+
+/// The contract a transaction ultimately acts on: the forwarded target for forwarder calls,
+/// otherwise `to`.
+pub fn effective_target(to: Option<Address>, input: &[u8]) -> Option<Address> {
+    if input.len() >= 36 && input[..4] == FORWARD_SELECTOR {
+        // First ABI word after the selector: left-padded address.
+        return Some(Address::from_slice(&input[16..36]));
+    }
+    to
+}
+
 /// Matches transaction targets against watched feed contracts.
 #[derive(Debug, Default, Clone)]
 pub struct FeedWatcher<T: Clone> {
@@ -83,6 +98,15 @@ impl<T: Clone> FeedWatcher<T> {
         to.and_then(|a| self.by_contract.get(&a))
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    /// Tags interested in a transaction, looking through Chainlink forwarders.
+    pub fn matches_tx(&self, to: Option<Address>, input: &[u8]) -> &[T] {
+        let direct = self.matches(to);
+        if !direct.is_empty() {
+            return direct;
+        }
+        self.matches(effective_target(to, input))
     }
 
     pub fn len(&self) -> usize {
@@ -108,5 +132,46 @@ mod tests {
         assert!(w.matches(Some(Address::with_last_byte(2))).is_empty());
         assert!(w.matches(None).is_empty());
         assert_eq!(w.len(), 1);
+    }
+
+    fn forward_call(target: Address) -> Vec<u8> {
+        let mut v = FORWARD_SELECTOR.to_vec();
+        v.extend([0u8; 12]);
+        v.extend(target.as_slice());
+        v.extend([0u8; 64]); // bytes offset + length (contents irrelevant)
+        v
+    }
+
+    #[test]
+    fn forwarded_reports_match_their_aggregator() {
+        let agg = Address::with_last_byte(0xaa);
+        let forwarder = Address::with_last_byte(0xf0);
+        let mut w = FeedWatcher::default();
+        w.watch(agg, "eth-usd");
+        assert_eq!(
+            w.matches_tx(Some(forwarder), &forward_call(agg)),
+            &["eth-usd"]
+        );
+        assert!(
+            w.matches_tx(Some(forwarder), &forward_call(Address::with_last_byte(1)))
+                .is_empty()
+        );
+        // Direct transmit to the aggregator still matches.
+        assert_eq!(
+            w.matches_tx(Some(agg), &[0xb1, 0xdc, 0x65, 0xa4]),
+            &["eth-usd"]
+        );
+        // Unrelated selector / short input: no match.
+        assert!(w.matches_tx(Some(forwarder), &[0x6f, 0xad]).is_empty());
+    }
+
+    #[test]
+    fn effective_target_reads_first_forward_argument() {
+        let agg = Address::with_last_byte(0xaa);
+        assert_eq!(
+            effective_target(Some(Address::ZERO), &forward_call(agg)),
+            Some(agg)
+        );
+        assert_eq!(effective_target(Some(agg), &[1, 2, 3, 4]), Some(agg));
     }
 }

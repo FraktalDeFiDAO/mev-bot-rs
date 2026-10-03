@@ -2986,6 +2986,13 @@ version = "0.1.0"
 [[package]]
 name = "mev-lending-dolomite"
 version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "mev-lending",
+ "tokio",
+]
 
 [[package]]
 name = "mev-lending-fluid"
@@ -2994,6 +3001,13 @@ version = "0.1.0"
 [[package]]
 name = "mev-lending-gearbox"
 version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "mev-lending",
+ "tokio",
+]
 
 [[package]]
 name = "mev-lending-morpho"
@@ -3002,6 +3016,13 @@ version = "0.1.0"
 [[package]]
 name = "mev-lending-radiant"
 version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "mev-lending",
+ "tokio",
+]
 
 [[package]]
 name = "mev-lending-silo"
@@ -3010,6 +3031,13 @@ version = "0.1.0"
 [[package]]
 name = "mev-lending-spark"
 version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "mev-lending",
+ "tokio",
+]
 
 [[package]]
 name = "mev-liquidate"

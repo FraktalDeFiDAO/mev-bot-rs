@@ -58,7 +58,13 @@ struct Slot {
     at_risk: HashMap<AccountRef, Health>,
     backfilled: bool,
     burst_until: Option<Instant>,
+    /// After an index error, don't retry before this (exponential backoff; rate limits).
+    index_retry_at: Option<Instant>,
+    index_backoff: Duration,
 }
+
+const INDEX_BACKOFF_MIN: Duration = Duration::from_secs(15);
+const INDEX_BACKOFF_MAX: Duration = Duration::from_secs(600);
 
 pub struct Runner {
     cfg: RunnerConfig,
@@ -85,6 +91,8 @@ impl Runner {
                 at_risk: HashMap::new(),
                 backfilled: false,
                 burst_until: None,
+                index_retry_at: None,
+                index_backoff: INDEX_BACKOFF_MIN,
             });
         }
         info!(
@@ -128,10 +136,25 @@ impl Runner {
     async fn index_all(&mut self) -> bool {
         let mut all_done = true;
         for s in &mut self.slots {
+            if s.index_retry_at.is_some_and(|t| Instant::now() < t) {
+                all_done &= s.backfilled;
+                continue;
+            }
             match s.adapter.index().await {
-                Ok(done) => s.backfilled = done,
+                Ok(done) => {
+                    s.backfilled = done;
+                    s.index_retry_at = None;
+                    s.index_backoff = INDEX_BACKOFF_MIN;
+                }
                 Err(e) => {
-                    warn!(protocol = s.adapter.id(), error = %format!("{e:#}"), "index failed")
+                    warn!(
+                        protocol = s.adapter.id(),
+                        error = %format!("{e:#}"),
+                        retry_in_s = s.index_backoff.as_secs(),
+                        "index failed"
+                    );
+                    s.index_retry_at = Some(Instant::now() + s.index_backoff);
+                    s.index_backoff = (s.index_backoff * 2).min(INDEX_BACKOFF_MAX);
                 }
             }
             all_done &= s.backfilled;
@@ -207,7 +230,7 @@ impl Runner {
 
     /// Mark adapters watching the feed contract `to` for a burst of re-polls.
     fn on_feed_tx(&mut self, st: &SequencedTx, tx: &mpsc::UnboundedSender<RunnerEvent>) {
-        let hits: Vec<usize> = self.feeds.matches(st.to).to_vec();
+        let hits: Vec<usize> = self.feeds.matches_tx(st.to, &st.input).to_vec();
         for i in hits {
             self.slots[i].burst_until = Some(Instant::now() + BURST_FOR);
             debug!(protocol = self.slots[i].adapter.id(), tx = %st.hash, "price-feed update in sequencer feed");
@@ -374,6 +397,56 @@ mod tests {
         )
     }
 
+    /// Adapter whose index always fails (e.g. rate-limited RPC); counts calls.
+    struct Failing(Arc<Mutex<u32>>);
+
+    #[async_trait]
+    impl LiquidationAdapter for Failing {
+        fn id(&self) -> ProtocolId {
+            "failing"
+        }
+        fn status(&self) -> AdapterStatus {
+            AdapterStatus::Live
+        }
+        async fn index(&mut self) -> anyhow::Result<bool> {
+            *self.0.lock().unwrap() += 1;
+            anyhow::bail!("HTTP 429 Too Many Requests")
+        }
+        fn accounts(&self) -> Vec<AccountRef> {
+            vec![]
+        }
+        async fn health(&self, _a: &[AccountRef], _f: bool) -> anyhow::Result<Vec<Health>> {
+            Ok(vec![])
+        }
+        async fn plan(&self, _h: &Health, _e: Address) -> anyhow::Result<Option<Plan>> {
+            Ok(None)
+        }
+        fn price_feeds(&self) -> Vec<Address> {
+            vec![]
+        }
+        fn targets(&self) -> Vec<Address> {
+            vec![]
+        }
+        fn assets(&self) -> Vec<Address> {
+            vec![]
+        }
+    }
+
+    #[tokio::test]
+    async fn index_errors_back_off_instead_of_hammering() {
+        let calls = Arc::new(Mutex::new(0));
+        let mut r = Runner::new(cfg(), vec![Box::new(Failing(calls.clone()))]);
+        assert!(!r.index_all().await);
+        assert!(!r.index_all().await);
+        assert!(!r.index_all().await);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            1,
+            "retries must wait for the backoff window"
+        );
+        assert_eq!(r.slots[0].index_backoff, INDEX_BACKOFF_MIN * 2);
+    }
+
     #[test]
     fn non_live_adapters_are_skipped() {
         let (_, a) = fake(1.0, AdapterStatus::Inactive("paused"));
@@ -434,6 +507,19 @@ mod tests {
                 ..
             })
         ));
+
+        // Chainlink reports arrive via per-operator forwarders: forward(aggregator, data).
+        r.slots[0].burst_until = None;
+        let mut input = vec![0x6f, 0xad, 0xcf, 0x72];
+        input.extend([0u8; 12]);
+        input.extend(Address::with_last_byte(0xfe).as_slice());
+        let mut fwd = sequenced(Some(Address::with_last_byte(0x77)));
+        fwd.input = input.into();
+        r.on_feed_tx(&fwd, &tx);
+        assert!(
+            r.slots[0].burst_until.is_some(),
+            "forwarded report must trigger"
+        );
 
         let other = sequenced(Some(Address::with_last_byte(0x01)));
         r.slots[0].burst_until = None;

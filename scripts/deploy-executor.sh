@@ -36,3 +36,5 @@ fi
 echo "EXECUTOR_ADDRESS=$ADDR" >> .env
 echo "deployed: $ADDR   tx: $TX"
 echo "verify owner: $(cast call "$ADDR" 'owner()(address)' --rpc-url "$ARBITRUM_HTTP_URL")"
+# Allowlist the liquidation targets configured by default (Aave v3 pool).
+scripts/allow-targets.sh "$AAVE_POOL"

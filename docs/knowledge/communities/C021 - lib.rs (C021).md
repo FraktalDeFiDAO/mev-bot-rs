@@ -2,7 +2,7 @@
 graphify-generated: true
 graphify-community: "21"
 graphify-node-count: 24
-graphify-internal-edges: 52
+graphify-internal-edges: 53
 tags:
   - graphify/community
 ---
@@ -13,32 +13,32 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-config/src/lib.rs` — 14 nodes
-- `graph` — 10 nodes
+- `crates/mev-config/src/lib.rs` — 15 nodes
+- `graph` — 9 nodes
 
 ## Nodes (24)
 
-- **ChainConfig** — `crates/mev-config/src/lib.rs:L83`
-- **AaveConfig** — `crates/mev-config/src/lib.rs:L59`
-- **Secrets** — `crates/mev-config/src/lib.rs:L156`
-- **Address** — `graph`
+- **ChainConfig** — `crates/mev-config/src/lib.rs:L91`
 - **lib.rs** — `crates/mev-config/src/lib.rs:L1`
+- **Secrets** — `crates/mev-config/src/lib.rs:L167`
+- **Address** — `graph`
+- **AaveConfig** — `crates/mev-config/src/lib.rs:L80`
 - **DexConfig** — `crates/mev-config/src/lib.rs:L20`
 - **String** — `graph`
-- **.load()** — `crates/mev-config/src/lib.rs:L106`
-- **.pair_addresses()** — `crates/mev-config/src/lib.rs:L138`
-- **.token()** — `crates/mev-config/src/lib.rs:L130`
+- **.load()** — `crates/mev-config/src/lib.rs:L117`
+- **.pair_addresses()** — `crates/mev-config/src/lib.rs:L149`
+- **.token()** — `crates/mev-config/src/lib.rs:L141`
 - **AutoDiscovery** — `crates/mev-config/src/lib.rs:L43`
 - **Result** — `graph`
 - **Vec** — `graph`
-- **.fmt()** — `crates/mev-config/src/lib.rs:L165`
-- **.from_env()** — `crates/mev-config/src/lib.rs:L178`
-- **.symbol()** — `crates/mev-config/src/lib.rs:L145`
+- **LiquidationConfig** — `crates/mev-config/src/lib.rs:L59`
+- **.fmt()** — `crates/mev-config/src/lib.rs:L176`
+- **.from_env()** — `crates/mev-config/src/lib.rs:L189`
+- **.symbol()** — `crates/mev-config/src/lib.rs:L156`
 - **DexType** — `crates/mev-config/src/lib.rs:L11`
 - **Option** — `graph`
 - **RiskConfig** — `crates/mev-config/src/lib.rs:L34`
 - **Self** — `graph`
-- **Debug** — `graph`
 - **Formatter** — `graph`
 - **HashMap** — `graph`
 - **Path** — `graph`
@@ -46,5 +46,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Related communities
 
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 6 cross-community edges
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 5 cross-community edges
 - [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 1 cross-community edges

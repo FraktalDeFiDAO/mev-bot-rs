@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "3"
-graphify-node-count: 29
-graphify-internal-edges: 63
+graphify-node-count: 32
+graphify-internal-edges: 66
 tags:
   - graphify/community
 ---
@@ -14,9 +14,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Source files
 
 - `crates/mev-sequencer/src/lib.rs` — 19 nodes
-- `graph` — 10 nodes
+- `graph` — 11 nodes
+- `crates/mev-sequencer/src/bin/mev-feed-probe.rs` — 2 nodes
 
-## Nodes (29)
+## Nodes (32)
 
 - **lib.rs** — `crates/mev-sequencer/src/lib.rs:L1`
 - **SequencedTx** — `crates/mev-sequencer/src/lib.rs:L37`
@@ -39,6 +40,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **MessageWithMeta** — `crates/mev-sequencer/src/lib.rs:L69`
 - **.selector()** — `crates/mev-sequencer/src/lib.rs:L50`
 - **Header** — `crates/mev-sequencer/src/lib.rs:L82`
+- **main()** — `crates/mev-sequencer/src/bin/mev-feed-probe.rs:L11`
+- **mev-feed-probe.rs** — `crates/mev-sequencer/src/bin/mev-feed-probe.rs:L1`
 - **Option** — `graph`
 - **Result** — `graph`
 - **String** — `graph`
@@ -47,7 +50,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **B256** — `graph`
 - **Bytes** — `graph`
 - **Instant** — `graph`
+- **Result** — `graph`
 
 ## Related communities
 
-- No selected community has a direct edge to this one.
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 4 cross-community edges
