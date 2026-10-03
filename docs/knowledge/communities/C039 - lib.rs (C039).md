@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "39"
-graphify-node-count: 29
-graphify-internal-edges: 78
+graphify-node-count: 31
+graphify-internal-edges: 81
 tags:
   - graphify/community
 ---
@@ -14,9 +14,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Source files
 
 - `crates/mev-lending-compound-v3/src/lib.rs` — 19 nodes
-- `graph` — 10 nodes
+- `graph` — 11 nodes
+- `crates/mev-lending/src/lib.rs` — 1 node
 
-## Nodes (29)
+## Nodes (31)
 
 - **CompoundV3Adapter** — `crates/mev-lending-compound-v3/src/lib.rs:L97`
 - **.plan()** — `crates/mev-lending-compound-v3/src/lib.rs:L414`
@@ -24,6 +25,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.positions()** — `crates/mev-lending-compound-v3/src/lib.rs:L253`
 - **Address** — `graph`
 - **Comet** — `crates/mev-lending-compound-v3/src/lib.rs:L79`
+- **AdapterRpc** — `crates/mev-lending/src/lib.rs:L90`
 - **.storefront_state()** — `crates/mev-lending-compound-v3/src/lib.rs:L212`
 - **.new()** — `crates/mev-lending-compound-v3/src/lib.rs:L106`
 - **.prices()** — `crates/mev-lending-compound-v3/src/lib.rs:L170`
@@ -43,6 +45,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **DynProvider** — `graph`
 - **.id()** — `crates/mev-lending-compound-v3/src/lib.rs:L321`
 - **HashMap** — `graph`
+- **DynProvider** — `graph`
 - **PathBuf** — `graph`
 - **Position** — `graph`
 - **ProtocolId** — `graph`
@@ -50,10 +53,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 5 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 8 cross-community edges
+- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 5 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 2 cross-community edges
+- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C037 - PoolInfo|PoolInfo]] — 1 cross-community edges
-- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 1 cross-community edges

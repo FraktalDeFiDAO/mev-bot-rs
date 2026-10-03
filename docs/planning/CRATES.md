@@ -72,3 +72,26 @@ mev-bot/
   (e.g. `mev-sim` tests replay real historical txs).
 - Release profile: `lto = "fat"`, `codegen-units = 1`, `panic = "abort"` — latency matters.
 - Target both `x86_64` and `aarch64` (the free Oracle Cloud VPS is ARM).
+
+## Liquidation building blocks (added 2026-10-03)
+
+| Layer | Crate | Responsibility |
+|---|---|---|
+| L1 | `mev-sequencer` | Arbitrum sequencer feed client: Nitro L2 message decoding → alloy `TxEnvelope` stream (~0.9 s ahead of RPC receipts) |
+| L1 | `mev-oracle` | Resolve price sources (Chainlink proxies, Aave CAPO adapters, Morpho oracles) to aggregators; `FeedWatcher` matches feed txs incl. Chainlink forwarder `forward(aggregator, …)` |
+| L1 | `mev-lending` | **The `LiquidationAdapter` trait** + `Plan`/`ProtocolCall`/`Health`/`AccountRef` — every venue implements it |
+| L2 | `mev-lending-index` | Shared event-scan account index (newest-first backfill, forward scan, range shrinking, throttle, JSON cache + migration) |
+| L2 | `mev-lending-aave-v3` | Aave v3 adapter (Live) + pure Aave math |
+| L2 | `mev-lending-compound-v3` | Compound III adapter (Live): absorb + buyCollateral, storefront purchases; pure Comet math |
+| L2 | `mev-lending-morpho` | Morpho Blue adapter (Live); pure Morpho math |
+| L2 | `mev-lending-fluid` | Fluid vaults adapter (Live, resolver-driven); native-ETH collateral via executor wrapping |
+| L2 | `mev-lending-silo` | Silo v2 — Inactive (≈ $0.09 total debt on Arbitrum); verified addresses + plan |
+| L2 | `mev-lending-dolomite`, `mev-lending-gearbox` | AuditPending — verified facts + go-live checklists |
+| L2 | `mev-lending-radiant`, `mev-lending-spark` | Inactive (halted after exploits / no SparkLend on Arbitrum) |
+| L4 | `mev-liquidate` | Protocol-agnostic runner: indexing, sweeps, sequencer-triggered at-risk bursts, backoff, planning |
+| app | `mev-engine` | Runtime composing arbitrage + liquidation runner; one executor path for both |
+| app | `mev-analytics` | Library + `mev-analyze` (event rates, per-pair edges) and `mev-scan` (search + on-chain sim of every route) |
+
+Adding a venue = one new `mev-lending-<name>` crate implementing the trait + a config section +
+allowlisting its targets (`scripts/allow-targets.sh`). No contract change: the executor runs any
+owner-allowlisted protocol call with exact, reset approvals.

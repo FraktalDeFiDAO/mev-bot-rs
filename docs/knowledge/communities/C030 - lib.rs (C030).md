@@ -70,8 +70,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
+- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 10 cross-community edges
 - [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 8 cross-community edges
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 7 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 4 cross-community edges
-- [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 3 cross-community edges
