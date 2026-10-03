@@ -9,7 +9,8 @@ swapped without touching others.
 - Pure logic crates (`mev-types`, `mev-dex`, `mev-state`, `mev-search`, `mev-risk`) do no I/O.
 - Anything that talks to the network (`mev-rpc`, `mev-ingest`, `mev-discovery`, `mev-sim`, `mev-exec`)
   is its own crate with a small public API.
-- `mev-bot` only wires crates together; no strategy logic lives in the binary.
+- `mev-engine` composes the blocks into a runnable bot; `mev-bot` is only CLI, logging, config and secrets.
+- Every crate must build alone: `for c in crates/*; do cargo check -p $(basename $c); done`.
 
 ```
 mev-bot/
@@ -33,6 +34,7 @@ mev-bot/
     ├── mev-risk/             # L4
     ├── mev-exec/             # L5
     ├── mev-metrics/          # L5
+    ├── mev-engine/           # app layer: reusable bot runtime
     ├── mev-analytics/        # app (Phase 0 research CLI)
     └── mev-bot/              # app (main binary)
 ```
@@ -58,7 +60,8 @@ mev-bot/
 | L5 | `mev-exec` | Build packed calldata, nonce mgmt, gas/priority-fee bidding, multi-endpoint broadcast, receipt tracking | mev-rpc, mev-bindings, mev-risk |
 | L5 | `mev-metrics` | PnL ledger, opportunity/shadow-mode logs, Prometheus metrics | mev-types |
 | app | `mev-analytics` | Phase 0 CLI: historical liquidation & arb scans, competitor analysis, ranked opportunity table | mev-rpc, mev-dex, mev-lending |
-| app | `mev-bot` | Main binary: wires crates together per chain config; modes `shadow` / `live` | all |
+| app | `mev-engine` | Reusable runtime: bootstraps the blocks for one chain and runs event → search → sim → risk → send → receipt. Embeddable by any binary | all L0–L5 |
+| app | `mev-bot` | CLI binary: parses args, loads config + secrets, runs `mev-engine` in `shadow` / `live` mode | mev-config, mev-engine |
 
 ## Rules
 

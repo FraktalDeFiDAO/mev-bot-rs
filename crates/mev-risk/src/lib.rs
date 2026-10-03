@@ -97,9 +97,33 @@ impl RiskGuard {
     }
 }
 
+/// Largest flash loan to request, in raw token units: the USD cap, but never more than
+/// `vault_share` of what the lender holds (so the loan can't fail for lack of liquidity).
+pub fn loan_cap(
+    max_loan_usd: f64,
+    usd_per_raw: f64,
+    lender_balance_raw: f64,
+    vault_share: f64,
+) -> f64 {
+    if usd_per_raw <= 0.0 {
+        return 0.0;
+    }
+    (max_loan_usd / usd_per_raw)
+        .min(lender_balance_raw * vault_share)
+        .max(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loan_cap_takes_the_tighter_limit() {
+        // $50k cap at $2 per unit = 25k units; lender holds 10k -> 50% = 5k units.
+        assert_eq!(loan_cap(50_000.0, 2.0, 10_000.0, 0.5), 5_000.0);
+        assert_eq!(loan_cap(1_000.0, 2.0, 10_000.0, 0.5), 500.0);
+        assert_eq!(loan_cap(1_000.0, 0.0, 10_000.0, 0.5), 0.0);
+    }
 
     fn guard() -> RiskGuard {
         let limits = RiskLimits {

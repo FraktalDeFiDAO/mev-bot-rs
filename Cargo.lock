@@ -2834,25 +2834,11 @@ dependencies = [
 name = "mev-bot"
 version = "0.1.0"
 dependencies = [
- "alloy",
  "anyhow",
  "clap",
  "dotenvy",
- "futures",
- "mev-bindings",
  "mev-config",
- "mev-dex",
- "mev-discovery",
- "mev-exec",
- "mev-ingest",
- "mev-metrics",
- "mev-risk",
- "mev-rpc",
- "mev-search",
- "mev-sim",
- "mev-state",
- "mev-types",
- "serde_json",
+ "mev-engine",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2889,6 +2875,30 @@ dependencies = [
  "mev-rpc",
  "mev-state",
  "mev-types",
+ "tracing",
+]
+
+[[package]]
+name = "mev-engine"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "futures",
+ "mev-bindings",
+ "mev-config",
+ "mev-discovery",
+ "mev-exec",
+ "mev-ingest",
+ "mev-metrics",
+ "mev-risk",
+ "mev-rpc",
+ "mev-search",
+ "mev-sim",
+ "mev-state",
+ "mev-types",
+ "serde_json",
+ "tokio",
  "tracing",
 ]
 
