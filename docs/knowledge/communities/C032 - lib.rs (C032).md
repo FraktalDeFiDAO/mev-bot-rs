@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "32"
-graphify-node-count: 3
-graphify-internal-edges: 3
+graphify-node-count: 12
+graphify-internal-edges: 19
 tags:
   - graphify/community
 ---
@@ -13,14 +13,25 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-sim/src/lib.rs` — 3 nodes
+- `crates/mev-sim/src/lib.rs` — 6 nodes
+- `graph` — 6 nodes
 
-## Nodes (3)
+## Nodes (12)
 
-- **add()** — `crates/mev-sim/src/lib.rs:L1`
-- **it_works()** — `crates/mev-sim/src/lib.rs:L10`
+- **.simulate()** — `crates/mev-sim/src/lib.rs:L34`
+- **Simulator** — `crates/mev-sim/src/lib.rs:L17`
+- **.new()** — `crates/mev-sim/src/lib.rs:L24`
 - **lib.rs** — `crates/mev-sim/src/lib.rs:L1`
+- **SimOutcome** — `crates/mev-sim/src/lib.rs:L12`
+- **short()** — `crates/mev-sim/src/lib.rs:L50`
+- **Address** — `graph`
+- **DynProvider** — `graph`
+- **Result** — `graph`
+- **String** — `graph`
+- **U256** — `graph`
+- **Self** — `graph`
 
 ## Related communities
 
-- No selected community has a direct edge to this one.
+- [[docs/knowledge/communities/C020 - lib.rs (C020)|lib.rs (C020)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C035 - main.rs|main.rs]] — 1 cross-community edges

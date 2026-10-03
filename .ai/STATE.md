@@ -6,22 +6,26 @@ Durable facts and next actions only.
 ---
 
 **Updated:** 2026-10-03
-**Phase:** planning complete; no code yet.
-**Goal:** profitable L2 MEV bot (liquidations + long-tail arb, flash loans) on $200 capital.
+**Branch:** `feat/mvp-live-arb` — draft PR #5. User merges PRs.
+**Goal:** live arbitrage trades on Arbitrum today; repo as reusable building-block crates.
 
-## Done
+## Done and verified
 
-- Plans in `docs/planning/` (PLAN, CRATES, INFRASTRUCTURE, DECISIONS) — index: `docs/planning/README.md`.
-- Token-saving setup: `.ai/` policy + preamble, `.graphifyignore`, `scripts/graph.sh`,
-  Obsidian projection script, project read-deny rules in `.claude/settings.json`.
-- Git initialized; nothing committed yet.
+- `contracts/ArbExecutor.sol`: Balancer V2 flash loan → Uni/Sushi V2, Camelot V2, Uni/Sushi V3 hops.
+  7 fork tests pass on live Arbitrum state (incl. capturing a real arb, holding no funds).
+- 18 crates, clippy `-D warnings` clean, unit tests pass (dex 3, risk 4, search 2).
+- Shadow run vs live Arbitrum (PublicNode): 186 pools discovered, 55 pass $20k liquidity,
+  WS events stream. Balancer vault is thin post-2025 exploit: USDC loan cap ~$5k, ARB ~$4k.
+- Only 8 pool updates/min via PublicNode WS — expect more with Alchemy/dRPC.
 
 ## Next
 
-1. Scaffold the Cargo workspace per `docs/planning/CRATES.md` (17 crates, empty lib stubs).
-2. `scripts/graph.sh optimize` to build the first graph + `docs/knowledge/`.
-3. Phase 0: `mev-analytics` — liquidation + arb competitor scans on Arbitrum, Base, Optimism.
+1. User fills `.env` (ARBITRUM_HTTP_URL, ARBITRUM_WS_URL, PRIVATE_KEY of fresh hot wallet, PROFIT_RECEIVER).
+2. User runs `scripts/deploy-executor.sh` (re-runs fork tests, asks to confirm, writes EXECUTOR_ADDRESS).
+3. `cargo run --release -p mev-bot -- --mode shadow` (now with simulation), then `--mode live`.
+4. Majors are efficient → add long-tail pairs/pools; then liquidations (Phase 2 plan).
 
-## Open questions
+## Known limits
 
-- None blocking.
+- V3 modeled within current tick only (sim is source of truth). No triangular routes yet.
+- Profit in metrics uses search estimate, not on-chain transfer amount.

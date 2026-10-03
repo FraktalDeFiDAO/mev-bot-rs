@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "24"
-graphify-node-count: 3
-graphify-internal-edges: 3
+graphify-node-count: 9
+graphify-internal-edges: 9
 tags:
   - graphify/community
 ---
@@ -13,13 +13,20 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-ingest/src/lib.rs` — 3 nodes
+- `graph` — 7 nodes
+- `crates/mev-ingest/src/lib.rs` — 2 nodes
 
-## Nodes (3)
+## Nodes (9)
 
-- **add()** — `crates/mev-ingest/src/lib.rs:L1`
-- **it_works()** — `crates/mev-ingest/src/lib.rs:L10`
+- **pool_logs()** — `crates/mev-ingest/src/lib.rs:L15`
 - **lib.rs** — `crates/mev-ingest/src/lib.rs:L1`
+- **Stream** — `graph`
+- **Address** — `graph`
+- **DynProvider** — `graph`
+- **Item** — `graph`
+- **Log** — `graph`
+- **Result** — `graph`
+- **Vec** — `graph`
 
 ## Related communities
 

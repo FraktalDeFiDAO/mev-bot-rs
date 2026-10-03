@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "27"
-graphify-node-count: 3
-graphify-internal-edges: 3
+graphify-node-count: 18
+graphify-internal-edges: 26
 tags:
   - graphify/community
 ---
@@ -13,14 +13,30 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-metrics/src/lib.rs` — 3 nodes
+- `graph` — 10 nodes
+- `crates/mev-metrics/src/lib.rs` — 8 nodes
 
-## Nodes (3)
+## Nodes (18)
 
-- **add()** — `crates/mev-metrics/src/lib.rs:L1`
-- **it_works()** — `crates/mev-metrics/src/lib.rs:L10`
+- **Metrics** — `crates/mev-metrics/src/lib.rs:L28`
+- **open()** — `crates/mev-metrics/src/lib.rs:L72`
+- **.new()** — `crates/mev-metrics/src/lib.rs:L35`
+- **Counters** — `crates/mev-metrics/src/lib.rs:L16`
 - **lib.rs** — `crates/mev-metrics/src/lib.rs:L1`
+- **.update()** — `crates/mev-metrics/src/lib.rs:L63`
+- **Result** — `graph`
+- **.event()** — `crates/mev-metrics/src/lib.rs:L47`
+- **.snapshot()** — `crates/mev-metrics/src/lib.rs:L67`
+- **BufWriter** — `graph`
+- **File** — `graph`
+- **PathBuf** — `graph`
+- **FnOnce** — `graph`
+- **Mutex** — `graph`
+- **Path** — `graph`
+- **Self** — `graph`
+- **String** — `graph`
+- **Value** — `graph`
 
 ## Related communities
 
-- No selected community has a direct edge to this one.
+- [[docs/knowledge/communities/C035 - main.rs|main.rs]] — 2 cross-community edges

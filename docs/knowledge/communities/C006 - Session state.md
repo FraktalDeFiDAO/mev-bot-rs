@@ -18,9 +18,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Nodes (5)
 
 - **Session state** — `.ai/STATE.md:L1`
-- **Done** — `.ai/STATE.md:L12`
-- **Next** — `.ai/STATE.md:L19`
-- **Open questions** — `.ai/STATE.md:L25`
+- **Done and verified** — `.ai/STATE.md:L12`
+- **Known limits** — `.ai/STATE.md:L28`
+- **Next** — `.ai/STATE.md:L21`
 - **STATE.md** — `.ai/STATE.md:L1`
 
 ## Related communities
