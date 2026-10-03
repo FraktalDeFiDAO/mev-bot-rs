@@ -24,7 +24,8 @@ use mev_metrics::Metrics;
 use mev_risk::{RiskGuard, RiskLimits, loan_cap};
 use mev_rpc::{Backoff, Rpc};
 use mev_search::{SearchParams, two_pool_arbs};
-use mev_sim::{SimOutcome, Simulator};
+pub use mev_sim::SimOutcome;
+use mev_sim::Simulator;
 use mev_state::PoolStore;
 use mev_types::Opportunity;
 use serde_json::json;
@@ -56,6 +57,16 @@ pub struct Engine {
     metrics: Arc<Metrics>,
     last_sim: HashMap<(Address, Address), Instant>,
     mode: Mode,
+}
+
+/// Result of `Engine::scan_once` for one route.
+pub struct ScanResult {
+    pub loan: String,
+    pub loan_px: f64,
+    pub buy: String,
+    pub sell: String,
+    pub opp: Opportunity,
+    pub sim: Option<SimOutcome>,
 }
 
 enum TxDone {
@@ -204,6 +215,62 @@ impl Engine {
                 error!(error = %e, "resync after reconnect failed");
             }
         }
+    }
+
+    /// One-shot diagnostic: search every pool now (no profit floor), dedupe routes, and simulate
+    /// up to `max_sims` of the best ones through the executor. Never sends.
+    pub async fn scan_once(&self, max_sims: usize) -> Vec<ScanResult> {
+        let price = |t: Address| self.price(t);
+        let params = SearchParams {
+            max_loan: &self.max_loan,
+            usd_per_raw: &price,
+            min_est_profit_usd: 0.0,
+        };
+        let mut seen = std::collections::HashSet::new();
+        let mut opps: Vec<Opportunity> = Vec::new();
+        for addr in self.store.addresses() {
+            for o in two_pool_arbs(&self.store, addr, &params) {
+                if seen.insert((o.buy_pool, o.sell_pool)) {
+                    opps.push(o);
+                }
+            }
+        }
+        opps.sort_by(|a, b| b.est_profit_usd.total_cmp(&a.est_profit_usd));
+        let mut out = Vec::new();
+        for opp in opps.into_iter().take(max_sims) {
+            let sim = match &self.sim {
+                Some(sim) => Some(
+                    sim.simulate(&opp, U256::ZERO)
+                        .await
+                        .unwrap_or_else(|e| SimOutcome::Reverted(e.to_string())),
+                ),
+                None => None,
+            };
+            let loan_px = self.price(opp.loan_token).unwrap_or(0.0);
+            let buy = self
+                .store
+                .get(&opp.buy_pool)
+                .map(|p| p.info.dex.clone())
+                .unwrap_or_default();
+            let sell = self
+                .store
+                .get(&opp.sell_pool)
+                .map(|p| p.info.dex.clone())
+                .unwrap_or_default();
+            out.push(ScanResult {
+                loan: self.cfg.symbol(opp.loan_token),
+                loan_px,
+                buy,
+                sell,
+                opp,
+                sim,
+            });
+        }
+        out
+    }
+
+    pub fn pool_count(&self) -> usize {
+        self.store.len()
     }
 
     fn price(&self, token: Address) -> Option<f64> {

@@ -16,14 +16,13 @@ than reading any of this.
 
 ## Communities
 
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 40 nodes, 77 internal edges
+- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 46 nodes, 100 internal edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 44 nodes, 91 internal edges
 - [[docs/knowledge/communities/C000 - L2 MEV Bot — Profit-First Plan|L2 MEV Bot — Profit-First Plan]] — 26 nodes, 27 internal edges
 - [[docs/knowledge/communities/C020 - lib.rs (C020)|lib.rs (C020)]] — 26 nodes, 40 internal edges
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 24 nodes, 33 internal edges
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 24 nodes, 49 internal edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 24 nodes, 41 internal edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 23 nodes, 47 internal edges
-- [[docs/knowledge/communities/C022 - lib.rs (C022)|lib.rs (C022)]] — 21 nodes, 41 internal edges
 - [[docs/knowledge/communities/C027 - lib.rs (C027)|lib.rs (C027)]] — 19 nodes, 27 internal edges
 - [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 19 nodes, 33 internal edges
 - [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 16 nodes, 15 internal edges

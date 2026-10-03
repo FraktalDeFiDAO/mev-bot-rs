@@ -19,20 +19,20 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Nodes (23)
 
 - **ChainConfig** — `crates/mev-config/src/lib.rs:L58`
-- **Secrets** — `crates/mev-config/src/lib.rs:L127`
+- **Secrets** — `crates/mev-config/src/lib.rs:L130`
 - **Address** — `graph`
 - **lib.rs** — `crates/mev-config/src/lib.rs:L1`
 - **DexConfig** — `crates/mev-config/src/lib.rs:L20`
 - **.load()** — `crates/mev-config/src/lib.rs:L80`
 - **.pair_addresses()** — `crates/mev-config/src/lib.rs:L112`
 - **.token()** — `crates/mev-config/src/lib.rs:L104`
+- **AutoDiscovery** — `crates/mev-config/src/lib.rs:L43`
 - **Result** — `graph`
 - **String** — `graph`
-- **AutoDiscovery** — `crates/mev-config/src/lib.rs:L43`
 - **Vec** — `graph`
-- **.fmt()** — `crates/mev-config/src/lib.rs:L136`
-- **.from_env()** — `crates/mev-config/src/lib.rs:L149`
-- **.symbol()** — `crates/mev-config/src/lib.rs:L116`
+- **.fmt()** — `crates/mev-config/src/lib.rs:L139`
+- **.from_env()** — `crates/mev-config/src/lib.rs:L152`
+- **.symbol()** — `crates/mev-config/src/lib.rs:L119`
 - **DexType** — `crates/mev-config/src/lib.rs:L11`
 - **Option** — `graph`
 - **RiskConfig** — `crates/mev-config/src/lib.rs:L34`
@@ -45,4 +45,4 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Related communities
 
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 5 cross-community edges
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 1 cross-community edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 4 cross-community edges

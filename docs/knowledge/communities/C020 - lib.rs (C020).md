@@ -38,7 +38,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **DynProvider** — `graph`
 - **Result** — `graph`
 - **String** — `graph`
-- **to_sol_hop()** — `crates/mev-bindings/src/lib.rs:L93`
+- **to_sol_hop()** — `crates/mev-bindings/src/lib.rs:L94`
 - **U256** — `graph`
 - **.hop_kind()** — `crates/mev-types/src/lib.rs:L23`
 - **lib.rs** — `crates/mev-bindings/src/lib.rs:L1`
@@ -49,8 +49,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C022 - lib.rs (C022)|lib.rs (C022)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 4 cross-community edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C031 - lib.rs (C031)|lib.rs (C031)]] — 2 cross-community edges

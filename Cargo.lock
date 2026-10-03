@@ -2826,6 +2826,7 @@ dependencies = [
  "mev-config",
  "mev-dex",
  "mev-discovery",
+ "mev-engine",
  "mev-rpc",
  "mev-state",
  "mev-types",

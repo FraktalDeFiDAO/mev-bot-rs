@@ -17,3 +17,4 @@ mev-rpc = { workspace = true }
 mev-dex = { workspace = true }
 mev-state = { workspace = true }
 mev-discovery = { workspace = true }
+mev-engine = { workspace = true }

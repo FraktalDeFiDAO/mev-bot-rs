@@ -19,7 +19,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - **deploy-executor.sh** — `scripts/deploy-executor.sh:L1`
 - **deploy-executor.sh script** — `scripts/deploy-executor.sh:L1`
-- **PATH** — `scripts/deploy-executor.sh:L7`
+- **PATH** — `scripts/deploy-executor.sh:L9`
 
 ## Related communities
 
