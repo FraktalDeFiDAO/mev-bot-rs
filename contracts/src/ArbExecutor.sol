@@ -14,6 +14,16 @@ interface IBalancerVault {
     ) external;
 }
 
+interface IAavePool {
+    function liquidationCall(
+        address collateralAsset,
+        address debtAsset,
+        address user,
+        uint256 debtToCover,
+        bool receiveAToken
+    ) external;
+}
+
 interface IUniV2Pair {
     function getReserves() external view returns (uint112, uint112, uint32);
     function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external;
@@ -33,18 +43,24 @@ interface IUniV3Pool {
     ) external returns (int256 amount0, int256 amount1);
 }
 
-/// @notice Flash-loan atomic arbitrage executor.
+/// @notice Flash-loan executor for atomic arbitrage and Aave v3 liquidations.
 /// Safety model:
 ///  - Only `owner` can start a trade; flash-loan and swap callbacks are accepted only while that trade is
 ///    in progress and only from the exact vault/pool we called.
 ///  - Holds no funds between transactions: the loan is repaid and all profit is sent to `profitReceiver`
-///    inside the same transaction. No token approvals are ever granted.
-///  - Reverts unless the route returns at least `loan + fee + minProfit`.
+///    inside the same transaction.
+///  - The only approval ever granted is the exact debt amount to the immutable `aavePool`, reset to zero
+///    in the same transaction.
+///  - Reverts unless the strategy returns at least `loan + fee + minProfit`.
 contract ArbExecutor {
     /// Hop kinds
     uint8 internal constant UNI_V2 = 0; // Uniswap V2 / Sushi V2 style pair with fixed fee `feeBps`
     uint8 internal constant CAMELOT_V2 = 1; // Camelot V2 pair (directional fees, uses pair.getAmountOut)
     uint8 internal constant UNI_V3 = 2; // Uniswap V3 / Sushi V3 / PancakeSwap V3 / Algebra (Camelot V3) pools
+
+    /// Flash-loan modes (first field of the vault userData).
+    uint8 internal constant MODE_ARB = 0;
+    uint8 internal constant MODE_LIQUIDATE = 1;
 
     uint160 internal constant MIN_SQRT_RATIO_PLUS_ONE = 4295128740;
     uint160 internal constant MAX_SQRT_RATIO_MINUS_ONE = 1461446703485210103287273052203988822378723970341;
@@ -59,6 +75,7 @@ contract ArbExecutor {
     }
 
     IBalancerVault public immutable vault;
+    IAavePool public immutable aavePool;
     address public immutable owner;
     address public immutable profitReceiver;
 
@@ -74,8 +91,9 @@ contract ArbExecutor {
     error BadRoute();
     error TransferFailed();
 
-    constructor(address vault_, address profitReceiver_) {
+    constructor(address vault_, address aavePool_, address profitReceiver_) {
         vault = IBalancerVault(vault_);
+        aavePool = IAavePool(aavePool_);
         owner = msg.sender;
         profitReceiver = profitReceiver_;
     }
@@ -95,7 +113,39 @@ contract ArbExecutor {
         amounts[0] = amount;
 
         flashActive = true;
-        vault.flashLoan(address(this), tokens, amounts, abi.encode(minProfit, hops));
+        vault.flashLoan(address(this), tokens, amounts, abi.encode(MODE_ARB, abi.encode(minProfit, hops)));
+        flashActive = false;
+        profit = lastProfit;
+    }
+
+    /// @notice Liquidate `user` on Aave v3: flash-borrow `flashAmount` of `debt`, repay as much of the
+    /// user's debt as Aave allows, swap the seized `collateral` back to `debt` via `hops`, repay the loan,
+    /// and send the profit (in `debt`) to `profitReceiver`. `hops` must be empty when collateral == debt.
+    /// @return profit amount of `debt` sent to `profitReceiver`
+    function liquidate(
+        address collateral,
+        address debt,
+        address user,
+        uint256 flashAmount,
+        uint256 minProfit,
+        Hop[] calldata hops
+    ) external returns (uint256 profit) {
+        if (msg.sender != owner) revert NotOwner();
+        if (collateral == debt) {
+            if (hops.length != 0) revert BadRoute();
+        } else if (hops.length == 0 || hops[0].tokenIn != collateral || hops[hops.length - 1].tokenOut != debt) {
+            revert BadRoute();
+        }
+
+        address[] memory tokens = new address[](1);
+        tokens[0] = debt;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = flashAmount;
+
+        flashActive = true;
+        vault.flashLoan(
+            address(this), tokens, amounts, abi.encode(MODE_LIQUIDATE, abi.encode(collateral, user, minProfit, hops))
+        );
         flashActive = false;
         profit = lastProfit;
     }
@@ -109,15 +159,13 @@ contract ArbExecutor {
         if (msg.sender != address(vault) || !flashActive) revert Unauthorized();
         flashActive = false; // single use per execute()
 
-        (uint256 minProfit, Hop[] memory hops) = abi.decode(userData, (uint256, Hop[]));
+        (uint8 mode, bytes memory inner) = abi.decode(userData, (uint8, bytes));
         address token = tokens[0];
         uint256 owed = amounts[0] + feeAmounts[0];
-
-        uint256 amountIn = amounts[0];
-        for (uint256 i; i < hops.length; ++i) {
-            if (i > 0 && hops[i].tokenIn != hops[i - 1].tokenOut) revert BadRoute();
-            amountIn = _swap(hops[i], amountIn);
-        }
+        uint256 minProfit;
+        if (mode == MODE_ARB) minProfit = _arbitrage(inner, amounts[0]);
+        else if (mode == MODE_LIQUIDATE) minProfit = _liquidateAave(inner, token, amounts[0]);
+        else revert BadRoute();
 
         uint256 balance = IERC20(token).balanceOf(address(this));
         if (balance < owed + minProfit) revert NotProfitable(balance, owed + minProfit);
@@ -126,6 +174,30 @@ contract ArbExecutor {
         uint256 profit = balance - owed;
         if (profit > 0) _transfer(token, profitReceiver, profit);
         lastProfit = profit;
+    }
+
+    function _arbitrage(bytes memory inner, uint256 amount) internal returns (uint256 minProfit) {
+        Hop[] memory hops;
+        (minProfit, hops) = abi.decode(inner, (uint256, Hop[]));
+        _runHops(hops, amount);
+    }
+
+    function _liquidateAave(bytes memory inner, address debt, uint256 amount) internal returns (uint256 minProfit) {
+        (address collateral, address user, uint256 minProfit_, Hop[] memory hops) =
+            abi.decode(inner, (address, address, uint256, Hop[]));
+        // Exact approval for the liquidation, reset right after: nothing lingers.
+        _approve(debt, address(aavePool), amount);
+        aavePool.liquidationCall(collateral, debt, user, type(uint256).max, false);
+        _approve(debt, address(aavePool), 0);
+        if (collateral != debt) _runHops(hops, IERC20(collateral).balanceOf(address(this)));
+        return minProfit_;
+    }
+
+    function _runHops(Hop[] memory hops, uint256 amountIn) internal {
+        for (uint256 i; i < hops.length; ++i) {
+            if (i > 0 && hops[i].tokenIn != hops[i - 1].tokenOut) revert BadRoute();
+            amountIn = _swap(hops[i], amountIn);
+        }
     }
 
     /// @dev Uniswap V3 / Sushi V3.
@@ -188,6 +260,11 @@ contract ArbExecutor {
             (uint256 out0, uint256 out1) = hop.zeroForOne ? (uint256(0), amountOut) : (amountOut, uint256(0));
             IUniV2Pair(hop.pool).swap(out0, out1, address(this), "");
         }
+    }
+
+    function _approve(address token, address spender, uint256 amount) internal {
+        (bool ok, bytes memory data) = token.call(abi.encodeWithSelector(0x095ea7b3, spender, amount));
+        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
     }
 
     function _transfer(address token, address to, uint256 amount) internal {

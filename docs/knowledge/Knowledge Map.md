@@ -16,27 +16,25 @@ than reading any of this.
 
 ## Communities
 
-- [[docs/knowledge/communities/C034 - Engine|Engine]] — 39 nodes, 72 internal edges
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 33 nodes, 73 internal edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 44 nodes, 91 internal edges
+- [[docs/knowledge/communities/C034 - Engine|Engine]] — 34 nodes, 62 internal edges
+- [[docs/knowledge/communities/C022 - Pool|Pool]] — 33 nodes, 60 internal edges
+- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 32 nodes, 61 internal edges
 - [[docs/knowledge/communities/C000 - L2 MEV Bot — Profit-First Plan|L2 MEV Bot — Profit-First Plan]] — 26 nodes, 27 internal edges
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 24 nodes, 33 internal edges
 - [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 24 nodes, 49 internal edges
-- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 23 nodes, 47 internal edges
-- [[docs/knowledge/communities/C022 - Pool|Pool]] — 22 nodes, 42 internal edges
-- [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 20 nodes, 34 internal edges
 - [[docs/knowledge/communities/C027 - lib.rs (C027)|lib.rs (C027)]] — 19 nodes, 27 internal edges
+- [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 19 nodes, 33 internal edges
 - [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 16 nodes, 15 internal edges
-- [[docs/knowledge/communities/C020 - lib.rs (C020)|lib.rs (C020)]] — 14 nodes, 19 internal edges
 - [[docs/knowledge/communities/C031 - lib.rs (C031)|lib.rs (C031)]] — 14 nodes, 25 internal edges
 - [[docs/knowledge/communities/C005 - Stage 3- own node near the sequencer — trigger- 30-day profit ≥ 3× node cost AND|Stage 3: own node near the sequencer — trigger: 30-day profit ≥ 3× node cost AND shadow logs show latency is losing us trades]] — 12 nodes, 11 internal edges
-- [[docs/knowledge/communities/C037 - Backoff|Backoff]] — 11 nodes, 14 internal edges
 - [[docs/knowledge/communities/C010 - Contributing - Git workflow|Contributing / Git workflow]] — 10 nodes, 9 internal edges
 - [[docs/knowledge/communities/C002 - Context policy|Context policy]] — 9 nodes, 8 internal edges
 - [[docs/knowledge/communities/C024 - lib.rs (C024)|lib.rs (C024)]] — 9 nodes, 9 internal edges
 - [[docs/knowledge/communities/C004 - graphify-obsidian.mjs|graphify-obsidian.mjs]] — 8 nodes, 13 internal edges
 - [[docs/knowledge/communities/C032 - lib.rs (C032)|lib.rs (C032)]] — 7 nodes, 11 internal edges
+- [[docs/knowledge/communities/C006 - Session state|Session state]] — 7 nodes, 6 internal edges
 - [[docs/knowledge/communities/C035 - main.rs|main.rs]] — 6 nodes, 8 internal edges
-- [[docs/knowledge/communities/C006 - Session state|Session state]] — 6 nodes, 5 internal edges
 - [[docs/knowledge/communities/C011 - pull_request_template.md|pull_request_template.md]] — 5 nodes, 4 internal edges
 - [[docs/knowledge/communities/C007 - mev-bot|mev-bot]] — 5 nodes, 4 internal edges
 - [[docs/knowledge/communities/C001 - deploy-executor.sh|deploy-executor.sh]] — 3 nodes, 2 internal edges

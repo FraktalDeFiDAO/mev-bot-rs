@@ -17,6 +17,25 @@ interface IV3Factory {
     function getPool(address, address, uint24) external view returns (address);
 }
 
+interface IAavePoolFull {
+    function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode) external;
+    function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)
+        external;
+    function getUserAccountData(address user)
+        external
+        view
+        returns (uint256, uint256, uint256, uint256, uint256, uint256 healthFactor);
+}
+
+interface IAaveOracle {
+    function getAssetPrice(address asset) external view returns (uint256);
+}
+
+interface IERC20Approve {
+    function approve(address, uint256) external returns (bool);
+    function allowance(address, address) external view returns (uint256);
+}
+
 interface IAlgebraFactory {
     function poolByPair(address, address) external view returns (address);
 }
@@ -35,6 +54,8 @@ contract ArbExecutorForkTest is Test {
     address constant SUSHI_V2_FACTORY = 0xc35DADB65012eC5796536bD9864eD8773aBc74C4;
     address constant PANCAKE_V3_FACTORY = 0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865;
     address constant CAMELOT_V3_FACTORY = 0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B;
+    address constant AAVE_POOL = 0x794a61358D6845594F94dc1DB02A252b5b4814aD;
+    address constant AAVE_ORACLE = 0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7;
 
     address owner = makeAddr("owner");
     address receiver = makeAddr("receiver");
@@ -47,7 +68,7 @@ contract ArbExecutorForkTest is Test {
     function setUp() public {
         vm.createSelectFork(vm.envOr("ARBITRUM_HTTP_URL", string("https://arb1.arbitrum.io/rpc")));
         vm.prank(owner);
-        exec = new ArbExecutor(VAULT, receiver);
+        exec = new ArbExecutor(VAULT, AAVE_POOL, receiver);
         v3Pool = IV3Factory(UNI_V3_FACTORY).getPool(WETH, USDC, 500);
         sushiPair = IV2Factory(SUSHI_V2_FACTORY).getPair(WETH, USDC);
         assertTrue(v3Pool != address(0) && sushiPair != address(0), "pools not found");
@@ -169,5 +190,86 @@ contract ArbExecutorForkTest is Test {
         vm.expectRevert(ArbExecutor.Unauthorized.selector);
         exec.algebraSwapCallback(1, 0, "");
         vm.stopPrank();
+    }
+
+    // ---------------------------------------------------------------- Aave v3 liquidations
+
+    address borrower = makeAddr("borrower");
+
+    /// Open a real Aave position (1 WETH collateral, USDC debt near the limit), then mock the Aave
+    /// oracle WETH price down `dropBps` so the position becomes liquidatable.
+    function _liquidatablePosition(uint256 dropBps) internal returns (uint256 debtUsdc) {
+        deal(WETH, borrower, 1 ether);
+        vm.startPrank(borrower);
+        IERC20Approve(WETH).approve(AAVE_POOL, 1 ether);
+        IAavePoolFull(AAVE_POOL).supply(WETH, 1 ether, borrower, 0);
+        (,, uint256 availableBase,,,) = IAavePoolFull(AAVE_POOL).getUserAccountData(borrower);
+        debtUsdc = (availableBase * 99) / 100 / 100; // base is 8 decimals USD; USDC has 6
+        IAavePoolFull(AAVE_POOL).borrow(USDC, debtUsdc, 2, 0, borrower);
+        vm.stopPrank();
+
+        uint256 px = IAaveOracle(AAVE_ORACLE).getAssetPrice(WETH);
+        vm.mockCall(
+            AAVE_ORACLE,
+            abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, WETH),
+            abi.encode(px * (10_000 - dropBps) / 10_000)
+        );
+        (,,,,, uint256 hf) = IAavePoolFull(AAVE_POOL).getUserAccountData(borrower);
+        assertLt(hf, 1e18, "position should be liquidatable");
+    }
+
+    function _wethToUsdcHops() internal view returns (ArbExecutor.Hop[] memory hops) {
+        hops = new ArbExecutor.Hop[](1);
+        hops[0] = ArbExecutor.Hop(2, v3Pool, WETH, USDC, WETH < USDC, 0);
+    }
+
+    function test_liquidatesAavePositionForProfit() public {
+        uint256 debt = _liquidatablePosition(1_500);
+        ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        uint256 before = IERC20Full(USDC).balanceOf(receiver);
+
+        // Flash a 0.1% buffer over the debt: Aave rounds variable debt up, and the excess is returned.
+        vm.prank(owner);
+        uint256 profit = exec.liquidate(WETH, USDC, borrower, debt * 1001 / 1000, 1e6, hops);
+
+        assertGt(profit, 1e6, "expected >1 USDC profit");
+        assertEq(IERC20Full(USDC).balanceOf(receiver) - before, profit, "profit to receiver");
+        assertEq(IERC20Full(USDC).balanceOf(address(exec)), 0, "executor holds no USDC");
+        assertEq(IERC20Full(WETH).balanceOf(address(exec)), 0, "executor holds no WETH");
+        assertEq(IERC20Approve(USDC).allowance(address(exec), AAVE_POOL), 0, "approval reset");
+        emit log_named_decimal_uint("liquidation profit USDC", profit, 6);
+    }
+
+    function test_liquidateHealthyPositionReverts() public {
+        deal(WETH, borrower, 1 ether);
+        vm.startPrank(borrower);
+        IERC20Approve(WETH).approve(AAVE_POOL, 1 ether);
+        IAavePoolFull(AAVE_POOL).supply(WETH, 1 ether, borrower, 0);
+        IAavePoolFull(AAVE_POOL).borrow(USDC, 100e6, 2, 0, borrower);
+        vm.stopPrank();
+        ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        vm.prank(owner);
+        vm.expectRevert(); // Aave: health factor not below threshold
+        exec.liquidate(WETH, USDC, borrower, 100e6, 0, hops);
+    }
+
+    function test_liquidateOnlyOwnerAndRouteChecks() public {
+        ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        vm.prank(attacker);
+        vm.expectRevert(ArbExecutor.NotOwner.selector);
+        exec.liquidate(WETH, USDC, borrower, 1e6, 0, hops);
+
+        ArbExecutor.Hop[] memory empty = new ArbExecutor.Hop[](0);
+        vm.prank(owner);
+        vm.expectRevert(ArbExecutor.BadRoute.selector);
+        exec.liquidate(WETH, USDC, borrower, 1e6, 0, empty); // different tokens need a swap route
+    }
+
+    function test_liquidationMinProfitEnforced() public {
+        uint256 debt = _liquidatablePosition(1_500);
+        ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        vm.prank(owner);
+        vm.expectRevert(); // NotProfitable
+        exec.liquidate(WETH, USDC, borrower, debt * 1001 / 1000, 1_000_000e6, hops);
     }
 }
