@@ -1,0 +1,12 @@
+[package]
+name = "mev-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+alloy = { workspace = true }
+mev-types = { workspace = true }
+mev-state = { workspace = true }
+mev-dex = { workspace = true }

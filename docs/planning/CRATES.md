@@ -1,7 +1,15 @@
 # Cargo Workspace Layout
 
-Every component of the bot is its own crate. Crates depend only "downward" in the layers below,
-so each one can be tested in isolation and swapped without touching others.
+Every component of the bot is its own crate, so the repo works as a set of **building blocks**:
+any crate can be reused by another bot, tool, or strategy without pulling in the rest.
+Crates depend only "downward" in the layers below, so each one can be tested in isolation and
+swapped without touching others.
+
+**Building-block rules**
+- Pure logic crates (`mev-types`, `mev-dex`, `mev-state`, `mev-search`, `mev-risk`) do no I/O.
+- Anything that talks to the network (`mev-rpc`, `mev-ingest`, `mev-discovery`, `mev-sim`, `mev-exec`)
+  is its own crate with a small public API.
+- `mev-bot` only wires crates together; no strategy logic lives in the binary.
 
 ```
 mev-bot/
@@ -15,6 +23,7 @@ mev-bot/
     ├── mev-rpc/              # L1
     ├── mev-ingest/           # L1
     ├── mev-dex/              # L2
+    ├── mev-discovery/        # L2
     ├── mev-lending/          # L2
     ├── mev-oracle/           # L2
     ├── mev-state/            # L3
@@ -37,6 +46,7 @@ mev-bot/
 | L0 | `mev-bindings` | Rust bindings for our executor + external contracts (pools, lenders, oracles) via `sol!` | alloy-sol-types |
 | L1 | `mev-rpc` | Provider pool across free/paid endpoints: rotation, failover, per-provider quota & rate-limit tracking, latency scoring | alloy-provider |
 | L1 | `mev-ingest` | Arbitrum sequencer feed client, OP Stack flashblocks, WS log subscriptions → normalized event stream | tokio, tokio-tungstenite |
+| L2 | `mev-discovery` | Find pools via configured DEX factories, load pool state, token decimals, vault balances (Multicall3) | mev-rpc, mev-dex, mev-state |
 | L2 | `mev-dex` | Pool math per DEX type (Uni v2/v3/v4, Aerodrome/Velodrome, Curve, Balancer, Camelot): quote, tick traversal, swap encoding | mev-types |
 | L2 | `mev-lending` | Protocol adapters (Aave forks, Compound v3, Morpho, Euler v2, Silo...): health factor, close factor, bonus, liquidation call encoding | mev-types |
 | L2 | `mev-oracle` | Chainlink/Redstone/Pyth price tracking; detect pending oracle updates in the feed | mev-types, mev-ingest |
