@@ -54,7 +54,28 @@ pub struct AutoDiscovery {
     pub max_tokens: usize,
 }
 
-/// Aave v3 liquidation monitor.
+/// Settings shared by all liquidation adapters.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LiquidationConfig {
+    pub enabled: bool,
+    /// RPC for account-discovery log scans. Must return complete wide-range getLogs results —
+    /// several public RPCs silently truncate them (verified 2026-10-03: only arb1.arbitrum.io/rpc
+    /// was complete).
+    pub scan_rpc: String,
+    /// RPC for full health sweeps (eth_call only, so any public RPC works).
+    pub sweep_rpc: String,
+    /// Accounts below this health factor are polled on price-feed updates.
+    pub at_risk_hf: f64,
+    /// Ignore positions with less debt (or collateral) than this: the bonus wouldn't cover gas.
+    pub min_debt_usd: f64,
+    pub sweep_secs: u64,
+    /// Fallback at-risk poll period; sequencer price-feed triggers handle the fast path.
+    pub fallback_poll_secs: u64,
+    /// Swap routes for seized collateral may go through these tokens.
+    pub route_via: Vec<String>,
+}
+
+/// Aave v3 adapter.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AaveConfig {
     pub enabled: bool,
@@ -64,19 +85,6 @@ pub struct AaveConfig {
     /// First block to index Borrow events from (pool deployment).
     pub from_block: u64,
     pub scan_step: u64,
-    /// RPC for Borrow log scans. Must return complete wide-range getLogs results — several public
-    /// RPCs silently truncate them (verified 2026-10-03: only arb1.arbitrum.io/rpc was complete).
-    pub scan_rpc: String,
-    /// RPC for full health sweeps (eth_call only, so any public RPC works).
-    pub sweep_rpc: String,
-    /// Borrowers below this health factor are polled every `poll_secs`.
-    pub at_risk_hf: f64,
-    /// Ignore positions with less debt than this (bonus wouldn't cover gas).
-    pub min_debt_usd: f64,
-    pub poll_secs: u64,
-    pub sweep_secs: u64,
-    /// Swap routes for seized collateral may go through these tokens.
-    pub route_via: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -99,6 +107,9 @@ pub struct ChainConfig {
     pub dexes: Vec<DexConfig>,
     pub risk: RiskConfig,
     pub auto_discovery: Option<AutoDiscovery>,
+    /// Arbitrum sequencer feed (free, unmetered real-time tx stream).
+    pub sequencer_feed: Option<String>,
+    pub liquidation: Option<LiquidationConfig>,
     pub aave: Option<AaveConfig>,
 }
 

@@ -18,9 +18,10 @@ use alloy::{
 use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use mev_bindings::ArbExecutor;
-use mev_config::{AaveConfig, ChainConfig, Secrets};
+use mev_config::{ChainConfig, Secrets};
 use mev_exec::{Landed, Sender};
-use mev_liquidate::{AaveMonitor, Liquidatable, debt_of, position, reserves_info};
+use mev_lending::{AdapterRpc, LiquidationAdapter, Plan};
+use mev_liquidate::{Runner, RunnerConfig, RunnerEvent};
 use mev_metrics::Metrics;
 use mev_risk::{RiskGuard, RiskLimits, loan_cap};
 use mev_rpc::{Backoff, Rpc};
@@ -28,7 +29,7 @@ use mev_search::{SearchParams, best_route, two_pool_arbs};
 pub use mev_sim::SimOutcome;
 use mev_sim::Simulator;
 use mev_state::PoolStore;
-use mev_types::{LiquidationCall, Opportunity};
+use mev_types::Opportunity;
 use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -61,14 +62,10 @@ pub struct Engine {
     liq: Option<LiqCtx>,
 }
 
-/// Aave liquidation state owned by the engine (the monitor runs as its own task).
+/// Liquidation side of the engine (the runner and its adapters run as their own task).
 struct LiqCtx {
-    cfg: AaveConfig,
-    reserves: Vec<Address>,
-    decimals: HashMap<Address, u8>,
     via: Vec<Address>,
-    rx: Option<mpsc::UnboundedReceiver<Liquidatable>>,
-    last: HashMap<Address, Instant>,
+    rx: Option<mpsc::UnboundedReceiver<RunnerEvent>>,
 }
 
 /// Result of `Engine::scan_once` for one route.
@@ -110,30 +107,15 @@ impl Engine {
         let data_dir = data_dir.join(&cfg.name);
         let mut pairs = mev_discovery::candidate_pairs(&rpc, &cfg).await?;
 
-        // Aave: reserve assets need swap routes so seized collateral can be sold for the debt asset.
-        let mut aave = None;
-        if let Some(acfg) = cfg.aave.clone().filter(|a| a.enabled) {
-            let monitor = AaveMonitor::new(
-                acfg.clone(),
-                rpc.http.clone(),
-                data_dir.join("aave_borrowers.json"),
-            )?;
-            let reserves = monitor
-                .reserves_list()
-                .await
-                .context("reading Aave reserves")?;
-            let via: Vec<Address> = acfg
-                .route_via
-                .iter()
-                .map(|s| cfg.token(s))
-                .collect::<Result<_>>()?;
-            for r in &reserves {
-                for v in &via {
-                    pairs.push((*r, *v));
+        // Liquidation adapters; their assets need swap routes (seized collateral -> debt asset).
+        let liq_setup =
+            build_liquidation(&cfg, &rpc, &data_dir, secrets.executor.unwrap_or_default()).await?;
+        if let Some((runner, via)) = &liq_setup {
+            for a in runner.assets() {
+                for v in via {
+                    pairs.push((a, *v));
                 }
             }
-            info!(reserves = reserves.len(), "aave liquidations enabled");
-            aave = Some((acfg, monitor, reserves, via));
         }
 
         let infos = mev_discovery::discover_pools(&rpc, &cfg, &pairs).await?;
@@ -142,7 +124,7 @@ impl Engine {
             .iter()
             .flat_map(|p| [p.info.token0, p.info.token1])
             .chain(cfg.tokens.values().copied())
-            .chain(aave.iter().flat_map(|(_, _, r, _)| r.iter().copied()))
+            .chain(liq_setup.iter().flat_map(|(r, _)| r.assets()))
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
             .collect();
@@ -191,18 +173,23 @@ impl Engine {
         let risk = RiskGuard::new(limits, data_dir.join("STOP"));
         info!(pools = store.len(), kill_switch = %data_dir.join("STOP").display(), "ready");
 
-        let liq = aave.map(|(acfg, monitor, reserves, via)| {
-            let (tx, rx) = mpsc::unbounded_channel();
-            tokio::spawn(monitor.run(tx));
-            LiqCtx {
-                cfg: acfg,
-                reserves,
-                decimals: decimals.clone(),
-                via,
-                rx: Some(rx),
-                last: HashMap::new(),
+        let liq = match liq_setup {
+            Some((runner, via)) => {
+                if let Some(exec) = secrets.executor {
+                    check_allowlist(&rpc, exec, &runner.targets()).await;
+                }
+                // Sequencer feed: real-time txs drive price-feed-triggered re-checks.
+                let feed = cfg.sequencer_feed.clone().map(|url| {
+                    let (tx, rx) = mpsc::unbounded_channel();
+                    tokio::spawn(mev_sequencer::run(url, tx));
+                    rx
+                });
+                let (tx, rx) = mpsc::unbounded_channel();
+                tokio::spawn(runner.run(feed, tx));
+                Some(LiqCtx { via, rx: Some(rx) })
             }
-        });
+            None => None,
+        };
 
         Ok(Self {
             cfg,
@@ -257,7 +244,7 @@ impl Engine {
                         }
                     }
                     Some(done) = rx_done.recv() => self.on_tx_done(done),
-                    Some(l) = recv_opt(&mut liq_rx) => self.on_liquidatable(l, &tx_done).await,
+                    Some(ev) = recv_opt(&mut liq_rx) => self.on_runner_event(ev, &tx_done).await,
                     _ = resync.tick() => {
                         if let Err(e) = mev_discovery::refresh(&self.rpc, &mut self.store).await {
                             warn!(error = %e, "resync failed");
@@ -471,76 +458,54 @@ impl Engine {
         });
     }
 
-    /// Plan, simulate, and (in live mode) send an Aave liquidation for a user the monitor flagged.
-    async fn on_liquidatable(&mut self, l: Liquidatable, tx_done: &mpsc::UnboundedSender<TxDone>) {
-        let Some(liq) = self.liq.as_mut() else { return };
-        if liq
-            .last
-            .get(&l.user)
-            .is_some_and(|t| t.elapsed() < Duration::from_secs(3))
-        {
-            return;
+    async fn on_runner_event(&mut self, ev: RunnerEvent, tx_done: &mpsc::UnboundedSender<TxDone>) {
+        match ev {
+            RunnerEvent::Plan(p) => self.on_plan(p, tx_done).await,
+            RunnerEvent::NoPlan(h) => self.metrics.event(
+                "liq_no_plan",
+                json!({ "account": h.account.to_string(), "hf": h.health_factor, "debt_usd": h.debt_usd }),
+            ),
+            RunnerEvent::FeedTrigger { adapter, lead } => {
+                self.metrics.update(|c| c.feed_triggers += 1);
+                tracing::debug!(adapter, lead_ms = lead.as_millis() as u64, "price-feed trigger");
+            }
         }
-        liq.last.insert(l.user, Instant::now());
-        let (acfg, assets, decimals, via) = (
-            liq.cfg.clone(),
-            liq.reserves.clone(),
-            liq.decimals.clone(),
-            liq.via.clone(),
-        );
-        self.metrics.update(|c| c.liq_flagged += 1);
+    }
 
-        let reserves = match reserves_info(&self.rpc.http, &acfg, &assets, &decimals).await {
-            Ok(r) => r,
-            Err(e) => return warn!(error = %format!("{e:#}"), "aave reserves read failed"),
-        };
-        let pos = match position(&self.rpc.http, &acfg, l.user, l.health_factor, &assets).await {
-            Ok(p) => p,
-            Err(e) => return warn!(error = %format!("{e:#}"), "aave position read failed"),
-        };
-        let base = json!({ "user": l.user, "hf": l.health_factor, "debt_usd": l.debt_usd });
-        let Some(plan) = mev_lending::plan(&pos, &reserves) else {
-            return self.metrics.event("liq_no_plan", base);
-        };
-        let base = json!({ "user": l.user, "hf": l.health_factor, "collateral": self.cfg.symbol(plan.collateral),
-            "debt": self.cfg.symbol(plan.debt), "cover_usd": plan.debt_usd, "bonus_usd": plan.bonus_usd });
+    /// Route, simulate, and (in live mode) send a liquidation planned by an adapter.
+    async fn on_plan(&mut self, plan: Plan, tx_done: &mpsc::UnboundedSender<TxDone>) {
+        let Some(liq) = self.liq.as_ref() else { return };
+        let via = liq.via.clone();
+        self.metrics.update(|c| c.liq_planned += 1);
+        let base = json!({ "protocol": plan.protocol, "account": plan.account.to_string(),
+            "collateral": self.cfg.symbol(plan.collateral_asset), "debt": self.cfg.symbol(plan.debt_asset),
+            "bonus_usd": plan.bonus_usd });
         if plan.bonus_usd < self.cfg.risk.min_profit_usd {
             return self.metrics.event("liq_dust", base);
         }
-        let hops = if plan.collateral == plan.debt {
+        let hops = if plan.collateral_asset == plan.debt_asset {
             vec![]
         } else {
             match best_route(
                 &self.store,
-                plan.collateral,
-                plan.debt,
-                plan.collateral_out,
+                plan.collateral_asset,
+                plan.debt_asset,
+                plan.expected_collateral,
                 &via,
             ) {
                 Some((h, _)) => h,
                 None => return self.metrics.event("liq_no_route", base),
             }
         };
-        // Flash the user's whole debt in that asset (+0.2% for Aave's round-up); unused funds are returned.
-        let flash_raw = debt_of(&pos, plan.debt) * 1.002 + 1.0;
-        match self.max_loan.get(&plan.debt) {
-            Some(cap) if flash_raw <= *cap => {}
+        match self.max_loan.get(&plan.debt_asset) {
+            Some(cap) if f64::from(plan.flash_amount) <= *cap => {}
             Some(_) => return self.metrics.event("liq_too_large", base),
             None => return self.metrics.event("liq_no_lender", base),
         }
-        let call = LiquidationCall {
-            user: l.user,
-            collateral: plan.collateral,
-            debt: plan.debt,
-            flash_amount: U256::from(flash_raw as u128),
-            hops,
-            est_bonus_usd: plan.bonus_usd,
-        };
-        self.metrics.update(|c| c.liq_planned += 1);
         let Some(sim) = &self.sim else {
             return self.metrics.event("liq_candidate", base);
         };
-        let (profit, gas) = match sim.simulate_liquidation(&call, U256::ZERO).await {
+        let (profit, gas) = match sim.simulate_liquidation(&plan, &hops, U256::ZERO).await {
             Ok(SimOutcome::Profitable { profit, gas }) => (profit, gas),
             Ok(SimOutcome::Reverted(r)) => {
                 return self
@@ -549,15 +514,20 @@ impl Engine {
             }
             Err(e) => return warn!(error = %e, "liquidation simulation error"),
         };
-        let debt_info = reserves.iter().find(|r| r.asset == plan.debt);
-        let profit_usd = debt_info.map(|r| r.usd(f64::from(profit))).unwrap_or(0.0);
+        let Some(debt_px) = self.price(plan.debt_asset) else {
+            return self.metrics.event("liq_no_price", base);
+        };
+        let profit_usd = f64::from(profit) * debt_px;
         let native_px = self.price(self.native).unwrap_or(0.0);
         let gas_price = self.rpc.http.get_gas_price().await.unwrap_or(10_000_000) as f64;
         let gas_usd = gas as f64 * gas_price * native_px;
         let net_usd = profit_usd - gas_usd;
         self.metrics.update(|c| c.liq_profitable += 1);
-        self.metrics.event("liq_sim_ok", json!({ "liq": base, "profit_usd": profit_usd, "gas": gas, "gas_usd": gas_usd, "net_usd": net_usd }));
-        info!(user = %l.user, hf = format!("{:.4}", l.health_factor), profit_usd = format!("{profit_usd:.4}"),
+        self.metrics.event(
+            "liq_sim_ok",
+            json!({ "liq": base, "profit_usd": profit_usd, "gas": gas, "gas_usd": gas_usd, "net_usd": net_usd }),
+        );
+        info!(protocol = plan.protocol, account = %plan.account, profit_usd = format!("{profit_usd:.4}"),
               gas_usd = format!("{gas_usd:.4}"), net_usd = format!("{net_usd:.4}"), "simulated liquidation");
 
         if self.mode != Mode::Live {
@@ -573,23 +543,27 @@ impl Engine {
             );
         }
         // On-chain floor: at least cover gas, in debt-asset units.
-        let min_profit = debt_info
-            .filter(|r| r.price_usd > 0.0)
-            .map(|r| U256::from(r.raw(gas_usd) as u128))
-            .unwrap_or(U256::ZERO);
+        let min_profit = if debt_px > 0.0 {
+            U256::from((gas_usd / debt_px) as u128)
+        } else {
+            U256::ZERO
+        };
         let gas_limit = gas + gas * 3 / 10;
         self.risk.mark_sent();
         self.metrics.update(|c| c.sent += 1);
         let tx_done = tx_done.clone();
         let metrics = self.metrics.clone();
         tokio::spawn(async move {
-            let done = match sender.send_liquidation(&call, min_profit, gas_limit).await {
+            let done = match sender
+                .send_liquidation(&plan, &hops, min_profit, gas_limit)
+                .await
+            {
                 Ok(hash) => {
                     metrics.event(
                         "sent",
                         json!({ "hash": hash, "kind": "liquidation", "net_usd": net_usd }),
                     );
-                    info!(%hash, "sent liquidation");
+                    info!(%hash, protocol = plan.protocol, "sent liquidation");
                     match sender.wait(hash, Duration::from_secs(30)).await {
                         Ok(landed) => TxDone::Landed {
                             hash,
@@ -690,6 +664,60 @@ async fn wire_executor(
         _ => None,
     };
     Ok((Some(Simulator::new(rpc.http.clone(), exec, owner)), sender))
+}
+
+/// Build the liquidation runner from config: one adapter per enabled protocol section.
+async fn build_liquidation(
+    cfg: &ChainConfig,
+    rpc: &Rpc,
+    data_dir: &std::path::Path,
+    executor: Address,
+) -> Result<Option<(Runner, Vec<Address>)>> {
+    let Some(lcfg) = cfg.liquidation.clone().filter(|l| l.enabled) else {
+        return Ok(None);
+    };
+    let arpc = AdapterRpc {
+        fast: rpc.http.clone(),
+        scan: mev_rpc::http_provider(&lcfg.scan_rpc)?,
+        sweep: mev_rpc::http_provider(&lcfg.sweep_rpc)?,
+    };
+    let mut adapters: Vec<Box<dyn LiquidationAdapter>> = Vec::new();
+    if let Some(a) = cfg.aave.clone().filter(|a| a.enabled) {
+        let cache = data_dir.join("aave_v3_borrowers.json");
+        adapters.push(Box::new(
+            mev_lending_aave_v3::AaveV3Adapter::new(a, arpc.clone(), cache).await?,
+        ));
+    }
+    let via: Vec<Address> = lcfg
+        .route_via
+        .iter()
+        .map(|s| cfg.token(s))
+        .collect::<Result<_>>()?;
+    let rcfg = RunnerConfig {
+        at_risk_hf: lcfg.at_risk_hf,
+        min_debt_usd: lcfg.min_debt_usd,
+        sweep_secs: lcfg.sweep_secs,
+        fallback_poll_secs: lcfg.fallback_poll_secs,
+        executor,
+    };
+    Ok(Some((Runner::new(rcfg, adapters), via)))
+}
+
+/// Warn (with the exact fix) about liquidation targets the executor hasn't allowlisted.
+async fn check_allowlist(rpc: &Rpc, exec: Address, targets: &[(&'static str, Address)]) {
+    let c = ArbExecutor::new(exec, &rpc.http);
+    for (protocol, t) in targets {
+        match c.allowedTarget(*t).call().await {
+            Ok(true) => {}
+            Ok(false) => warn!(
+                protocol,
+                target = %t,
+                fix = format!("cast send {exec} 'setTarget(address,bool)' {t} true --private-key $PRIVATE_KEY --rpc-url $ARBITRUM_HTTP_URL"),
+                "liquidation target not allowlisted on executor; liquidations will revert until it is"
+            ),
+            Err(e) => warn!(protocol, target = %t, error = %e, "could not read executor allowlist"),
+        }
+    }
 }
 
 /// `recv` on an optional channel; pends forever when there is none (so select! ignores it).

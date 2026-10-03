@@ -26,6 +26,7 @@ pub struct Counters {
     pub liq_flagged: u64,
     pub liq_planned: u64,
     pub liq_profitable: u64,
+    pub feed_triggers: u64,
 }
 
 pub struct Metrics {

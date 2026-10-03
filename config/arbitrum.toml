@@ -3,6 +3,8 @@ chain_id = 42161
 balancer_vault = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
 # Raw txs also go straight to the Arbitrum sequencer (fastest path, no API key needed).
 sequencer_rpc = "https://arb1-sequencer.arbitrum.io/rpc"
+# Real-time stream of sequenced txs (free; ~0.9 s ahead of RPC receipts).
+sequencer_feed = "wss://arb1.arbitrum.io/feed"
 min_pool_liquidity_usd = 5000.0
 gas_limit_estimate = 1500000
 loan_tokens = ["WETH", "USDC", "USDT", "WBTC", "ARB", "DAI", "USDC.e"]
@@ -24,20 +26,23 @@ log_rpc = "https://arb1.arbitrum.io/rpc"   # official RPC allows wide getLogs ra
 pair_with = ["WETH", "USDC", "USDT"]
 max_tokens = 150
 
+[liquidation]
+enabled = true
+scan_rpc = "https://arb1.arbitrum.io/rpc"                # only public RPC verified to return complete wide getLogs
+sweep_rpc = "https://arbitrum-one-rpc.publicnode.com"    # heavy health sweeps (eth_call only)
+at_risk_hf = 1.05
+min_debt_usd = 20.0              # bonus on less won't cover gas
+sweep_secs = 300
+fallback_poll_secs = 30          # sequencer price-feed triggers are the fast path
+route_via = ["WETH", "USDC", "USDT"]
+
 [aave]
 enabled = true
 pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
 data_provider = "0x243Aa95cAC2a25651eda86e80bEe66114413c43b"
 oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"
-from_block = 7700000           # Aave v3 Arbitrum deployment
+from_block = 7700000             # Aave v3 Arbitrum deployment
 scan_step = 2000000
-scan_rpc = "https://arb1.arbitrum.io/rpc"   # only public RPC verified to return complete wide getLogs
-sweep_rpc = "https://arbitrum-one-rpc.publicnode.com"   # heavy health sweeps (eth_call only)
-at_risk_hf = 1.05
-min_debt_usd = 20.0            # bonus on less won't cover gas
-poll_secs = 3
-sweep_secs = 300
-route_via = ["WETH", "USDC", "USDT"]
 
 [risk]
 min_profit_usd = 0.05          # net of gas

@@ -40,5 +40,4 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C034 - Engine|Engine]] — 1 cross-community edges
+- [[docs/knowledge/communities/C034 - Engine|Engine]] — 2 cross-community edges

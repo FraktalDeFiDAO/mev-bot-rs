@@ -8,3 +8,4 @@ publish.workspace = true
 [dependencies]
 alloy = { workspace = true }
 mev-types = { workspace = true }
+mev-lending = { workspace = true }

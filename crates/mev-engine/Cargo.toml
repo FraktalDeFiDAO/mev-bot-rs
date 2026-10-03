@@ -26,3 +26,5 @@ mev-exec = { workspace = true }
 mev-metrics = { workspace = true }
 mev-lending = { workspace = true }
 mev-liquidate = { workspace = true }
+mev-lending-aave-v3 = { workspace = true }
+mev-sequencer = { workspace = true }

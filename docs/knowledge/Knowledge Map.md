@@ -18,16 +18,17 @@ than reading any of this.
 
 - [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 46 nodes, 102 internal edges
 - [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 46 nodes, 100 internal edges
-- [[docs/knowledge/communities/C034 - Engine|Engine]] — 39 nodes, 81 internal edges
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 32 nodes, 81 internal edges
+- [[docs/knowledge/communities/C034 - Engine|Engine]] — 44 nodes, 91 internal edges
+- [[docs/knowledge/communities/C000 - L2 MEV Bot — Profit-First Plan|L2 MEV Bot — Profit-First Plan]] — 42 nodes, 43 internal edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 33 nodes, 82 internal edges
 - [[docs/knowledge/communities/C031 - lib.rs (C031)|lib.rs (C031)]] — 31 nodes, 59 internal edges
-- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 30 nodes, 60 internal edges
-- [[docs/knowledge/communities/C000 - L2 MEV Bot — Profit-First Plan|L2 MEV Bot — Profit-First Plan]] — 26 nodes, 27 internal edges
+- [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 29 nodes, 63 internal edges
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 26 nodes, 43 internal edges
+- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 24 nodes, 52 internal edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 21 nodes, 26 internal edges
 - [[docs/knowledge/communities/C027 - lib.rs (C027)|lib.rs (C027)]] — 19 nodes, 27 internal edges
 - [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 19 nodes, 33 internal edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 16 nodes, 35 internal edges
-- [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 16 nodes, 15 internal edges
+- [[docs/knowledge/communities/C020 - Simulator|Simulator]] — 16 nodes, 35 internal edges
 - [[docs/knowledge/communities/C005 - Stage 3- own node near the sequencer — trigger- 30-day profit ≥ 3× node cost AND|Stage 3: own node near the sequencer — trigger: 30-day profit ≥ 3× node cost AND shadow logs show latency is losing us trades]] — 12 nodes, 11 internal edges
 - [[docs/knowledge/communities/C010 - Contributing - Git workflow|Contributing / Git workflow]] — 10 nodes, 9 internal edges
 - [[docs/knowledge/communities/C002 - Context policy|Context policy]] — 9 nodes, 8 internal edges
@@ -41,7 +42,17 @@ than reading any of this.
 - [[docs/knowledge/communities/C001 - deploy-executor.sh|deploy-executor.sh]] — 3 nodes, 2 internal edges
 - [[docs/knowledge/communities/C014 - pre-commit|pre-commit]] — 3 nodes, 2 internal edges
 - [[docs/knowledge/communities/C019 - lib.rs (C019)|lib.rs (C019)]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C022 - main|main]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C037 - lib.rs (C037)|lib.rs (C037)]] — 3 nodes, 3 internal edges
 - [[docs/knowledge/communities/C038 - mev-scan.rs|mev-scan.rs]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C040 - lib.rs (C040)|lib.rs (C040)]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C045 - lib.rs (C045)|lib.rs (C045)]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 3 nodes, 3 internal edges
 - [[docs/knowledge/communities/C012 - commit-msg|commit-msg]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C013 - post-commit|post-commit]] — 2 nodes, 1 internal edges
 - [[docs/knowledge/communities/C015 - setup-dev.sh|setup-dev.sh]] — 2 nodes, 1 internal edges

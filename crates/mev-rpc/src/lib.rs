@@ -71,6 +71,12 @@ pub async fn multicall(
     Ok(out)
 }
 
+/// True for HTTP 429 / provider rate-limit errors (back off instead of shrinking requests).
+pub fn is_rate_limit(e: &anyhow::Error) -> bool {
+    let s = format!("{e:#}");
+    s.contains("429") || s.contains("Too Many Requests") || s.contains("rate limit")
+}
+
 /// HTTP-only provider (e.g. a public RPC used for heavy scans).
 pub fn http_provider(url: &str) -> Result<DynProvider> {
     Ok(ProviderBuilder::new()

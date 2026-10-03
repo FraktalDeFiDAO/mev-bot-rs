@@ -84,6 +84,16 @@ sol! {
     #[sol(rpc)]
     interface IAaveOracle {
         function getAssetPrice(address asset) external view returns (uint256);
+        function getSourceOfAsset(address asset) external view returns (address);
+    }
+
+    /// Price sources seen on Arbitrum: Chainlink proxies (`aggregator()`), Aave CAPO adapters for
+    /// stables (`ASSET_TO_USD_AGGREGATOR()`) and ratio assets (`BASE_TO_USD_AGGREGATOR()`).
+    #[sol(rpc)]
+    interface IPriceSource {
+        function aggregator() external view returns (address);
+        function ASSET_TO_USD_AGGREGATOR() external view returns (address);
+        function BASE_TO_USD_AGGREGATOR() external view returns (address);
     }
 
     #[sol(rpc)]
@@ -96,9 +106,12 @@ sol! {
     #[sol(rpc)]
     interface ArbExecutor {
         struct Hop { uint8 kind; address pool; address tokenIn; address tokenOut; bool zeroForOne; uint16 feeBps; }
+        struct ProtocolCall { address target; bytes data; address approveSpender; uint256 approveAmount; }
         function execute(address token, uint256 amount, uint256 minProfit, Hop[] calldata hops) external returns (uint256 profit);
-        function liquidate(address collateral, address debt, address user, uint256 flashAmount, uint256 minProfit, Hop[] calldata hops) external returns (uint256 profit);
-        function aavePool() external view returns (address);
+        function liquidate(address debt, address collateral, uint256 flashAmount, uint256 minProfit, ProtocolCall[] calldata calls, Hop[] calldata hops) external returns (uint256 profit);
+        function setTarget(address target, bool allowed) external;
+        function allowedTarget(address target) external view returns (bool);
+        error TargetNotAllowed(address target);
         function owner() external view returns (address);
         function profitReceiver() external view returns (address);
         error NotOwner();
@@ -120,5 +133,14 @@ pub fn to_sol_hop(h: &mev_types::Hop) -> ArbExecutor::Hop {
         tokenOut: h.token_out,
         zeroForOne: h.zero_for_one,
         feeBps: h.fee_bps,
+    }
+}
+
+pub fn to_sol_call(c: &mev_lending::ProtocolCall) -> ArbExecutor::ProtocolCall {
+    ArbExecutor::ProtocolCall {
+        target: c.target,
+        data: c.data.clone(),
+        approveSpender: c.approve_spender,
+        approveAmount: c.approve_amount,
     }
 }

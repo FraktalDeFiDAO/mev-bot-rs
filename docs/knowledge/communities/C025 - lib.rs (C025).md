@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "25"
-graphify-node-count: 16
-graphify-internal-edges: 35
+graphify-node-count: 21
+graphify-internal-edges: 26
 tags:
   - graphify/community
 ---
@@ -13,29 +13,33 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-lending/src/lib.rs` — 13 nodes
-- `graph` — 3 nodes
+- `graph` — 11 nodes
+- `crates/mev-lending/src/lib.rs` — 10 nodes
 
-## Nodes (16)
+## Nodes (21)
 
 - **lib.rs** — `crates/mev-lending/src/lib.rs:L1`
-- **plan()** — `crates/mev-lending/src/lib.rs:L64`
-- **ReserveInfo** — `crates/mev-lending/src/lib.rs:L12`
-- **reserves()** — `crates/mev-lending/src/lib.rs:L128`
-- **pos()** — `crates/mev-lending/src/lib.rs:L147`
-- **Position** — `crates/mev-lending/src/lib.rs:L38`
+- **Plan** — `crates/mev-lending/src/lib.rs:L73`
+- **AccountRef** — `crates/mev-lending/src/lib.rs:L32`
+- **ProtocolCall** — `crates/mev-lending/src/lib.rs:L63`
+- **.fmt()** — `crates/mev-lending/src/lib.rs:L40`
 - **Address** — `graph`
-- **full_close_factor_below_095_capped_by_collateral()** — `crates/mev-lending/src/lib.rs:L171`
-- **half_close_factor_above_095()** — `crates/mev-lending/src/lib.rs:L162`
-- **small_positions_close_fully()** — `crates/mev-lending/src/lib.rs:L178`
-- **LiquidationPlan** — `crates/mev-lending/src/lib.rs:L48`
-- **.raw()** — `crates/mev-lending/src/lib.rs:L27`
-- **.usd()** — `crates/mev-lending/src/lib.rs:L24`
+- **Health** — `crates/mev-lending/src/lib.rs:L46`
+- **LiquidationAdapter** — `crates/mev-lending/src/lib.rs:L97`
+- **AdapterRpc** — `crates/mev-lending/src/lib.rs:L90`
+- **U256** — `graph`
+- **.liquidatable()** — `crates/mev-lending/src/lib.rs:L55`
+- **AdapterStatus** — `crates/mev-lending/src/lib.rs:L20`
+- **Bytes** — `graph`
+- **Display** — `graph`
+- **DynProvider** — `graph`
+- **Formatter** — `graph`
+- **ProtocolId** — `graph`
+- **Result** — `graph`
+- **Send** — `graph`
+- **Sync** — `graph`
 - **Vec** — `graph`
-- **healthy_position_has_no_plan()** — `crates/mev-lending/src/lib.rs:L157`
-- **Option** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 1 cross-community edges
+- No selected community has a direct edge to this one.

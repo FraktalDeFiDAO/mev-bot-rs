@@ -15,8 +15,9 @@ use alloy::{
     sol_types::SolCall,
 };
 use anyhow::{Context, Result, bail};
-use mev_bindings::{ArbExecutor, to_sol_hop};
-use mev_types::{LiquidationCall, Opportunity};
+use mev_bindings::{ArbExecutor, to_sol_call, to_sol_hop};
+use mev_lending::Plan;
+use mev_types::{Hop, Opportunity};
 use tracing::warn;
 
 pub struct Sender {
@@ -85,20 +86,21 @@ impl Sender {
         self.send_calldata(calldata, gas_limit).await
     }
 
-    /// Send an Aave liquidation through the executor.
+    /// Send a liquidation (any protocol) through the executor.
     pub async fn send_liquidation(
         &self,
-        c: &LiquidationCall,
+        plan: &Plan,
+        hops: &[Hop],
         min_profit: U256,
         gas_limit: u64,
     ) -> Result<TxHash> {
         let calldata = ArbExecutor::liquidateCall {
-            collateral: c.collateral,
-            debt: c.debt,
-            user: c.user,
-            flashAmount: c.flash_amount,
+            debt: plan.debt_asset,
+            collateral: plan.collateral_asset,
+            flashAmount: plan.flash_amount,
             minProfit: min_profit,
-            hops: c.hops.iter().map(to_sol_hop).collect(),
+            calls: plan.calls.iter().map(to_sol_call).collect(),
+            hops: hops.iter().map(to_sol_hop).collect(),
         }
         .abi_encode();
         self.send_calldata(calldata, gas_limit).await

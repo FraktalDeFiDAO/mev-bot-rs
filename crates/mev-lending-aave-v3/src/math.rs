@@ -1,6 +1,6 @@
-//! Lending-protocol liquidation math (Aave v3 rules). Pure — no I/O.
+//! Aave v3 liquidation math (close factor, bonus after protocol fee). Pure — no I/O.
 
-use mev_types::Address;
+use alloy::primitives::Address;
 use serde::{Deserialize, Serialize};
 
 /// Aave v3: positions below this HF can be fully liquidated (above it, 50%).

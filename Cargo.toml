@@ -22,6 +22,7 @@ futures = "0.3"
 dotenvy = "0.15"
 clap = { version = "4.6", features = ["derive", "env"] }
 chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 base64 = "0.23"
 
@@ -33,6 +34,15 @@ mev-ingest = { path = "crates/mev-ingest" }
 mev-dex = { path = "crates/mev-dex" }
 mev-discovery = { path = "crates/mev-discovery" }
 mev-lending = { path = "crates/mev-lending" }
+mev-lending-spark = { path = "crates/mev-lending-spark" }
+mev-lending-radiant = { path = "crates/mev-lending-radiant" }
+mev-lending-gearbox = { path = "crates/mev-lending-gearbox" }
+mev-lending-dolomite = { path = "crates/mev-lending-dolomite" }
+mev-lending-morpho = { path = "crates/mev-lending-morpho" }
+mev-lending-fluid = { path = "crates/mev-lending-fluid" }
+mev-lending-compound-v3 = { path = "crates/mev-lending-compound-v3" }
+mev-lending-silo = { path = "crates/mev-lending-silo" }
+mev-lending-aave-v3 = { path = "crates/mev-lending-aave-v3" }
 mev-oracle = { path = "crates/mev-oracle" }
 mev-state = { path = "crates/mev-state" }
 mev-sim = { path = "crates/mev-sim" }

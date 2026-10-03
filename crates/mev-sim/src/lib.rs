@@ -5,8 +5,9 @@ use alloy::{
     providers::DynProvider,
 };
 use anyhow::Result;
-use mev_bindings::{ArbExecutor, to_sol_hop};
-use mev_types::{LiquidationCall, Opportunity};
+use mev_bindings::{ArbExecutor, to_sol_call, to_sol_hop};
+use mev_lending::Plan;
+use mev_types::{Hop, Opportunity};
 
 #[derive(Debug, Clone)]
 pub enum SimOutcome {
@@ -48,22 +49,22 @@ impl Simulator {
 }
 
 impl Simulator {
-    /// `eth_call` the executor's `liquidate` as its owner, then estimate gas if it succeeds.
+    /// `eth_call` the executor's generic `liquidate` as its owner, then estimate gas if it succeeds.
     pub async fn simulate_liquidation(
         &self,
-        c: &LiquidationCall,
+        plan: &Plan,
+        hops: &[Hop],
         min_profit: U256,
     ) -> Result<SimOutcome> {
         let exec = ArbExecutor::new(self.executor, &self.provider);
-        let hops: Vec<_> = c.hops.iter().map(to_sol_hop).collect();
         let builder = exec
             .liquidate(
-                c.collateral,
-                c.debt,
-                c.user,
-                c.flash_amount,
+                plan.debt_asset,
+                plan.collateral_asset,
+                plan.flash_amount,
                 min_profit,
-                hops,
+                plan.calls.iter().map(to_sol_call).collect(),
+                hops.iter().map(to_sol_hop).collect(),
             )
             .from(self.owner);
         match builder.call().await {

@@ -2845,6 +2845,7 @@ name = "mev-bindings"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "mev-lending",
  "mev-types",
 ]
 
@@ -2910,11 +2911,13 @@ dependencies = [
  "mev-exec",
  "mev-ingest",
  "mev-lending",
+ "mev-lending-aave-v3",
  "mev-liquidate",
  "mev-metrics",
  "mev-risk",
  "mev-rpc",
  "mev-search",
+ "mev-sequencer",
  "mev-sim",
  "mev-state",
  "mev-types",
@@ -2930,6 +2933,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "mev-bindings",
+ "mev-lending",
  "mev-rpc",
  "mev-types",
  "tokio",
@@ -2952,9 +2956,60 @@ name = "mev-lending"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "mev-types",
+ "anyhow",
+ "async-trait",
  "serde",
 ]
+
+[[package]]
+name = "mev-lending-aave-v3"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "mev-bindings",
+ "mev-config",
+ "mev-lending",
+ "mev-oracle",
+ "mev-rpc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "mev-lending-compound-v3"
+version = "0.1.0"
+
+[[package]]
+name = "mev-lending-dolomite"
+version = "0.1.0"
+
+[[package]]
+name = "mev-lending-fluid"
+version = "0.1.0"
+
+[[package]]
+name = "mev-lending-gearbox"
+version = "0.1.0"
+
+[[package]]
+name = "mev-lending-morpho"
+version = "0.1.0"
+
+[[package]]
+name = "mev-lending-radiant"
+version = "0.1.0"
+
+[[package]]
+name = "mev-lending-silo"
+version = "0.1.0"
+
+[[package]]
+name = "mev-lending-spark"
+version = "0.1.0"
 
 [[package]]
 name = "mev-liquidate"
@@ -2962,13 +3017,10 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "mev-bindings",
- "mev-config",
+ "async-trait",
  "mev-lending",
- "mev-rpc",
- "mev-types",
- "serde",
- "serde_json",
+ "mev-oracle",
+ "mev-sequencer",
  "tokio",
  "tracing",
 ]
@@ -2988,7 +3040,11 @@ dependencies = [
 name = "mev-oracle"
 version = "0.1.0"
 dependencies = [
- "mev-types",
+ "alloy",
+ "anyhow",
+ "mev-bindings",
+ "mev-rpc",
+ "tracing",
 ]
 
 [[package]]
@@ -3044,6 +3100,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "mev-bindings",
+ "mev-lending",
  "mev-types",
 ]
 

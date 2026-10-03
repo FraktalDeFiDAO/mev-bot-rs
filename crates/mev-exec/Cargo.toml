@@ -13,3 +13,4 @@ tokio = { workspace = true }
 mev-types = { workspace = true }
 mev-bindings = { workspace = true }
 mev-rpc = { workspace = true }
+mev-lending = { workspace = true }

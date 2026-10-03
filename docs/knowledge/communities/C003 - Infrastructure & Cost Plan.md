@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "3"
-graphify-node-count: 16
-graphify-internal-edges: 15
+graphify-node-count: 29
+graphify-internal-edges: 63
 tags:
   - graphify/community
 ---
@@ -13,27 +13,41 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `docs/planning/INFRASTRUCTURE.md` — 16 nodes
+- `crates/mev-sequencer/src/lib.rs` — 19 nodes
+- `graph` — 10 nodes
 
-## Nodes (16)
+## Nodes (29)
 
-- **Infrastructure & Cost Plan** — `docs/planning/INFRASTRUCTURE.md:L1`
-- **Stage 3: own node near the sequencer — trigger: 30-day profit ≥ 3× node cost AND shadow logs show latency is losing us trades** — `docs/planning/INFRASTRUCTURE.md:L62`
-- **Stage 1 (now → profitable): ~$0–10/month** — `docs/planning/INFRASTRUCTURE.md:L25`
-- **Bot host (VPS)** — `docs/planning/INFRASTRUCTURE.md:L27`
-- **Data sources (all free)** — `docs/planning/INFRASTRUCTURE.md:L38`
-- **Key finding: we can't afford our own L2 node yet, and that's OK** — `docs/planning/INFRASTRUCTURE.md:L6`
-- **Monthly cost summary** — `docs/planning/INFRASTRUCTURE.md:L137`
-- **Option A: pre-built managed dedicated node (no node ops — "RPC node already built")** — `docs/planning/INFRASTRUCTURE.md:L78`
-- **Option B: low-latency add-ons (no node)** — `docs/planning/INFRASTRUCTURE.md:L88`
-- **Option C: rent bare metal and run the node ourselves (cheapest per unit of speed)** — `docs/planning/INFRASTRUCTURE.md:L97`
-- **Recommendation for Stage 3** — `docs/planning/INFRASTRUCTURE.md:L118`
-- **Sources** — `docs/planning/INFRASTRUCTURE.md:L145`
-- **Stage 2: paid RPC (~$50/month) — trigger: free quotas are the bottleneck AND 30-day profit ≥ $150** — `docs/planning/INFRASTRUCTURE.md:L57`
-- **What "lowest latency" actually means for us** — `docs/planning/INFRASTRUCTURE.md:L66`
-- **Where the sequencers are** — `docs/planning/INFRASTRUCTURE.md:L17`
-- **Which options let us run our bot on the same machine as the node** — `docs/planning/INFRASTRUCTURE.md:L106`
+- **lib.rs** — `crates/mev-sequencer/src/lib.rs:L1`
+- **SequencedTx** — `crates/mev-sequencer/src/lib.rs:L37`
+- **decode_l2_message()** — `crates/mev-sequencer/src/lib.rs:L108`
+- **parse_broadcast()** — `crates/mev-sequencer/src/lib.rs:L87`
+- **signed_msg()** — `crates/mev-sequencer/src/lib.rs:L220`
+- **signed_tx()** — `crates/mev-sequencer/src/lib.rs:L204`
+- **stream_once()** — `crates/mev-sequencer/src/lib.rs:L155`
+- **decodes_nested_batches()** — `crates/mev-sequencer/src/lib.rs:L245`
+- **run()** — `crates/mev-sequencer/src/lib.rs:L136`
+- **truncated_batch_is_skipped_not_panicking()** — `crates/mev-sequencer/src/lib.rs:L256`
+- **TxEnvelope** — `graph`
+- **Vec** — `graph`
+- **batch()** — `crates/mev-sequencer/src/lib.rs:L226`
+- **decodes_signed_tx()** — `crates/mev-sequencer/src/lib.rs:L236`
+- **L1IncomingMessage** — `crates/mev-sequencer/src/lib.rs:L75`
+- **parses_broadcast_json()** — `crates/mev-sequencer/src/lib.rs:L265`
+- **Broadcast** — `crates/mev-sequencer/src/lib.rs:L56`
+- **FeedMessage** — `crates/mev-sequencer/src/lib.rs:L63`
+- **MessageWithMeta** — `crates/mev-sequencer/src/lib.rs:L69`
+- **.selector()** — `crates/mev-sequencer/src/lib.rs:L50`
+- **Header** — `crates/mev-sequencer/src/lib.rs:L82`
+- **Option** — `graph`
+- **Result** — `graph`
+- **String** — `graph`
+- **UnboundedSender** — `graph`
+- **Address** — `graph`
+- **B256** — `graph`
+- **Bytes** — `graph`
+- **Instant** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C000 - L2 MEV Bot — Profit-First Plan|L2 MEV Bot — Profit-First Plan]] — 1 cross-community edges
+- No selected community has a direct edge to this one.
