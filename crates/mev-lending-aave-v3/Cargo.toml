@@ -21,4 +21,5 @@ mev-oracle = { workspace = true }
 mev-rpc = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }
 tempfile = "3"

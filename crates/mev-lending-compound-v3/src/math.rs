@@ -248,3 +248,47 @@ mod tests {
         assert!((s.discount_usd - 1.05 * 2_500.0 * 0.7 * 0.04).abs() < 1e-6);
     }
 }
+
+#[cfg(test)]
+mod props {
+    use super::*;
+    use proptest::prelude::*;
+
+    const X: Address = Address::with_last_byte(9);
+
+    fn market(px: f64, lcf: f64, lf: f64) -> Market {
+        Market {
+            base_scale: 1e6,
+            base_price: 1.0,
+            usd_per_unit: 1.0,
+            storefront_factor: 0.6,
+            assets: vec![AssetParams {
+                asset: X,
+                scale: 1e18,
+                price: px,
+                liquidate_cf: lcf,
+                liquidation_factor: lf,
+            }],
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn health_scales_linearly_with_collateral(px in 0.01f64..1e5, amt in 1e12f64..1e24, borrow in 1e3f64..1e12, k in 1.1f64..10.0) {
+            let m = market(px, 0.8, 0.9);
+            let h1 = m.health(&Position { borrow, collateral: vec![(X, amt)] }).health_factor;
+            let hk = m.health(&Position { borrow, collateral: vec![(X, amt * k)] }).health_factor;
+            prop_assert!((hk / h1 - k).abs() < 1e-9);
+        }
+
+        #[test]
+        fn storefront_quote_pays_less_than_market(px in 0.01f64..1e5, amt in 1e12f64..1e24, lf in 0.5f64..0.99) {
+            let m = market(px, 0.8, lf);
+            if let Some(q) = m.quote(X, amt) {
+                let market_value_base = amt / 1e18 * px * 1e6;
+                prop_assert!(q.base_amount < market_value_base);
+                prop_assert!(q.discount_usd > 0.0);
+            }
+        }
+    }
+}

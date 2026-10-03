@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "21"
-graphify-node-count: 28
-graphify-internal-edges: 67
+graphify-node-count: 34
+graphify-internal-edges: 79
 tags:
   - graphify/community
 ---
@@ -13,15 +13,16 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-config/src/lib.rs` — 19 nodes
-- `graph` — 9 nodes
+- `crates/mev-config/src/lib.rs` — 24 nodes
+- `graph` — 10 nodes
 
-## Nodes (28)
+## Nodes (34)
 
 - **ChainConfig** — `crates/mev-config/src/lib.rs:L133`
 - **lib.rs** — `crates/mev-config/src/lib.rs:L1`
 - **Address** — `graph`
 - **Secrets** — `crates/mev-config/src/lib.rs:L212`
+- **.load()** — `crates/mev-config/src/lib.rs:L162`
 - **CompoundV3Config** — `crates/mev-config/src/lib.rs:L101`
 - **FluidConfig** — `crates/mev-config/src/lib.rs:L123`
 - **Vec** — `graph`
@@ -29,10 +30,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **DexConfig** — `crates/mev-config/src/lib.rs:L20`
 - **MorphoConfig** — `crates/mev-config/src/lib.rs:L112`
 - **String** — `graph`
-- **.load()** — `crates/mev-config/src/lib.rs:L162`
 - **.pair_addresses()** — `crates/mev-config/src/lib.rs:L194`
 - **.token()** — `crates/mev-config/src/lib.rs:L186`
 - **AutoDiscovery** — `crates/mev-config/src/lib.rs:L43`
+- **repo_config()** — `crates/mev-config/src/lib.rs:L262`
 - **Result** — `graph`
 - **CometConfig** — `crates/mev-config/src/lib.rs:L92`
 - **LiquidationConfig** — `crates/mev-config/src/lib.rs:L59`
@@ -40,12 +41,17 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.from_env()** — `crates/mev-config/src/lib.rs:L234`
 - **.symbol()** — `crates/mev-config/src/lib.rs:L201`
 - **Option** — `graph`
+- **shipped_arbitrum_config_is_valid()** — `crates/mev-config/src/lib.rs:L267`
+- **unknown_symbol_falls_back_to_address()** — `crates/mev-config/src/lib.rs:L295`
+- **unknown_token_in_pairs_is_rejected()** — `crates/mev-config/src/lib.rs:L281`
 - **DexType** — `crates/mev-config/src/lib.rs:L11`
 - **RiskConfig** — `crates/mev-config/src/lib.rs:L34`
 - **Self** — `graph`
 - **Formatter** — `graph`
 - **HashMap** — `graph`
 - **Path** — `graph`
+- **PathBuf** — `graph`
+- **secrets_debug_never_prints_the_private_key()** — `crates/mev-config/src/lib.rs:L302`
 
 ## Related communities
 

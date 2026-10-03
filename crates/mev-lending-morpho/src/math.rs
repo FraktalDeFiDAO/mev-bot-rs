@@ -101,3 +101,22 @@ mod tests {
         assert!(size(0.0, 1.0, PRICE, 0.86).is_none());
     }
 }
+
+#[cfg(test)]
+mod props {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn sizes_never_overpay_or_overseize(coll in 1e3f64..1e24, borrowed in 1e3f64..1e15, price in 1e20f64..1e30, lltv in 0.3f64..0.98) {
+            let lif = incentive_factor(lltv);
+            prop_assert!(lif > 1.0 && lif <= MAX_LIQUIDATION_INCENTIVE_FACTOR);
+            if let Some(s) = size(coll, borrowed, price, lltv) {
+                prop_assert!(s.seized <= coll);
+                prop_assert!(s.repaid <= borrowed * (1.0 + 1e-9) + 1.0);
+                prop_assert!(s.bonus >= -1.0, "bonus non-negative up to rounding");
+            }
+        }
+    }
+}

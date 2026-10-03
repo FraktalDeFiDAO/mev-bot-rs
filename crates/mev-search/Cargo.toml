@@ -10,3 +10,6 @@ alloy = { workspace = true }
 mev-types = { workspace = true }
 mev-state = { workspace = true }
 mev-dex = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

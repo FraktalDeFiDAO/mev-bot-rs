@@ -170,3 +170,24 @@ mod tests {
         assert_eq!(g.check(1.0, 0.01, 0), Err(Block::InFlight));
     }
 }
+
+#[cfg(test)]
+mod props {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn approved_sends_never_exceed_the_daily_gas_cap(gas in proptest::collection::vec(0.0f64..0.5, 1..60)) {
+            let limits = RiskLimits { min_profit_usd: 0.0, max_gas_usd_per_day: 3.0, max_consecutive_failures: u32::MAX };
+            let mut g = RiskGuard::new(limits, PathBuf::from("/nonexistent/STOP"));
+            for cost in gas {
+                if g.check(1.0, cost, 0).is_ok() {
+                    g.mark_sent();
+                    g.record(true, cost, 0);
+                }
+                prop_assert!(g.spent_today_usd() <= 3.0 + 1e-9);
+            }
+        }
+    }
+}

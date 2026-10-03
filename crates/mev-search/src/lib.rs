@@ -204,3 +204,69 @@ mod tests {
         assert!(run(&s, 10).is_empty());
     }
 }
+
+#[cfg(test)]
+mod props {
+    use super::*;
+    use alloy::primitives::address;
+    use mev_dex::PoolState;
+    use mev_types::PoolInfo;
+    use proptest::prelude::*;
+
+    const A: Address = address!("0000000000000000000000000000000000000001");
+    const B: Address = address!("0000000000000000000000000000000000000002");
+
+    fn v2(addr: u8, r0: f64, r1: f64) -> Pool {
+        let info = PoolInfo {
+            address: Address::with_last_byte(addr),
+            dex: "p".into(),
+            kind: PoolKind::UniV2 { fee_bps: 30 },
+            token0: A,
+            token1: B,
+        };
+        Pool::new(
+            info,
+            PoolState::V2 {
+                reserve0: r0,
+                reserve1: r1,
+            },
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn ternary_search_beats_a_brute_force_grid(r in 1e6f64..1e12, p1 in 1.0f64..3.0, gap in 1.0f64..1.3) {
+            let (buy, sell) = (v2(1, r, r * p1 * gap), v2(2, r, r * p1));
+            let f = |x: f64| sell.amount_out(B, buy.amount_out(A, x)) - x;
+            let cap = r * 0.5;
+            let (_, best) = best_size(cap, f);
+            let grid_best = (0..=2_000).map(|i| f(cap * i as f64 / 2_000.0)).fold(f64::MIN, f64::max);
+            prop_assert!(best >= grid_best - grid_best.abs() * 1e-6 - 1e-6);
+        }
+
+        #[test]
+        fn identical_pools_never_yield_an_opportunity(r0 in 1e6f64..1e12, ratio in 0.01f64..100.0) {
+            let mut s = PoolStore::default();
+            s.insert(v2(10, r0, r0 * ratio));
+            s.insert(v2(11, r0, r0 * ratio));
+            let max_loan = HashMap::from([(A, 1e15), (B, 1e15)]);
+            let usd = |_: Address| Some(1.0);
+            let params = SearchParams { max_loan: &max_loan, usd_per_raw: &usd, min_est_profit_usd: 0.0 };
+            prop_assert!(two_pool_arbs(&s, Address::with_last_byte(10), &params).is_empty());
+        }
+
+        #[test]
+        fn opportunities_respect_the_loan_cap(r in 1e6f64..1e12, gap in 1.01f64..1.5, cap in 1.0f64..1e9) {
+            let mut s = PoolStore::default();
+            s.insert(v2(10, r, r * 2.0));
+            s.insert(v2(11, r, r * 2.0 * gap));
+            let max_loan = HashMap::from([(A, cap), (B, cap)]);
+            let usd = |_: Address| Some(1.0);
+            let params = SearchParams { max_loan: &max_loan, usd_per_raw: &usd, min_est_profit_usd: 0.0 };
+            for o in two_pool_arbs(&s, Address::with_last_byte(10), &params) {
+                prop_assert!(f64::from(o.amount_in) <= cap + 1.0);
+                prop_assert!(o.est_profit >= 0.0);
+            }
+        }
+    }
+}

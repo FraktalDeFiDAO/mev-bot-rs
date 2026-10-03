@@ -274,3 +274,23 @@ mod tests {
         assert_eq!(parsed[0].1[0].tx_hash(), t.tx_hash());
     }
 }
+
+#[cfg(test)]
+mod props {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Malformed feed data must be skipped, never panic the reader.
+        #[test]
+        fn decoder_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
+            let mut out = vec![];
+            decode_l2_message(&bytes, 0, &mut out);
+        }
+
+        #[test]
+        fn broadcast_parser_never_panics(s in ".{0,300}") {
+            let _ = parse_broadcast(&s);
+        }
+    }
+}

@@ -180,3 +180,31 @@ mod tests {
         assert!((p.debt_usd - 1_900.0).abs() < 1e-6);
     }
 }
+
+#[cfg(test)]
+mod props {
+    use super::*;
+    use proptest::prelude::*;
+
+    const WETH: Address = Address::with_last_byte(1);
+    const USDC: Address = Address::with_last_byte(2);
+
+    proptest! {
+        #[test]
+        fn plans_respect_close_factor_collateral_and_fees(
+            hf in 0.5f64..0.9999, weth in 0.01f64..1e4, debt in 10.0f64..5e7, px in 100.0f64..1e5,
+        ) {
+            let reserves = vec![
+                ReserveInfo { asset: WETH, decimals: 18, liquidation_bonus_bps: 10_500, protocol_fee_bps: 1_000, price_usd: px },
+                ReserveInfo { asset: USDC, decimals: 6, liquidation_bonus_bps: 10_450, protocol_fee_bps: 1_000, price_usd: 1.0 },
+            ];
+            let pos = Position { user: Address::ZERO, health_factor: hf, collateral: vec![(WETH, weth * 1e18)], debt: vec![(USDC, debt * 1e6)] };
+            if let Some(p) = plan(&pos, &reserves) {
+                prop_assert!(p.debt_usd <= debt + 1e-6, "never repays more than the debt");
+                prop_assert!(p.collateral_out <= weth * 1e18 * (1.0 + 1e-9), "never seizes more than exists");
+                prop_assert!(p.bonus_usd >= 0.0);
+                prop_assert!(p.bonus_usd <= p.debt_usd * 0.05 + 1e-6, "bonus capped by the 5% incentive");
+            }
+        }
+    }
+}

@@ -180,3 +180,46 @@ mod tests {
         assert_eq!(p.amount_out(A, 1.0), 0.0);
     }
 }
+
+#[cfg(test)]
+mod props {
+    use super::*;
+    use alloy::primitives::address;
+    use proptest::prelude::*;
+
+    const A: Address = address!("0000000000000000000000000000000000000001");
+    const B: Address = address!("0000000000000000000000000000000000000002");
+
+    fn v2(r0: f64, r1: f64, fee_bps: u16) -> Pool {
+        let info = PoolInfo {
+            address: Address::ZERO,
+            dex: "p".into(),
+            kind: PoolKind::UniV2 { fee_bps },
+            token0: A,
+            token1: B,
+        };
+        Pool::new(
+            info,
+            PoolState::V2 {
+                reserve0: r0,
+                reserve1: r1,
+            },
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn output_is_monotonic_and_bounded(r0 in 1e3f64..1e24, r1 in 1e3f64..1e24, a in 1.0f64..1e22, k in 1.01f64..10.0) {
+            let p = v2(r0, r1, 30);
+            let small = p.amount_out(A, a);
+            let big = p.amount_out(A, a * k);
+            prop_assert!(big >= small);
+            prop_assert!(big < r1, "can never drain the out reserve");
+        }
+
+        #[test]
+        fn fees_never_increase_output(r0 in 1e3f64..1e24, r1 in 1e3f64..1e24, a in 1.0f64..1e22, fee in 1u16..1000) {
+            prop_assert!(v2(r0, r1, fee).amount_out(A, a) <= v2(r0, r1, 0).amount_out(A, a));
+        }
+    }
+}

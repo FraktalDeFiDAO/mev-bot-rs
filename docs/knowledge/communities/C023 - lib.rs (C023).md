@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "23"
-graphify-node-count: 26
-graphify-internal-edges: 43
+graphify-node-count: 31
+graphify-internal-edges: 56
 tags:
   - graphify/community
 ---
@@ -14,26 +14,31 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Source files
 
 - `graph` — 16 nodes
-- `crates/mev-exec/src/lib.rs` — 10 nodes
+- `crates/mev-exec/src/lib.rs` — 15 nodes
 
-## Nodes (26)
+## Nodes (31)
 
 - **Sender** — `crates/mev-exec/src/lib.rs:L23`
-- **.send_calldata()** — `crates/mev-exec/src/lib.rs:L110`
+- **lib.rs** — `crates/mev-exec/src/lib.rs:L1`
 - **.send_liquidation()** — `crates/mev-exec/src/lib.rs:L90`
-- **futures_join_all()** — `crates/mev-exec/src/lib.rs:L171`
+- **.send_calldata()** — `crates/mev-exec/src/lib.rs:L102`
+- **futures_join_all()** — `crates/mev-exec/src/lib.rs:L187`
+- **liquidate_calldata()** — `crates/mev-exec/src/lib.rs:L175`
 - **.new()** — `crates/mev-exec/src/lib.rs:L43`
 - **.send()** — `crates/mev-exec/src/lib.rs:L73`
 - **Result** — `graph`
-- **.wait()** — `crates/mev-exec/src/lib.rs:L145`
-- **Landed** — `crates/mev-exec/src/lib.rs:L34`
-- **lib.rs** — `crates/mev-exec/src/lib.rs:L1`
-- **TxHash** — `graph`
-- **.eth_balance()** — `crates/mev-exec/src/lib.rs:L68`
+- **.wait()** — `crates/mev-exec/src/lib.rs:L137`
+- **execute_calldata()** — `crates/mev-exec/src/lib.rs:L164`
 - **U256** — `graph`
 - **Vec** — `graph`
+- **Landed** — `crates/mev-exec/src/lib.rs:L34`
+- **TxHash** — `graph`
+- **.eth_balance()** — `crates/mev-exec/src/lib.rs:L68`
+- **liquidate_calldata_decodes_to_the_plan()** — `crates/mev-exec/src/lib.rs:L235`
 - **Address** — `graph`
 - **DynProvider** — `graph`
+- **execute_calldata_decodes_to_the_opportunity()** — `crates/mev-exec/src/lib.rs:L215`
+- **hop()** — `crates/mev-exec/src/lib.rs:L203`
 - **AtomicU64** — `graph`
 - **Duration** — `graph`
 - **EthereumWallet** — `graph`
@@ -47,6 +52,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
+- [[docs/knowledge/communities/C050 - Opportunity|Opportunity]] — 4 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 3 cross-community edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 2 cross-community edges
