@@ -68,7 +68,9 @@ contract ArbExecutorForkTest is Test {
     function setUp() public {
         vm.createSelectFork(vm.envOr("ARBITRUM_HTTP_URL", string("https://arb1.arbitrum.io/rpc")));
         vm.prank(owner);
-        exec = new ArbExecutor(VAULT, AAVE_POOL, receiver);
+        exec = new ArbExecutor(VAULT, receiver);
+        vm.prank(owner);
+        exec.setTarget(AAVE_POOL, true);
         v3Pool = IV3Factory(UNI_V3_FACTORY).getPool(WETH, USDC, 500);
         sushiPair = IV2Factory(SUSHI_V2_FACTORY).getPair(WETH, USDC);
         assertTrue(v3Pool != address(0) && sushiPair != address(0), "pools not found");
@@ -223,14 +225,29 @@ contract ArbExecutorForkTest is Test {
         hops[0] = ArbExecutor.Hop(2, v3Pool, WETH, USDC, WETH < USDC, 0);
     }
 
+    /// Aave liquidationCall(WETH collateral, USDC debt, user, max, false), approving exactly `flash` USDC.
+    function _aaveCall(address user, uint256 flash) internal pure returns (ArbExecutor.ProtocolCall[] memory calls) {
+        calls = new ArbExecutor.ProtocolCall[](1);
+        calls[0] = ArbExecutor.ProtocolCall(
+            AAVE_POOL,
+            abi.encodeWithSignature(
+                "liquidationCall(address,address,address,uint256,bool)", WETH, USDC, user, type(uint256).max, false
+            ),
+            AAVE_POOL,
+            flash
+        );
+    }
+
     function test_liquidatesAavePositionForProfit() public {
         uint256 debt = _liquidatablePosition(1_500);
+        // Flash a 0.1% buffer over the debt: Aave rounds variable debt up, and the excess is returned.
+        uint256 flash = debt * 1001 / 1000;
         ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        ArbExecutor.ProtocolCall[] memory calls = _aaveCall(borrower, flash);
         uint256 before = IERC20Full(USDC).balanceOf(receiver);
 
-        // Flash a 0.1% buffer over the debt: Aave rounds variable debt up, and the excess is returned.
         vm.prank(owner);
-        uint256 profit = exec.liquidate(WETH, USDC, borrower, debt * 1001 / 1000, 1e6, hops);
+        uint256 profit = exec.liquidate(USDC, WETH, flash, 1e6, calls, hops);
 
         assertGt(profit, 1e6, "expected >1 USDC profit");
         assertEq(IERC20Full(USDC).balanceOf(receiver) - before, profit, "profit to receiver");
@@ -248,28 +265,67 @@ contract ArbExecutorForkTest is Test {
         IAavePoolFull(AAVE_POOL).borrow(USDC, 100e6, 2, 0, borrower);
         vm.stopPrank();
         ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        ArbExecutor.ProtocolCall[] memory calls = _aaveCall(borrower, 101e6);
         vm.prank(owner);
-        vm.expectRevert(); // Aave: health factor not below threshold
-        exec.liquidate(WETH, USDC, borrower, 100e6, 0, hops);
+        vm.expectRevert(); // Aave: health factor not below threshold (bubbled up)
+        exec.liquidate(USDC, WETH, 101e6, 0, calls, hops);
     }
 
     function test_liquidateOnlyOwnerAndRouteChecks() public {
         ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        ArbExecutor.ProtocolCall[] memory calls = _aaveCall(borrower, 1e6);
         vm.prank(attacker);
         vm.expectRevert(ArbExecutor.NotOwner.selector);
-        exec.liquidate(WETH, USDC, borrower, 1e6, 0, hops);
+        exec.liquidate(USDC, WETH, 1e6, 0, calls, hops);
 
-        ArbExecutor.Hop[] memory empty = new ArbExecutor.Hop[](0);
+        ArbExecutor.Hop[] memory noHops = new ArbExecutor.Hop[](0);
         vm.prank(owner);
         vm.expectRevert(ArbExecutor.BadRoute.selector);
-        exec.liquidate(WETH, USDC, borrower, 1e6, 0, empty); // different tokens need a swap route
+        exec.liquidate(USDC, WETH, 1e6, 0, calls, noHops); // different tokens need a swap route
+
+        ArbExecutor.ProtocolCall[] memory noCalls = new ArbExecutor.ProtocolCall[](0);
+        vm.prank(owner);
+        vm.expectRevert(ArbExecutor.BadRoute.selector);
+        exec.liquidate(USDC, WETH, 1e6, 0, noCalls, hops);
     }
 
     function test_liquidationMinProfitEnforced() public {
         uint256 debt = _liquidatablePosition(1_500);
+        uint256 flash = debt * 1001 / 1000;
         ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        ArbExecutor.ProtocolCall[] memory calls = _aaveCall(borrower, flash);
         vm.prank(owner);
         vm.expectRevert(); // NotProfitable
-        exec.liquidate(WETH, USDC, borrower, debt * 1001 / 1000, 1_000_000e6, hops);
+        exec.liquidate(USDC, WETH, flash, 1_000_000e6, calls, hops);
+    }
+
+    function test_nonAllowlistedTargetReverts() public {
+        uint256 debt = _liquidatablePosition(1_500);
+        uint256 flash = debt * 1001 / 1000;
+        vm.prank(owner);
+        exec.setTarget(AAVE_POOL, false);
+        ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        ArbExecutor.ProtocolCall[] memory calls = _aaveCall(borrower, flash);
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(ArbExecutor.TargetNotAllowed.selector, AAVE_POOL));
+        exec.liquidate(USDC, WETH, flash, 0, calls, hops);
+    }
+
+    function test_cannotCallTokenToDrainFlashFunds() public {
+        // Even if the owner key were misused, calling a token is blocked unless allowlisted.
+        ArbExecutor.ProtocolCall[] memory calls = new ArbExecutor.ProtocolCall[](1);
+        calls[0] = ArbExecutor.ProtocolCall(
+            USDC, abi.encodeWithSignature("transfer(address,uint256)", attacker, 1e6), address(0), 0
+        );
+        ArbExecutor.Hop[] memory noHops = new ArbExecutor.Hop[](0);
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(ArbExecutor.TargetNotAllowed.selector, USDC));
+        exec.liquidate(USDC, USDC, 1e6, 0, calls, noHops);
+    }
+
+    function test_setTargetOnlyOwner() public {
+        vm.prank(attacker);
+        vm.expectRevert(ArbExecutor.NotOwner.selector);
+        exec.setTarget(attacker, true);
     }
 }

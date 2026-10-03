@@ -14,16 +14,6 @@ interface IBalancerVault {
     ) external;
 }
 
-interface IAavePool {
-    function liquidationCall(
-        address collateralAsset,
-        address debtAsset,
-        address user,
-        uint256 debtToCover,
-        bool receiveAToken
-    ) external;
-}
-
 interface IUniV2Pair {
     function getReserves() external view returns (uint112, uint112, uint32);
     function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external;
@@ -43,14 +33,14 @@ interface IUniV3Pool {
     ) external returns (int256 amount0, int256 amount1);
 }
 
-/// @notice Flash-loan executor for atomic arbitrage and Aave v3 liquidations.
+/// @notice Flash-loan executor for atomic arbitrage and protocol-neutral liquidations.
 /// Safety model:
 ///  - Only `owner` can start a trade; flash-loan and swap callbacks are accepted only while that trade is
 ///    in progress and only from the exact vault/pool we called.
 ///  - Holds no funds between transactions: the loan is repaid and all profit is sent to `profitReceiver`
 ///    inside the same transaction.
-///  - The only approval ever granted is the exact debt amount to the immutable `aavePool`, reset to zero
-///    in the same transaction.
+///  - Liquidations only call owner-allowlisted protocol contracts. The only approvals ever granted are
+///    exact amounts of the flash-borrowed debt asset to allowlisted spenders, reset to zero right after.
 ///  - Reverts unless the strategy returns at least `loan + fee + minProfit`.
 contract ArbExecutor {
     /// Hop kinds
@@ -65,6 +55,14 @@ contract ArbExecutor {
     uint160 internal constant MIN_SQRT_RATIO_PLUS_ONE = 4295128740;
     uint160 internal constant MAX_SQRT_RATIO_MINUS_ONE = 1461446703485210103287273052203988822378723970341;
 
+    /// A protocol call made during a liquidation (e.g. Aave `liquidationCall`, Comet `absorb`).
+    struct ProtocolCall {
+        address target;
+        bytes data;
+        address approveSpender;
+        uint256 approveAmount;
+    }
+
     struct Hop {
         uint8 kind;
         address pool;
@@ -75,9 +73,11 @@ contract ArbExecutor {
     }
 
     IBalancerVault public immutable vault;
-    IAavePool public immutable aavePool;
     address public immutable owner;
     address public immutable profitReceiver;
+
+    /// Liquidation call targets / approval spenders the owner has vetted.
+    mapping(address => bool) public allowedTarget;
 
     bool transient flashActive;
     address transient expectedPool;
@@ -90,12 +90,21 @@ contract ArbExecutor {
     error NotProfitable(uint256 balance, uint256 required);
     error BadRoute();
     error TransferFailed();
+    error TargetNotAllowed(address target);
 
-    constructor(address vault_, address aavePool_, address profitReceiver_) {
+    event TargetSet(address indexed target, bool allowed);
+
+    constructor(address vault_, address profitReceiver_) {
         vault = IBalancerVault(vault_);
-        aavePool = IAavePool(aavePool_);
         owner = msg.sender;
         profitReceiver = profitReceiver_;
+    }
+
+    /// @notice Allow or revoke a liquidation call target / approval spender.
+    function setTarget(address target, bool allowed) external {
+        if (msg.sender != owner) revert NotOwner();
+        allowedTarget[target] = allowed;
+        emit TargetSet(target, allowed);
     }
 
     /// @notice Borrow `amount` of `token`, run `hops`, repay, and send profit to `profitReceiver`.
@@ -118,19 +127,21 @@ contract ArbExecutor {
         profit = lastProfit;
     }
 
-    /// @notice Liquidate `user` on Aave v3: flash-borrow `flashAmount` of `debt`, repay as much of the
-    /// user's debt as Aave allows, swap the seized `collateral` back to `debt` via `hops`, repay the loan,
-    /// and send the profit (in `debt`) to `profitReceiver`. `hops` must be empty when collateral == debt.
+    /// @notice Liquidate through any allowlisted protocol: flash-borrow `flashAmount` of `debt`, make
+    /// `calls` (each with an optional exact approval of `debt`), swap the seized `collateral` back to
+    /// `debt` via `hops`, repay the loan, and send the profit (in `debt`) to `profitReceiver`.
+    /// `hops` must be empty when collateral == debt.
     /// @return profit amount of `debt` sent to `profitReceiver`
     function liquidate(
-        address collateral,
         address debt,
-        address user,
+        address collateral,
         uint256 flashAmount,
         uint256 minProfit,
+        ProtocolCall[] calldata calls,
         Hop[] calldata hops
     ) external returns (uint256 profit) {
         if (msg.sender != owner) revert NotOwner();
+        if (calls.length == 0) revert BadRoute();
         if (collateral == debt) {
             if (hops.length != 0) revert BadRoute();
         } else if (hops.length == 0 || hops[0].tokenIn != collateral || hops[hops.length - 1].tokenOut != debt) {
@@ -144,7 +155,7 @@ contract ArbExecutor {
 
         flashActive = true;
         vault.flashLoan(
-            address(this), tokens, amounts, abi.encode(MODE_LIQUIDATE, abi.encode(collateral, user, minProfit, hops))
+            address(this), tokens, amounts, abi.encode(MODE_LIQUIDATE, abi.encode(collateral, minProfit, calls, hops))
         );
         flashActive = false;
         profit = lastProfit;
@@ -164,7 +175,7 @@ contract ArbExecutor {
         uint256 owed = amounts[0] + feeAmounts[0];
         uint256 minProfit;
         if (mode == MODE_ARB) minProfit = _arbitrage(inner, amounts[0]);
-        else if (mode == MODE_LIQUIDATE) minProfit = _liquidateAave(inner, token, amounts[0]);
+        else if (mode == MODE_LIQUIDATE) minProfit = _liquidate(inner, token);
         else revert BadRoute();
 
         uint256 balance = IERC20(token).balanceOf(address(this));
@@ -182,13 +193,24 @@ contract ArbExecutor {
         _runHops(hops, amount);
     }
 
-    function _liquidateAave(bytes memory inner, address debt, uint256 amount) internal returns (uint256 minProfit) {
-        (address collateral, address user, uint256 minProfit_, Hop[] memory hops) =
-            abi.decode(inner, (address, address, uint256, Hop[]));
-        // Exact approval for the liquidation, reset right after: nothing lingers.
-        _approve(debt, address(aavePool), amount);
-        aavePool.liquidationCall(collateral, debt, user, type(uint256).max, false);
-        _approve(debt, address(aavePool), 0);
+    function _liquidate(bytes memory inner, address debt) internal returns (uint256 minProfit) {
+        (address collateral, uint256 minProfit_, ProtocolCall[] memory calls, Hop[] memory hops) =
+            abi.decode(inner, (address, uint256, ProtocolCall[], Hop[]));
+        for (uint256 i; i < calls.length; ++i) {
+            ProtocolCall memory c = calls[i];
+            if (!allowedTarget[c.target]) revert TargetNotAllowed(c.target);
+            if (c.approveAmount > 0) {
+                if (!allowedTarget[c.approveSpender]) revert TargetNotAllowed(c.approveSpender);
+                _approve(debt, c.approveSpender, c.approveAmount);
+            }
+            (bool ok, bytes memory ret) = c.target.call(c.data);
+            if (!ok) {
+                assembly {
+                    revert(add(ret, 32), mload(ret))
+                }
+            }
+            if (c.approveAmount > 0) _approve(debt, c.approveSpender, 0);
+        }
         if (collateral != debt) _runHops(hops, IERC20(collateral).balanceOf(address(this)));
         return minProfit_;
     }

@@ -26,7 +26,7 @@ read -r -p "Deploy ArbExecutor to Arbitrum mainnet now? [y/N] " ok
 [[ $ok == y || $ok == Y ]] || { echo "aborted"; exit 1; }
 
 OUT=$(cd contracts && forge create src/ArbExecutor.sol:ArbExecutor --rpc-url "$ARBITRUM_HTTP_URL" \
-  --private-key "$PRIVATE_KEY" --broadcast --constructor-args "$VAULT" "$AAVE_POOL" "$PROFIT_RECEIVER")
+  --private-key "$PRIVATE_KEY" --broadcast --constructor-args "$VAULT" "$PROFIT_RECEIVER")
 ADDR=$(echo "$OUT" | awk '/Deployed to:/ {print $3}')
 TX=$(echo "$OUT" | awk '/Transaction hash:/ {print $3}')
 [[ -n $ADDR ]] || { echo "$OUT" | grep -v -i private; echo "deploy failed"; exit 1; }
