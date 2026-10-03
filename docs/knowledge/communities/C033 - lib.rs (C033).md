@@ -87,8 +87,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **no_arb_when_prices_match()** — `crates/mev-search/src/lib.rs:L200`
 - **Option** — `graph`
 - **Self** — `graph`
-- **to_sol_call()** — `crates/mev-bindings/src/lib.rs:L139`
-- **to_sol_hop()** — `crates/mev-bindings/src/lib.rs:L128`
+- **to_sol_call()** — `crates/mev-bindings/src/lib.rs:L144`
+- **to_sol_hop()** — `crates/mev-bindings/src/lib.rs:L133`
 - **.hop_kind()** — `crates/mev-types/src/lib.rs:L23`
 - **.is_empty()** — `crates/mev-state/src/lib.rs:L37`
 - **.len()** — `crates/mev-state/src/lib.rs:L33`

@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "39"
-graphify-node-count: 31
-graphify-internal-edges: 81
+graphify-node-count: 29
+graphify-internal-edges: 78
 tags:
   - graphify/community
 ---
@@ -14,10 +14,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Source files
 
 - `crates/mev-lending-compound-v3/src/lib.rs` — 19 nodes
-- `graph` — 11 nodes
-- `crates/mev-lending/src/lib.rs` — 1 node
+- `graph` — 10 nodes
 
-## Nodes (31)
+## Nodes (29)
 
 - **CompoundV3Adapter** — `crates/mev-lending-compound-v3/src/lib.rs:L97`
 - **.plan()** — `crates/mev-lending-compound-v3/src/lib.rs:L414`
@@ -31,7 +30,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Vec** — `graph`
 - **Result** — `graph`
 - **.market()** — `crates/mev-lending-compound-v3/src/lib.rs:L298`
-- **AdapterRpc** — `crates/mev-lending/src/lib.rs:L90`
 - **.comet()** — `crates/mev-lending-compound-v3/src/lib.rs:L166`
 - **lib.rs** — `crates/mev-lending-compound-v3/src/lib.rs:L1`
 - **Prices** — `crates/mev-lending-compound-v3/src/lib.rs:L91`
@@ -45,7 +43,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **DynProvider** — `graph`
 - **.id()** — `crates/mev-lending-compound-v3/src/lib.rs:L321`
 - **HashMap** — `graph`
-- **DynProvider** — `graph`
 - **PathBuf** — `graph`
 - **Position** — `graph`
 - **ProtocolId** — `graph`
@@ -53,7 +50,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 8 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 7 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 2 cross-community edges

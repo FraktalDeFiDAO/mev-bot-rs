@@ -2,7 +2,7 @@
 graphify-generated: true
 graphify-community: "26"
 graphify-node-count: 82
-graphify-internal-edges: 191
+graphify-internal-edges: 192
 tags:
   - graphify/community
 ---
@@ -50,6 +50,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Option** — `graph`
 - **ProtocolCall** — `crates/mev-lending/src/lib.rs:L63`
 - **Result** — `graph`
+- **.health()** — `crates/mev-lending-gearbox/src/lib.rs:L54`
 - **.health()** — `crates/mev-liquidate/src/lib.rs:L334`
 - **.on_feed_tx()** — `crates/mev-liquidate/src/lib.rs:L232`
 - **feed_tx_to_watched_contract_starts_a_burst()** — `crates/mev-liquidate/src/lib.rs:L496`
@@ -84,7 +85,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.status()** — `crates/mev-lending-aave-v3/src/lib.rs:L198`
 - **.status()** — `crates/mev-lending-compound-v3/src/lib.rs:L325`
 - **.status()** — `crates/mev-lending-dolomite/src/lib.rs:L40`
-- **.status()** — `crates/mev-lending-gearbox/src/lib.rs:L40`
 - **.status()** — `crates/mev-lending-radiant/src/lib.rs:L32`
 - **.status()** — `crates/mev-lending-spark/src/lib.rs:L31`
 - **.status()** — `crates/mev-liquidate/src/lib.rs:L321`
@@ -110,10 +110,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 8 cross-community edges
-- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 8 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 9 cross-community edges
+- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 8 cross-community edges
+- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 7 cross-community edges
 - [[docs/knowledge/communities/C040 - lib.rs (C040)|lib.rs (C040)]] — 7 cross-community edges
-- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 7 cross-community edges
 - [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 7 cross-community edges
 - [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 7 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 6 cross-community edges

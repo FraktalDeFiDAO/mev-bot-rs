@@ -19,27 +19,27 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Nodes (22)
 
 - **lib.rs** — `crates/mev-oracle/src/lib.rs:L1`
-- **resolve_aggregators()** — `crates/mev-oracle/src/lib.rs:L20`
-- **.matches_tx()** — `crates/mev-oracle/src/lib.rs:L104`
+- **resolve_aggregators()** — `crates/mev-oracle/src/lib.rs:L22`
+- **.matches_tx()** — `crates/mev-oracle/src/lib.rs:L117`
 - **Address** — `graph`
-- **FeedWatcher** — `crates/mev-oracle/src/lib.rs:L87`
-- **.matches()** — `crates/mev-oracle/src/lib.rs:L97`
-- **.watch()** — `crates/mev-oracle/src/lib.rs:L92`
-- **FeedWatcher<T>** — `crates/mev-oracle/src/lib.rs:L91`
-- **effective_target()** — `crates/mev-oracle/src/lib.rs:L77`
+- **FeedWatcher** — `crates/mev-oracle/src/lib.rs:L100`
+- **.matches()** — `crates/mev-oracle/src/lib.rs:L110`
+- **.watch()** — `crates/mev-oracle/src/lib.rs:L105`
+- **FeedWatcher<T>** — `crates/mev-oracle/src/lib.rs:L104`
+- **effective_target()** — `crates/mev-oracle/src/lib.rs:L90`
 - **T** — `graph`
-- **.is_empty()** — `crates/mev-oracle/src/lib.rs:L116`
-- **forward_call()** — `crates/mev-oracle/src/lib.rs:L137`
+- **.is_empty()** — `crates/mev-oracle/src/lib.rs:L129`
+- **forward_call()** — `crates/mev-oracle/src/lib.rs:L150`
 - **Option** — `graph`
 - **Vec** — `graph`
 - **Debug** — `graph`
-- **forwarded_reports_match_their_aggregator()** — `crates/mev-oracle/src/lib.rs:L146`
+- **forwarded_reports_match_their_aggregator()** — `crates/mev-oracle/src/lib.rs:L159`
 - **HashMap** — `graph`
 - **Result** — `graph`
-- **watcher_matches_only_watched_targets()** — `crates/mev-oracle/src/lib.rs:L126`
-- **.len()** — `crates/mev-oracle/src/lib.rs:L112`
+- **watcher_matches_only_watched_targets()** — `crates/mev-oracle/src/lib.rs:L139`
+- **.len()** — `crates/mev-oracle/src/lib.rs:L125`
 - **DynProvider** — `graph`
-- **effective_target_reads_first_forward_argument()** — `crates/mev-oracle/src/lib.rs:L169`
+- **effective_target_reads_first_forward_argument()** — `crates/mev-oracle/src/lib.rs:L182`
 
 ## Related communities
 

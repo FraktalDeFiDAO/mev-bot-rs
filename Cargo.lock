@@ -2927,6 +2927,7 @@ dependencies = [
  "mev-lending-compound-v3",
  "mev-lending-dolomite",
  "mev-lending-gearbox",
+ "mev-lending-morpho",
  "mev-lending-radiant",
  "mev-lending-spark",
  "mev-liquidate",
@@ -3056,6 +3057,18 @@ dependencies = [
 [[package]]
 name = "mev-lending-morpho"
 version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "mev-bindings",
+ "mev-config",
+ "mev-lending",
+ "mev-lending-index",
+ "mev-oracle",
+ "mev-rpc",
+ "tracing",
+]
 
 [[package]]
 name = "mev-lending-radiant"

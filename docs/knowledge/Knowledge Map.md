@@ -16,23 +16,23 @@ than reading any of this.
 
 ## Communities
 
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 82 nodes, 191 internal edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 82 nodes, 192 internal edges
 - [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 77 nodes, 167 internal edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 50 nodes, 109 internal edges
 - [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 48 nodes, 104 internal edges
 - [[docs/knowledge/communities/C000 - L2 MEV Bot — Profit-First Plan|L2 MEV Bot — Profit-First Plan]] — 42 nodes, 43 internal edges
-- [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 33 nodes, 56 internal edges
+- [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 35 nodes, 65 internal edges
 - [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 32 nodes, 66 internal edges
-- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 31 nodes, 81 internal edges
+- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 29 nodes, 78 internal edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 28 nodes, 52 internal edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 26 nodes, 60 internal edges
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 26 nodes, 43 internal edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 25 nodes, 47 internal edges
 - [[docs/knowledge/communities/C037 - PoolInfo|PoolInfo]] — 23 nodes, 61 internal edges
 - [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 22 nodes, 41 internal edges
 - [[docs/knowledge/communities/C027 - lib.rs (C027)|lib.rs (C027)]] — 19 nodes, 27 internal edges
 - [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 19 nodes, 33 internal edges
 - [[docs/knowledge/communities/C040 - lib.rs (C040)|lib.rs (C040)]] — 18 nodes, 28 internal edges
-- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 18 nodes, 28 internal edges
+- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 18 nodes, 26 internal edges
 - [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 18 nodes, 28 internal edges
 - [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 18 nodes, 28 internal edges
 - [[docs/knowledge/communities/C020 - Simulator|Simulator]] — 16 nodes, 35 internal edges

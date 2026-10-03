@@ -107,6 +107,17 @@ pub struct CompoundV3Config {
     pub comets: Vec<CometConfig>,
 }
 
+/// Morpho Blue adapter.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MorphoConfig {
+    pub enabled: bool,
+    pub morpho: Address,
+    /// Asset -> USD oracle (8 decimals) for loan tokens; the Aave oracle covers the usual ones.
+    pub usd_oracle: Address,
+    pub from_block: u64,
+    pub scan_step: u64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChainConfig {
     pub name: String,
@@ -132,6 +143,7 @@ pub struct ChainConfig {
     pub liquidation: Option<LiquidationConfig>,
     pub aave: Option<AaveConfig>,
     pub compound_v3: Option<CompoundV3Config>,
+    pub morpho: Option<MorphoConfig>,
 }
 
 impl ChainConfig {

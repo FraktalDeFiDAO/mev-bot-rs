@@ -73,10 +73,19 @@
       "height": 220
     },
     {
+      "id": "community-25",
+      "type": "file",
+      "file": "docs/knowledge/communities/C025 - lib.rs (C025).md",
+      "x": 0,
+      "y": 600,
+      "width": 360,
+      "height": 220
+    },
+    {
       "id": "community-21",
       "type": "file",
       "file": "docs/knowledge/communities/C021 - lib.rs (C021).md",
-      "x": 0,
+      "x": 420,
       "y": 600,
       "width": 360,
       "height": 220
@@ -85,15 +94,6 @@
       "id": "community-23",
       "type": "file",
       "file": "docs/knowledge/communities/C023 - lib.rs (C023).md",
-      "x": 420,
-      "y": 600,
-      "width": 360,
-      "height": 220
-    },
-    {
-      "id": "community-25",
-      "type": "file",
-      "file": "docs/knowledge/communities/C025 - lib.rs (C025).md",
       "x": 840,
       "y": 600,
       "width": 360,
@@ -435,6 +435,12 @@
   ],
   "edges": [
     {
+      "id": "edge-25-26",
+      "fromNode": "community-25",
+      "toNode": "community-26",
+      "label": "9"
+    },
+    {
       "id": "edge-30-33",
       "fromNode": "community-30",
       "toNode": "community-33",
@@ -447,27 +453,21 @@
       "label": "9"
     },
     {
-      "id": "edge-25-26",
-      "fromNode": "community-25",
-      "toNode": "community-26",
+      "id": "edge-26-42",
+      "fromNode": "community-26",
+      "toNode": "community-42",
       "label": "8"
     },
     {
       "id": "edge-26-39",
       "fromNode": "community-26",
       "toNode": "community-39",
-      "label": "8"
+      "label": "7"
     },
     {
       "id": "edge-26-40",
       "fromNode": "community-26",
       "toNode": "community-40",
-      "label": "7"
-    },
-    {
-      "id": "edge-26-42",
-      "fromNode": "community-26",
-      "toNode": "community-42",
       "label": "7"
     },
     {
@@ -531,12 +531,6 @@
       "label": "3"
     },
     {
-      "id": "edge-25-31",
-      "fromNode": "community-25",
-      "toNode": "community-31",
-      "label": "3"
-    },
-    {
       "id": "edge-21-39",
       "fromNode": "community-21",
       "toNode": "community-39",
@@ -579,6 +573,12 @@
       "label": "2"
     },
     {
+      "id": "edge-25-31",
+      "fromNode": "community-25",
+      "toNode": "community-31",
+      "label": "2"
+    },
+    {
       "id": "edge-31-39",
       "fromNode": "community-31",
       "toNode": "community-39",
@@ -615,15 +615,15 @@
       "label": "1"
     },
     {
-      "id": "edge-21-28",
-      "fromNode": "community-21",
-      "toNode": "community-28",
-      "label": "1"
-    },
-    {
       "id": "edge-20-25",
       "fromNode": "community-20",
       "toNode": "community-25",
+      "label": "1"
+    },
+    {
+      "id": "edge-21-28",
+      "fromNode": "community-21",
+      "toNode": "community-28",
       "label": "1"
     }
   ]

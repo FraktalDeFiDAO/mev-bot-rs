@@ -58,6 +58,34 @@ interface ICometFull {
     function buyCollateral(address asset, uint256 minAmount, uint256 baseAmount, address recipient) external;
 }
 
+interface IMorphoFull {
+    struct MarketParams {
+        address loanToken;
+        address collateralToken;
+        address oracle;
+        address irm;
+        uint256 lltv;
+    }
+
+    function idToMarketParams(bytes32 id) external view returns (MarketParams memory);
+    function supplyCollateral(MarketParams memory mp, uint256 assets, address onBehalf, bytes memory data) external;
+    function borrow(MarketParams memory mp, uint256 assets, uint256 shares, address onBehalf, address receiver)
+        external
+        returns (uint256, uint256);
+    function liquidate(
+        MarketParams memory mp,
+        address borrower,
+        uint256 seizedAssets,
+        uint256 repaidShares,
+        bytes memory data
+    ) external returns (uint256, uint256);
+    function position(bytes32 id, address user) external view returns (uint256, uint128, uint128);
+}
+
+interface IMorphoOracle {
+    function price() external view returns (uint256);
+}
+
 interface IAlgebraFactory {
     function poolByPair(address, address) external view returns (address);
 }
@@ -409,5 +437,61 @@ contract ArbExecutorForkTest is Test {
         assertEq(IERC20Full(WETH).balanceOf(address(exec)), 0, "executor holds no WETH");
         assertEq(IERC20Approve(USDC).allowance(address(exec), COMET_USDC), 0, "approval reset");
         emit log_named_decimal_uint("comet absorb+buy profit USDC", profit, 6);
+    }
+
+    // ---------------------------------------------------------------- Morpho Blue
+
+    address constant MORPHO = 0x6c247b1F6182318877311737BaC0844bAa518F5e;
+    address constant WBTC = 0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f;
+    bytes32 constant MORPHO_WBTC_USDC = 0xe6392ff19d10454b099d692b58c361ef93e31af34ed1ef78232e07c78fe99169;
+
+    function test_morphoLiquidationForProfit() public {
+        IMorphoFull morpho = IMorphoFull(MORPHO);
+        IMorphoFull.MarketParams memory mp = morpho.idToMarketParams(MORPHO_WBTC_USDC);
+        assertEq(mp.collateralToken, WBTC);
+        assertEq(mp.loanToken, USDC);
+
+        // Real position: 0.1 WBTC collateral, borrow 98% of the LLTV limit.
+        uint256 price = IMorphoOracle(mp.oracle).price();
+        deal(WBTC, borrower, 0.1e8);
+        vm.startPrank(borrower);
+        IERC20Approve(WBTC).approve(MORPHO, 0.1e8);
+        morpho.supplyCollateral(mp, 0.1e8, borrower, "");
+        uint256 borrowAssets = 0.1e8 * price / 1e36 * mp.lltv / 1e18 * 98 / 100;
+        morpho.borrow(mp, borrowAssets, 0, borrower, borrower);
+        vm.stopPrank();
+
+        // Oracle drops 15%: unhealthy.
+        uint256 mocked = price * 85 / 100;
+        vm.mockCall(mp.oracle, abi.encodeWithSelector(IMorphoOracle.price.selector), abi.encode(mocked));
+
+        // Seize all collateral the debt allows (mirrors mev-lending-morpho::math::size).
+        uint256 lif = 1e36 / (1e18 - 3e17 * (1e18 - mp.lltv) / 1e18); // 1e18-scaled incentive factor
+        if (lif > 1.15e18) lif = 1.15e18;
+        uint256 seizeByDebt = borrowAssets * lif / 1e18 * 1e36 / mocked;
+        uint256 seized = (seizeByDebt < 0.1e8 ? seizeByDebt : 0.1e8) * 999 / 1000;
+        uint256 flash = seized * mocked / 1e36 * 1e18 / lif * 101 / 100 + 1;
+
+        ArbExecutor.ProtocolCall[] memory calls = new ArbExecutor.ProtocolCall[](1);
+        calls[0] = ArbExecutor.ProtocolCall(
+            MORPHO, abi.encodeCall(IMorphoFull.liquidate, (mp, borrower, seized, 0, "")), MORPHO, flash
+        );
+        address wbtcUsdc = IV3Factory(UNI_V3_FACTORY).getPool(WBTC, USDC, 500);
+        ArbExecutor.Hop[] memory hops = new ArbExecutor.Hop[](1);
+        hops[0] = ArbExecutor.Hop(2, wbtcUsdc, WBTC, USDC, WBTC < USDC, 0);
+
+        vm.prank(owner);
+        exec.setTarget(MORPHO, true);
+        vm.prank(owner);
+        uint256 profit = exec.liquidate(USDC, WBTC, flash, 1e6, calls, hops);
+
+        assertGt(profit, 1e6, "expected >1 USDC profit");
+        (, uint128 sharesAfter, uint128 collAfter) = morpho.position(MORPHO_WBTC_USDC, borrower);
+        assertLt(collAfter, 0.1e8, "collateral seized");
+        assertTrue(sharesAfter < type(uint128).max, "position updated");
+        assertEq(IERC20Full(USDC).balanceOf(address(exec)), 0, "executor holds no USDC");
+        assertEq(IERC20Full(WBTC).balanceOf(address(exec)), 0, "executor holds no WBTC");
+        assertEq(IERC20Approve(USDC).allowance(address(exec), MORPHO), 0, "approval reset");
+        emit log_named_decimal_uint("morpho liquidation profit USDC", profit, 6);
     }
 }

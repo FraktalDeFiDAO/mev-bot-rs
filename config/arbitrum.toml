@@ -63,6 +63,13 @@ usd_feed = "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612" # Chainlink ETH/USD
 [[compound_v3.comets]]
 address = "0xA5EDBDD9646f8dFF606d7448e414884C7d905dCA"   # USDC.e
 
+[morpho]
+enabled = true
+morpho = "0x6c247b1F6182318877311737BaC0844bAa518F5e"
+usd_oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"   # Aave oracle: loan-token USD prices
+from_block = 250000000           # before Morpho Blue's Arbitrum deployment
+scan_step = 2000000
+
 [risk]
 min_profit_usd = 0.05          # net of gas
 max_gas_usd_per_day = 3.0
