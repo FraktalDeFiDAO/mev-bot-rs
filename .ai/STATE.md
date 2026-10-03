@@ -7,6 +7,7 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
 **Updated:** 2026-10-03 (evening)
 **Branch:** `feat/liquidations` (stacked on #6 → #5). User merges PRs.
 **Executor:** `0xc0B4BA513359979793B9aaa8C74b526aD644AF8D` (Arbitrum) — 8 targets allowlisted.
+**Running:** podman `mev-bot-arbitrum` in LIVE mode on the latest image (restarted by user request).
 
 ## Done and verified
 
@@ -15,8 +16,10 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
   Dolomite, Gearbox) — one crate per venue from `docs/table-1791056656798.csv`.
 - Sequencer feed (`mev-sequencer`) drives price-feed-triggered re-checks; forwarder-aware matching.
 - Live shadow: all adapters start, 35 feeds watched, ~1 trigger/min, Aave 38 at-risk accounts.
-- Tests: unit + property (Rust), contract fuzz/invariant (mocks) + 21 fork tests, E2E on anvil
-  (bot trades live on a fork, +0.0103 WETH). See `docs/planning/TESTING.md`. Gate: `scripts/check.sh`.
+- Tests: unit + property (Rust), contract fuzz/invariant (mocks) + 21 fork tests, live adapter
+  integration tests, E2E arbitrage (+0.0103 WETH) and E2E Aave liquidation (+881 USDC) on anvil.
+  See `docs/planning/TESTING.md`. Gate: `scripts/check.sh`.
+- RPC metering: paid endpoint 3–5 calls/min steady state (DECISIONS #30).
 
 ## Next
 

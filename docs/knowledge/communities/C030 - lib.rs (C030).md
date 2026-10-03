@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "30"
-graphify-node-count: 50
-graphify-internal-edges: 109
+graphify-node-count: 52
+graphify-internal-edges: 112
 tags:
   - graphify/community
 ---
@@ -13,51 +13,53 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `graph` — 21 nodes
-- `crates/mev-rpc/src/lib.rs` — 17 nodes
+- `graph` — 22 nodes
+- `crates/mev-rpc/src/lib.rs` — 18 nodes
 - `crates/mev-discovery/src/lib.rs` — 12 nodes
 
-## Nodes (50)
+## Nodes (52)
 
-- **call()** — `crates/mev-rpc/src/lib.rs:L144`
-- **Rpc** — `crates/mev-rpc/src/lib.rs:L15`
+- **Rpc** — `crates/mev-rpc/src/lib.rs:L19`
 - **lib.rs** — `crates/mev-discovery/src/lib.rs:L1`
 - **lib.rs** — `crates/mev-rpc/src/lib.rs:L1`
+- **multicall()** — `crates/mev-rpc/src/lib.rs:L54`
 - **active_tokens()** — `crates/mev-discovery/src/lib.rs:L251`
-- **multicall()** — `crates/mev-rpc/src/lib.rs:L48`
 - **Address** — `graph`
-- **discover_pools()** — `crates/mev-discovery/src/lib.rs:L33`
 - **load_pools()** — `crates/mev-discovery/src/lib.rs:L152`
-- **.multicall()** — `crates/mev-rpc/src/lib.rs:L42`
-- **balances()** — `crates/mev-discovery/src/lib.rs:L367`
+- **metered_http_provider()** — `crates/mev-rpc/src/lib.rs:L87`
+- **.multicall()** — `crates/mev-rpc/src/lib.rs:L48`
 - **candidate_pairs()** — `crates/mev-discovery/src/lib.rs:L328`
+- **discover_pools()** — `crates/mev-discovery/src/lib.rs:L33`
 - **Result** — `graph`
-- **Backoff** — `crates/mev-rpc/src/lib.rs:L97`
+- **Result** — `graph`
+- **Backoff** — `crates/mev-rpc/src/lib.rs:L111`
+- **balances()** — `crates/mev-discovery/src/lib.rs:L367`
 - **build_store()** — `crates/mev-discovery/src/lib.rs:L386`
-- **Result** — `graph`
-- **token_decimals()** — `crates/mev-discovery/src/lib.rs:L354`
 - **Vec** — `graph`
+- **.connect()** — `crates/mev-rpc/src/lib.rs:L28`
+- **.default()** — `crates/mev-rpc/src/lib.rs:L116`
+- **call()** — `crates/mev-rpc/src/lib.rs:L158`
 - **calls_for()** — `crates/mev-discovery/src/lib.rs:L127`
-- **connect_ws()** — `crates/mev-rpc/src/lib.rs:L87`
-- **refresh()** — `crates/mev-discovery/src/lib.rs:L238`
-- **retry_forever()** — `crates/mev-rpc/src/lib.rs:L125`
-- **.connect()** — `crates/mev-rpc/src/lib.rs:L22`
-- **.default()** — `crates/mev-rpc/src/lib.rs:L102`
-- **.next_delay()** — `crates/mev-rpc/src/lib.rs:L113`
-- **backoff_doubles_caps_and_resets()** — `crates/mev-rpc/src/lib.rs:L158`
-- **Bytes** — `graph`
-- **decode()** — `crates/mev-rpc/src/lib.rs:L149`
+- **connect_ws()** — `crates/mev-rpc/src/lib.rs:L101`
 - **DynProvider** — `graph`
+- **refresh()** — `crates/mev-discovery/src/lib.rs:L238`
+- **retry_forever()** — `crates/mev-rpc/src/lib.rs:L139`
+- **token_decimals()** — `crates/mev-discovery/src/lib.rs:L354`
+- **.next_delay()** — `crates/mev-rpc/src/lib.rs:L127`
+- **backoff_doubles_caps_and_resets()** — `crates/mev-rpc/src/lib.rs:L172`
+- **Bytes** — `graph`
+- **decode()** — `crates/mev-rpc/src/lib.rs:L163`
 - **v2()** — `crates/mev-discovery/src/lib.rs:L440`
-- **.reconnect_ws()** — `crates/mev-rpc/src/lib.rs:L36`
+- **.reconnect_ws()** — `crates/mev-rpc/src/lib.rs:L42`
 - **Address** — `graph`
 - **build_store_drops_illiquid_and_single_pool_pairs()** — `crates/mev-discovery/src/lib.rs:L458`
-- **http_provider()** — `crates/mev-rpc/src/lib.rs:L81`
+- **http_provider()** — `crates/mev-rpc/src/lib.rs:L95`
 - **Option** — `graph`
-- **.reset()** — `crates/mev-rpc/src/lib.rs:L119`
+- **.reset()** — `crates/mev-rpc/src/lib.rs:L133`
+- **Arc** — `graph`
 - **Duration** — `graph`
 - **HashMap** — `graph`
-- **is_rate_limit()** — `crates/mev-rpc/src/lib.rs:L75`
+- **is_rate_limit()** — `crates/mev-rpc/src/lib.rs:L81`
 - **Self** — `graph`
 - **Vec** — `graph`
 - **Bytes** — `graph`
@@ -73,10 +75,5 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Related communities
 
 - [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 10 cross-community edges
+- [[docs/knowledge/communities/C034 - Engine|Engine]] — 8 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 4 cross-community edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 4 cross-community edges
-- [[docs/knowledge/communities/C034 - Engine|Engine]] — 4 cross-community edges
-- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 4 cross-community edges
-- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 1 cross-community edges

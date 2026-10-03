@@ -8,6 +8,7 @@ Every layer is tested; each tier catches what the one below can't. Run the gate 
 | Property | Invariants over random inputs (proptest, 256 cases each): DEX output monotonic/bounded/fee-reducing; trade sizing beats a brute-force grid; identical pools never arb; loan caps respected; Aave/Morpho/Comet liquidation sizing never overpays/overseizes, bonus ≥ 0; risk guard never exceeds the gas cap; sequencer decoder never panics | `mod props` in dex, search, risk, sequencer, lending-* | `cargo test --workspace` | none |
 | Contract unit + fuzz + invariant | Mocked vault/token/protocol: owner-only for every entry point, callbacks reject any caller/args, bad routes revert, allowlist (targets and spenders), liquidation profit accounting; invariant over 128k random calls: executor never holds tokens or ETH | `contracts/test/ArbExecutorUnit.t.sol` | `forge test --match-path test/ArbExecutorUnit.t.sol` | none |
 | Contract fork | Real protocols on live Arbitrum state: arbitrage via Uni/Sushi V2, Camelot V2, Uni V3, PancakeSwap V3, Algebra; Aave liquidation; Comet absorb + buyCollateral; Morpho liquidation; Fluid liquidation with native-ETH collateral; security cases (unauthorized callbacks, token-drain attempt, ETH outside liquidation) | `contracts/test/ArbExecutor.t.sol` | `cd contracts && forge test` | Arbitrum RPC |
+| Live integration | Every live adapter decodes real Arbitrum contracts (read-only): Aave reserves/feeds/borrower, all Comet storefronts + valid `buyCollateral` encoding, a real Morpho WBTC/USDC borrower, Fluid resolver quotes — catches ABI drift mocks can't | `crates/mev-lending-*/tests/live.rs` (`#[ignore]`) | `scripts/test-integration.sh` | public Arbitrum RPC |
 | End-to-end: arbitrage | The real `mev-bot` binary in **live** mode against an anvil fork: deploy executor, start bot, create a price gap, assert detect → simulate → send → land → profit at the receiver. Also exercises stale-nonce recovery | `scripts/test-e2e.sh` | `scripts/test-e2e.sh` | archive-capable RPC for the fork |
 | End-to-end: liquidation | Real bot (live) vs anvil fork: a second account opens an Aave position; the bot indexes it from the fork's blocks; ETH/USD is crashed by installing `MockPriceSource` code over the real price source; assert liquidatable → plan → route → simulate → send → land → receiver profit and the borrower's debt repaid. Last run: +881 USDC, debt → $0 | `scripts/test-e2e-liquidation.sh` | `scripts/test-e2e-liquidation.sh` | archive-capable RPC |
 | Live shadow | Full stack against mainnet without sending: discovery, adapters, sweeps, sequencer triggers, simulations | `scripts/run.sh shadow` | — | live |
@@ -17,6 +18,7 @@ Every layer is tested; each tier catches what the one below can't. Run the gate 
 ```bash
 scripts/check.sh          # fmt + clippy -D warnings + all Rust tests (unit + property)
 scripts/check.sh --all    # + Foundry suites (fork tests need an RPC: ARBITRUM_FORK_URL)
+scripts/test-integration.sh        # live read-only adapter integration tests
 scripts/test-e2e.sh                # E2E arbitrage (fork RPC: ARBITRUM_HTTP_URL from .env, else arb1)
 scripts/test-e2e-liquidation.sh    # E2E Aave liquidation
 ```

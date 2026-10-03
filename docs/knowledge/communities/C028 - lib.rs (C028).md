@@ -19,10 +19,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Nodes (22)
 
 - **lib.rs** — `crates/mev-oracle/src/lib.rs:L1`
-- **resolve_aggregators()** — `crates/mev-oracle/src/lib.rs:L22`
 - **.matches_tx()** — `crates/mev-oracle/src/lib.rs:L117`
 - **Address** — `graph`
 - **FeedWatcher** — `crates/mev-oracle/src/lib.rs:L100`
+- **resolve_aggregators()** — `crates/mev-oracle/src/lib.rs:L22`
 - **.matches()** — `crates/mev-oracle/src/lib.rs:L110`
 - **.watch()** — `crates/mev-oracle/src/lib.rs:L105`
 - **FeedWatcher<T>** — `crates/mev-oracle/src/lib.rs:L104`
@@ -43,6 +43,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 1 cross-community edges
+- [[docs/knowledge/communities/C053 - AccountRef|AccountRef]] — 1 cross-community edges
+- [[docs/knowledge/communities/C055 - lib.rs (C055)|lib.rs (C055)]] — 1 cross-community edges

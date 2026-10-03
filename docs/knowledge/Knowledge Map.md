@@ -17,34 +17,38 @@ than reading any of this.
 ## Communities
 
 - [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 83 nodes, 190 internal edges
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 81 nodes, 176 internal edges
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 50 nodes, 109 internal edges
-- [[docs/knowledge/communities/C034 - Engine|Engine]] — 49 nodes, 108 internal edges
+- [[docs/knowledge/communities/C034 - Engine|Engine]] — 80 nodes, 161 internal edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 52 nodes, 112 internal edges
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 44 nodes, 78 internal edges
+- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 44 nodes, 91 internal edges
 - [[docs/knowledge/communities/C000 - L2 MEV Bot — Profit-First Plan|L2 MEV Bot — Profit-First Plan]] — 43 nodes, 44 internal edges
-- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 41 nodes, 82 internal edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 38 nodes, 68 internal edges
-- [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 36 nodes, 66 internal edges
-- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 33 nodes, 76 internal edges
-- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 33 nodes, 76 internal edges
+- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 37 nodes, 82 internal edges
+- [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 35 nodes, 65 internal edges
+- [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 32 nodes, 66 internal edges
 - [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 29 nodes, 78 internal edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 26 nodes, 49 internal edges
+- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 26 nodes, 61 internal edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 24 nodes, 45 internal edges
 - [[docs/knowledge/communities/C037 - PoolInfo|PoolInfo]] — 23 nodes, 61 internal edges
 - [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 22 nodes, 41 internal edges
-- [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 22 nodes, 52 internal edges
 - [[docs/knowledge/communities/C027 - lib.rs (C027)|lib.rs (C027)]] — 20 nodes, 33 internal edges
 - [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 20 nodes, 34 internal edges
+- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 20 nodes, 31 internal edges
+- [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 19 nodes, 29 internal edges
 - [[docs/knowledge/communities/C051 - Adapter (C051)|Adapter (C051)]] — 19 nodes, 29 internal edges
-- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 18 nodes, 28 internal edges
 - [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 18 nodes, 28 internal edges
 - [[docs/knowledge/communities/C045 - lib.rs (C045)|lib.rs (C045)]] — 18 nodes, 28 internal edges
-- [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 18 nodes, 28 internal edges
+- [[docs/knowledge/communities/C053 - AccountRef|AccountRef]] — 17 nodes, 24 internal edges
+- [[docs/knowledge/communities/C054 - Plan|Plan]] — 17 nodes, 19 internal edges
 - [[docs/knowledge/communities/C020 - Simulator|Simulator]] — 16 nodes, 35 internal edges
+- [[docs/knowledge/communities/C055 - lib.rs (C055)|lib.rs (C055)]] — 14 nodes, 26 internal edges
 - [[docs/knowledge/communities/C005 - Stage 3- own node near the sequencer — trigger- 30-day profit ≥ 3× node cost AND|Stage 3: own node near the sequencer — trigger: 30-day profit ≥ 3× node cost AND shadow logs show latency is losing us trades]] — 12 nodes, 11 internal edges
 - [[docs/knowledge/communities/C040 - lib.rs (C040)|lib.rs (C040)]] — 11 nodes, 14 internal edges
 - [[docs/knowledge/communities/C010 - Contributing - Git workflow|Contributing / Git workflow]] — 10 nodes, 9 internal edges
 - [[docs/knowledge/communities/C002 - Context policy|Context policy]] — 9 nodes, 8 internal edges
 - [[docs/knowledge/communities/C024 - lib.rs (C024)|lib.rs (C024)]] — 9 nodes, 9 internal edges
 - [[docs/knowledge/communities/C004 - graphify-obsidian.mjs|graphify-obsidian.mjs]] — 8 nodes, 13 internal edges
+- [[docs/knowledge/communities/C056 - .plan|.plan]] — 8 nodes, 8 internal edges
 - [[docs/knowledge/communities/C032 - lib.rs (C032)|lib.rs (C032)]] — 7 nodes, 11 internal edges
 - [[docs/knowledge/communities/C035 - main.rs|main.rs]] — 6 nodes, 8 internal edges
 - [[docs/knowledge/communities/C048 - Adapter (C048)|Adapter (C048)]] — 6 nodes, 8 internal edges
