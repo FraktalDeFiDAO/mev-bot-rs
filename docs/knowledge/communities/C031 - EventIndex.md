@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "31"
-graphify-node-count: 35
-graphify-internal-edges: 65
+graphify-node-count: 37
+graphify-internal-edges: 67
 tags:
   - graphify/community
 ---
@@ -15,8 +15,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - `crates/mev-lending-index/src/lib.rs` — 20 nodes
 - `graph` — 15 nodes
+- `crates/mev-lending-aave-v3/src/lib.rs` — 1 node
+- `crates/mev-lending-morpho/src/lib.rs` — 1 node
 
-## Nodes (35)
+## Nodes (37)
 
 - **EventIndex** — `crates/mev-lending-index/src/lib.rs:L51`
 - **.step()** — `crates/mev-lending-index/src/lib.rs:L94`
@@ -33,6 +35,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.save()** — `crates/mev-lending-index/src/lib.rs:L181`
 - **market_key()** — `crates/mev-lending-index/src/lib.rs:L213`
 - **parse_state()** — `crates/mev-lending-index/src/lib.rs:L190`
+- **.index()** — `crates/mev-lending-aave-v3/src/lib.rs:L202`
+- **.index()** — `crates/mev-lending-morpho/src/lib.rs:L262`
 - **.insert()** — `crates/mev-lending-index/src/lib.rs:L84`
 - **Address** — `graph`
 - **Log** — `graph`
@@ -56,5 +60,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 2 cross-community edges

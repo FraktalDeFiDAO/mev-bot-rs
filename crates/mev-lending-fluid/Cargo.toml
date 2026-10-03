@@ -6,3 +6,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+mev-bindings = { workspace = true }
+mev-config = { workspace = true }
+mev-lending = { workspace = true }
+mev-oracle = { workspace = true }
+mev-rpc = { workspace = true }

@@ -2926,9 +2926,11 @@ dependencies = [
  "mev-lending-aave-v3",
  "mev-lending-compound-v3",
  "mev-lending-dolomite",
+ "mev-lending-fluid",
  "mev-lending-gearbox",
  "mev-lending-morpho",
  "mev-lending-radiant",
+ "mev-lending-silo",
  "mev-lending-spark",
  "mev-liquidate",
  "mev-metrics",
@@ -3028,6 +3030,17 @@ dependencies = [
 [[package]]
 name = "mev-lending-fluid"
 version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "mev-bindings",
+ "mev-config",
+ "mev-lending",
+ "mev-oracle",
+ "mev-rpc",
+ "tracing",
+]
 
 [[package]]
 name = "mev-lending-gearbox"
@@ -3084,6 +3097,13 @@ dependencies = [
 [[package]]
 name = "mev-lending-silo"
 version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "mev-lending",
+ "tokio",
+]
 
 [[package]]
 name = "mev-lending-spark"

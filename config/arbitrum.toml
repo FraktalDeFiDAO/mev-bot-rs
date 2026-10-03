@@ -70,6 +70,16 @@ usd_oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"   # Aave oracle: loan-
 from_block = 250000000           # before Morpho Blue's Arbitrum deployment
 scan_step = 2000000
 
+[fluid]
+enabled = true
+vault_resolver = "0xA5C3E16523eeeDDcC34706b0E6bE88b4c6EA95cC"
+usd_oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"
+# T1 vaults with liquidations in the last 30 days (2026-10-03 scan): 67 + 5 of 98 events.
+vaults = [
+  "0xf55B8e9F0c51Ace009f4b41d03321675d4C643b3",   # ETH collateral / ARB debt
+  "0x82b27fa821419f5689381b565a8b0786aa2548de",   # WBTC collateral / USDT0 debt
+]
+
 [risk]
 min_profit_usd = 0.05          # net of gas
 max_gas_usd_per_day = 3.0

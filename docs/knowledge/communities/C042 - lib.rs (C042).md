@@ -2,7 +2,7 @@
 graphify-generated: true
 graphify-community: "42"
 graphify-node-count: 18
-graphify-internal-edges: 26
+graphify-internal-edges: 28
 tags:
   - graphify/community
 ---
@@ -20,6 +20,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - **Adapter** — `crates/mev-lending-gearbox/src/lib.rs:L26`
 - **.plan()** — `crates/mev-lending-gearbox/src/lib.rs:L58`
+- **.health()** — `crates/mev-lending-gearbox/src/lib.rs:L54`
 - **Address** — `graph`
 - **Vec** — `graph`
 - **.accounts()** — `crates/mev-lending-gearbox/src/lib.rs:L50`
@@ -31,7 +32,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Result** — `graph`
 - **.id()** — `crates/mev-lending-gearbox/src/lib.rs:L36`
 - **.index()** — `crates/mev-lending-gearbox/src/lib.rs:L46`
-- **.status()** — `crates/mev-lending-gearbox/src/lib.rs:L40`
 - **is_not_live_and_never_plans()** — `crates/mev-lending-gearbox/src/lib.rs:L80`
 - **Option** — `graph`
 - **ProtocolId** — `graph`
@@ -39,4 +39,5 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 8 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 5 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 2 cross-community edges

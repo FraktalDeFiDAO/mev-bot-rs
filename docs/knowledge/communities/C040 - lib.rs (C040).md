@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "40"
-graphify-node-count: 18
-graphify-internal-edges: 28
+graphify-node-count: 11
+graphify-internal-edges: 14
 tags:
   - graphify/community
 ---
@@ -13,30 +13,23 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-lending-dolomite/src/lib.rs` — 12 nodes
-- `graph` — 6 nodes
+- `crates/mev-lending-morpho/src/math.rs` — 10 nodes
+- `graph` — 1 node
 
-## Nodes (18)
+## Nodes (11)
 
-- **Adapter** — `crates/mev-lending-dolomite/src/lib.rs:L26`
-- **.plan()** — `crates/mev-lending-dolomite/src/lib.rs:L58`
-- **.health()** — `crates/mev-lending-dolomite/src/lib.rs:L54`
-- **Address** — `graph`
-- **Vec** — `graph`
-- **.accounts()** — `crates/mev-lending-dolomite/src/lib.rs:L50`
-- **.assets()** — `crates/mev-lending-dolomite/src/lib.rs:L70`
-- **.new()** — `crates/mev-lending-dolomite/src/lib.rs:L29`
-- **.price_feeds()** — `crates/mev-lending-dolomite/src/lib.rs:L62`
-- **.targets()** — `crates/mev-lending-dolomite/src/lib.rs:L66`
-- **lib.rs** — `crates/mev-lending-dolomite/src/lib.rs:L1`
-- **Result** — `graph`
-- **.id()** — `crates/mev-lending-dolomite/src/lib.rs:L36`
-- **.index()** — `crates/mev-lending-dolomite/src/lib.rs:L46`
-- **is_not_live_and_never_plans()** — `crates/mev-lending-dolomite/src/lib.rs:L80`
+- **math.rs** — `crates/mev-lending-morpho/src/math.rs:L1`
+- **size()** — `crates/mev-lending-morpho/src/math.rs:L43`
+- **incentive_factor()** — `crates/mev-lending-morpho/src/math.rs:L15`
+- **size_is_capped_by_debt_and_bonus_matches_incentive()** — `crates/mev-lending-morpho/src/math.rs:L92`
+- **LiquidationSize** — `crates/mev-lending-morpho/src/math.rs:L33`
+- **borrow_assets()** — `crates/mev-lending-morpho/src/math.rs:L20`
+- **health_factor_threshold()** — `crates/mev-lending-morpho/src/math.rs:L84`
+- **health_factor()** — `crates/mev-lending-morpho/src/math.rs:L25`
+- **incentive_factor_matches_morpho_formula()** — `crates/mev-lending-morpho/src/math.rs:L67`
 - **Option** — `graph`
-- **ProtocolId** — `graph`
-- **Self** — `graph`
+- **shares_round_up_with_virtual_offsets()** — `crates/mev-lending-morpho/src/math.rs:L74`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 7 cross-community edges
+- No selected community has a direct edge to this one.

@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "34"
-graphify-node-count: 50
-graphify-internal-edges: 109
+graphify-node-count: 49
+graphify-internal-edges: 108
 tags:
   - graphify/community
 ---
@@ -16,9 +16,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - `crates/mev-engine/src/lib.rs` — 21 nodes
 - `graph` — 21 nodes
 - `crates/mev-sim/src/lib.rs` — 7 nodes
-- `crates/mev-risk/src/lib.rs` — 1 node
 
-## Nodes (50)
+## Nodes (49)
 
 - **Engine** — `crates/mev-engine/src/lib.rs:L48`
 - **lib.rs** — `crates/mev-engine/src/lib.rs:L1`
@@ -42,10 +41,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.scan_once()** — `crates/mev-engine/src/lib.rs:L266`
 - **lib.rs** — `crates/mev-sim/src/lib.rs:L1`
 - **.on_tx_done()** — `crates/mev-engine/src/lib.rs:L589`
-- **check_allowlist()** — `crates/mev-engine/src/lib.rs:L718`
+- **check_allowlist()** — `crates/mev-engine/src/lib.rs:L724`
 - **Mode** — `crates/mev-engine/src/lib.rs:L41`
-- **now_secs()** — `crates/mev-engine/src/lib.rs:L742`
-- **recv_opt()** — `crates/mev-engine/src/lib.rs:L735`
+- **now_secs()** — `crates/mev-engine/src/lib.rs:L748`
+- **recv_opt()** — `crates/mev-engine/src/lib.rs:L741`
 - **Result** — `graph`
 - **short()** — `crates/mev-sim/src/lib.rs:L80`
 - **.run()** — `crates/mev-engine/src/lib.rs:L213`
@@ -56,7 +55,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Address** — `graph`
 - **Arc** — `graph`
 - **DynProvider** — `graph`
-- **loan_cap()** — `crates/mev-risk/src/lib.rs:L102`
 - **String** — `graph`
 - **String** — `graph`
 - **UnboundedReceiver** — `graph`
@@ -75,8 +73,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 9 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 6 cross-community edges
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 6 cross-community edges
 - [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C027 - lib.rs (C027)|lib.rs (C027)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 2 cross-community edges

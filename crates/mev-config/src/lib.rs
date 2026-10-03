@@ -118,6 +118,17 @@ pub struct MorphoConfig {
     pub scan_step: u64,
 }
 
+/// Fluid vaults adapter (resolver-driven: no account index).
+#[derive(Debug, Clone, Deserialize)]
+pub struct FluidConfig {
+    pub enabled: bool,
+    pub vault_resolver: Address,
+    /// Asset -> USD oracle (8 decimals); the Aave oracle covers the usual vault tokens.
+    pub usd_oracle: Address,
+    /// T1 (ERC20/ETH collateral, ERC20 debt) vaults to watch. Each must be allowlisted on the executor.
+    pub vaults: Vec<Address>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChainConfig {
     pub name: String,
@@ -144,6 +155,7 @@ pub struct ChainConfig {
     pub aave: Option<AaveConfig>,
     pub compound_v3: Option<CompoundV3Config>,
     pub morpho: Option<MorphoConfig>,
+    pub fluid: Option<FluidConfig>,
 }
 
 impl ChainConfig {

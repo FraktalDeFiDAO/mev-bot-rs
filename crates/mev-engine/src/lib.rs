@@ -700,11 +700,17 @@ async fn build_liquidation(
             mev_lending_morpho::MorphoAdapter::new(m, arpc.clone(), cache).await?,
         ));
     }
+    if let Some(f) = cfg.fluid.clone().filter(|f| f.enabled) {
+        adapters.push(Box::new(
+            mev_lending_fluid::FluidAdapter::new(f, arpc.clone()).await?,
+        ));
+    }
     // Venues not live on this chain report their status; the runner logs and skips them.
     adapters.push(Box::new(mev_lending_radiant::Adapter::new()));
     adapters.push(Box::new(mev_lending_spark::Adapter::new()));
     adapters.push(Box::new(mev_lending_dolomite::Adapter::new()));
     adapters.push(Box::new(mev_lending_gearbox::Adapter::new()));
+    adapters.push(Box::new(mev_lending_silo::Adapter::new()));
     let via: Vec<Address> = lcfg
         .route_via
         .iter()
