@@ -17,6 +17,10 @@ interface IV3Factory {
     function getPool(address, address, uint24) external view returns (address);
 }
 
+interface IAlgebraFactory {
+    function poolByPair(address, address) external view returns (address);
+}
+
 interface IV2Pair {
     function token0() external view returns (address);
     function getReserves() external view returns (uint112, uint112, uint32);
@@ -29,6 +33,8 @@ contract ArbExecutorForkTest is Test {
     address constant USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
     address constant UNI_V3_FACTORY = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
     address constant SUSHI_V2_FACTORY = 0xc35DADB65012eC5796536bD9864eD8773aBc74C4;
+    address constant PANCAKE_V3_FACTORY = 0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865;
+    address constant CAMELOT_V3_FACTORY = 0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B;
 
     address owner = makeAddr("owner");
     address receiver = makeAddr("receiver");
@@ -128,5 +134,40 @@ contract ArbExecutorForkTest is Test {
         vm.prank(owner);
         vm.expectRevert(); // demands an absurd profit
         exec.execute(USDC, 5_000e6, 1_000_000e6, hops);
+    }
+
+    /// Round trip through a V3-style pool and back via Sushi V2 after creating an arb, so the new
+    /// callback is exercised for real. `v3Like` = Pancake V3 or Algebra pool for WETH/USDC.
+    function _arbVia(address v3Like) internal returns (uint256 profit) {
+        _createArb(30 ether);
+        bool usdcIsToken0OnSushi = IV2Pair(sushiPair).token0() == USDC;
+        ArbExecutor.Hop[] memory hops = new ArbExecutor.Hop[](2);
+        hops[0] = ArbExecutor.Hop(0, sushiPair, USDC, WETH, usdcIsToken0OnSushi, 30);
+        hops[1] = ArbExecutor.Hop(2, v3Like, WETH, USDC, WETH < USDC, 0);
+        vm.prank(owner);
+        profit = exec.execute(USDC, 2_000e6, 1, hops);
+        assertEq(IERC20Full(USDC).balanceOf(address(exec)), 0, "executor holds no USDC");
+        assertEq(IERC20Full(WETH).balanceOf(address(exec)), 0, "executor holds no WETH");
+    }
+
+    function test_pancakeV3Callback() public {
+        address pool = IV3Factory(PANCAKE_V3_FACTORY).getPool(WETH, USDC, 500);
+        assertTrue(pool != address(0), "pancake pool");
+        assertGt(_arbVia(pool), 0);
+    }
+
+    function test_algebraCallback() public {
+        address pool = IAlgebraFactory(CAMELOT_V3_FACTORY).poolByPair(WETH, USDC);
+        assertTrue(pool != address(0), "camelot v3 pool");
+        assertGt(_arbVia(pool), 0);
+    }
+
+    function test_newCallbacksRejectUnexpectedCaller() public {
+        vm.startPrank(attacker);
+        vm.expectRevert(ArbExecutor.Unauthorized.selector);
+        exec.pancakeV3SwapCallback(1, 0, "");
+        vm.expectRevert(ArbExecutor.Unauthorized.selector);
+        exec.algebraSwapCallback(1, 0, "");
+        vm.stopPrank();
     }
 }

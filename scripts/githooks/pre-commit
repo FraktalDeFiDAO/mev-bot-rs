@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Block secrets and unformatted code before they reach history.
 set -euo pipefail
+export PATH="$HOME/.foundry/bin:$HOME/.cargo/bin:$PATH"
 staged=$(git diff --cached --name-only --diff-filter=ACM)
 [ -z "$staged" ] && exit 0
 

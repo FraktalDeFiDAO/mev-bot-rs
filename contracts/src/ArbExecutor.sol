@@ -44,7 +44,7 @@ contract ArbExecutor {
     /// Hop kinds
     uint8 internal constant UNI_V2 = 0; // Uniswap V2 / Sushi V2 style pair with fixed fee `feeBps`
     uint8 internal constant CAMELOT_V2 = 1; // Camelot V2 pair (directional fees, uses pair.getAmountOut)
-    uint8 internal constant UNI_V3 = 2; // Uniswap V3 / Sushi V3 style pool
+    uint8 internal constant UNI_V3 = 2; // Uniswap V3 / Sushi V3 / PancakeSwap V3 / Algebra (Camelot V3) pools
 
     uint160 internal constant MIN_SQRT_RATIO_PLUS_ONE = 4295128740;
     uint160 internal constant MAX_SQRT_RATIO_MINUS_ONE = 1461446703485210103287273052203988822378723970341;
@@ -128,7 +128,23 @@ contract ArbExecutor {
         lastProfit = profit;
     }
 
+    /// @dev Uniswap V3 / Sushi V3.
     function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) external {
+        _payPool(amount0Delta, amount1Delta);
+    }
+
+    /// @dev PancakeSwap V3 — same swap() as Uniswap V3, different callback name.
+    function pancakeV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) external {
+        _payPool(amount0Delta, amount1Delta);
+    }
+
+    /// @dev Algebra (Camelot V3) — same swap() shape as Uniswap V3, different callback name.
+    function algebraSwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) external {
+        _payPool(amount0Delta, amount1Delta);
+    }
+
+    /// Pay the pool we're swapping on, only during that swap, never more than the hop's input.
+    function _payPool(int256 amount0Delta, int256 amount1Delta) internal {
         if (msg.sender != expectedPool) revert Unauthorized();
         uint256 owed = uint256(amount0Delta > 0 ? amount0Delta : amount1Delta);
         if (owed > expectedMaxIn) revert Unauthorized();
