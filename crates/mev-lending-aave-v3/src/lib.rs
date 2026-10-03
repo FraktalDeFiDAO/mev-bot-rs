@@ -8,16 +8,11 @@
 
 pub mod math;
 
-use std::{
-    collections::{BTreeSet, HashMap},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use alloy::{
     primitives::{Address, U256},
-    providers::{DynProvider, Provider},
-    rpc::types::Filter,
+    providers::DynProvider,
     sol_types::{SolCall, SolEvent},
 };
 use anyhow::{Context, Result};
@@ -29,8 +24,8 @@ use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
     ProtocolId,
 };
+use mev_lending_index::{EventIndex, IndexConfig, topic_address};
 use mev_rpc::{call, decode, multicall};
-use serde::{Deserialize, Serialize};
 use tracing::info;
 
 alloy::sol! {
@@ -40,24 +35,13 @@ alloy::sol! {
 pub const ID: ProtocolId = "aave-v3";
 /// getUserAccountData walks every reserve + oracle: keep batches small.
 const ACCOUNT_DATA_CHUNK: usize = 50;
-const MAX_SCAN_CHUNKS_PER_CALL: usize = 20;
-const SCAN_THROTTLE: Duration = Duration::from_millis(500);
 /// Flash this much more than the user's debt: Aave rounds variable debt up; excess is returned.
 const FLASH_BUFFER: f64 = 1.002;
-
-/// Borrowers seen in Borrow events, scanned newest-first so recent borrowers are found first.
-#[derive(Default, Serialize, Deserialize)]
-struct BorrowerIndex {
-    next_block: u64,
-    back_block: u64,
-    borrowers: BTreeSet<Address>,
-}
 
 pub struct AaveV3Adapter {
     cfg: AaveConfig,
     rpc: AdapterRpc,
-    cache_path: PathBuf,
-    index: BorrowerIndex,
+    index: EventIndex,
     reserves: Vec<Address>,
     decimals: HashMap<Address, u8>,
     feeds: Vec<Address>,
@@ -65,10 +49,17 @@ pub struct AaveV3Adapter {
 
 impl AaveV3Adapter {
     pub async fn new(cfg: AaveConfig, rpc: AdapterRpc, cache_path: PathBuf) -> Result<Self> {
-        let index = std::fs::read(&cache_path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<BorrowerIndex>(&b).ok())
-            .unwrap_or_default();
+        migrate_v1_cache(&cache_path, cfg.pool);
+        let index = EventIndex::open(IndexConfig {
+            addresses: vec![cfg.pool],
+            topics: vec![IAavePool::Borrow::SIGNATURE_HASH],
+            from_block: cfg.from_block,
+            step: cfg.scan_step,
+            max_requests: 20,
+            throttle: Duration::from_millis(500),
+            cache_path,
+            name: ID,
+        });
         let reserves = IAavePool::new(cfg.pool, &rpc.fast)
             .getReservesList()
             .call()
@@ -102,13 +93,12 @@ impl AaveV3Adapter {
             protocol = ID,
             reserves = reserves.len(),
             price_feeds = feeds.len(),
-            borrowers_cached = index.borrowers.len(),
+            borrowers_cached = index.len(),
             "adapter ready"
         );
         Ok(Self {
             cfg,
             rpc,
-            cache_path,
             index,
             reserves,
             decimals,
@@ -121,44 +111,6 @@ impl AaveV3Adapter {
             market: self.cfg.pool,
             account: user,
             sub_id: 0,
-        }
-    }
-
-    async fn get_borrows(&mut self, from: u64, to: u64) -> Result<()> {
-        tokio::time::sleep(SCAN_THROTTLE).await;
-        let filter = Filter::new()
-            .address(self.cfg.pool)
-            .event_signature(IAavePool::Borrow::SIGNATURE_HASH)
-            .from_block(from)
-            .to_block(to);
-        for l in self
-            .rpc
-            .scan
-            .get_logs(&filter)
-            .await
-            .context("Borrow log scan")?
-        {
-            if let Some(t) = l.topics().get(2) {
-                self.index.borrowers.insert(Address::from_word(*t));
-            }
-        }
-        Ok(())
-    }
-
-    /// Scan [from, to], shrinking on non-rate-limit errors. Returns the range actually scanned.
-    async fn scan(&mut self, mut from: u64, mut to: u64, backward: bool) -> Result<(u64, u64)> {
-        loop {
-            match self.get_borrows(from, to).await {
-                Ok(()) => return Ok((from, to)),
-                Err(e) if to > from + 1_000 && !mev_rpc::is_rate_limit(&e) => {
-                    if backward {
-                        from = to - (to - from) / 4;
-                    } else {
-                        to = from + (to - from) / 4;
-                    }
-                }
-                Err(e) => return Err(e),
-            }
         }
     }
 
@@ -248,51 +200,21 @@ impl LiquidationAdapter for AaveV3Adapter {
     }
 
     async fn index(&mut self) -> Result<bool> {
-        let head = self.rpc.scan.get_block_number().await?;
-        if self.index.next_block == 0 {
-            self.index.next_block = head + 1;
-            self.index.back_block = head + 1;
-        }
-        let step = self.cfg.scan_step.max(1);
-        let mut chunks = 0;
-        while self.index.next_block <= head && chunks < MAX_SCAN_CHUNKS_PER_CALL {
-            let from = self.index.next_block;
-            let (_, to) = self.scan(from, (from + step - 1).min(head), false).await?;
-            self.index.next_block = to + 1;
-            chunks += 1;
-        }
-        while self.index.back_block > self.cfg.from_block && chunks < MAX_SCAN_CHUNKS_PER_CALL {
-            let to = self.index.back_block - 1;
-            let (from, _) = self
-                .scan(
-                    to.saturating_sub(step - 1).max(self.cfg.from_block),
-                    to,
-                    true,
-                )
-                .await?;
-            self.index.back_block = from;
-            chunks += 1;
-        }
-        if let Some(dir) = self.cache_path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        std::fs::write(&self.cache_path, serde_json::to_vec(&self.index)?)?;
-        let done = self.index.back_block <= self.cfg.from_block;
-        info!(
-            protocol = ID,
-            borrowers = self.index.borrowers.len(),
-            history_left_blocks = self.index.back_block.saturating_sub(self.cfg.from_block),
-            done,
-            "index step"
-        );
-        Ok(done)
+        let pool = self.cfg.pool;
+        // Borrow(reserve, user, onBehalfOf indexed, ...): the debt belongs to onBehalfOf (topic 2).
+        self.index
+            .step(&self.rpc.scan, |l| {
+                topic_address(l, 2)
+                    .map(|u| vec![(pool, u)])
+                    .unwrap_or_default()
+            })
+            .await
     }
 
     fn accounts(&self) -> Vec<AccountRef> {
         self.index
-            .borrowers
-            .iter()
-            .map(|u| self.account(*u))
+            .accounts()
+            .map(|(_, u)| self.account(*u))
             .collect()
     }
 
@@ -374,5 +296,67 @@ impl LiquidationAdapter for AaveV3Adapter {
 
     fn assets(&self) -> Vec<Address> {
         self.reserves.clone()
+    }
+}
+
+/// One-time migration from the pre-`mev-lending-index` cache format (`borrowers: [address]`).
+fn migrate_v1_cache(path: &std::path::Path, pool: Address) {
+    #[derive(serde::Deserialize)]
+    struct V1 {
+        next_block: u64,
+        back_block: u64,
+        borrowers: Vec<Address>,
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return;
+    };
+    let Ok(v1) = serde_json::from_slice::<V1>(&bytes) else {
+        return;
+    };
+    let v2 = serde_json::json!({
+        "next_block": v1.next_block,
+        "back_block": v1.back_block,
+        "accounts": v1.borrowers.iter().map(|b| (pool, *b)).collect::<Vec<_>>(),
+    });
+    if std::fs::write(path, v2.to_string()).is_ok() {
+        info!(
+            protocol = ID,
+            borrowers = v1.borrowers.len(),
+            "migrated borrower cache to v2 format"
+        );
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+
+    #[test]
+    fn v1_cache_is_migrated_to_market_account_pairs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("aave.json");
+        let pool = Address::with_last_byte(0xaa);
+        let user = Address::with_last_byte(1);
+        std::fs::write(
+            &path,
+            serde_json::json!({ "next_block": 10, "back_block": 5, "borrowers": [user] })
+                .to_string(),
+        )
+        .unwrap();
+        migrate_v1_cache(&path, pool);
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(v["next_block"], 10);
+        assert_eq!(
+            v["accounts"][0][0].as_str().unwrap().to_lowercase(),
+            pool.to_string().to_lowercase()
+        );
+        assert_eq!(
+            v["accounts"][0][1].as_str().unwrap().to_lowercase(),
+            user.to_string().to_lowercase()
+        );
+        // Already-migrated (or unrelated) files are left alone.
+        let before = std::fs::read(&path).unwrap();
+        migrate_v1_cache(&path, pool);
+        assert_eq!(before, std::fs::read(&path).unwrap());
     }
 }
