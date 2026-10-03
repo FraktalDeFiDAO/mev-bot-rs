@@ -18,6 +18,13 @@ Durable facts and next actions only.
   WS events stream. Balancer vault is thin post-2025 exploit: USDC loan cap ~$5k, ARB ~$4k.
 - Only 8 pool updates/min via PublicNode WS — expect more with Alchemy/dRPC.
 
+## Diagnosis 2026-10-03 (see DECISIONS #19–21)
+
+- Crash loop on DNS outage fixed (WS reconnect + backoff). Image rebuilt; user restarts with `scripts/run.sh live`.
+- Zero trades = coverage: watched majors are efficient; volume is on Uniswap v4, PancakeSwap v3,
+  Camelot v3 (Algebra), and long-tail tokens. Tool: `target/release/mev-analyze` (use a getLogs-capable
+  RPC, e.g. ARBITRUM_HTTP_URL=https://arb1.arbitrum.io/rpc; Alchemy free caps getLogs at 10 blocks).
+
 ## Next
 
 1. User fills `.env` (ARBITRUM_HTTP_URL, ARBITRUM_WS_URL, PRIVATE_KEY of fresh hot wallet, PROFIT_RECEIVER).

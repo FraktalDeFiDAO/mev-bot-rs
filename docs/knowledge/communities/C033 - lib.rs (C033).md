@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "33"
-graphify-node-count: 19
-graphify-internal-edges: 41
+graphify-node-count: 24
+graphify-internal-edges: 49
 tags:
   - graphify/community
 ---
@@ -14,9 +14,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Source files
 
 - `crates/mev-state/src/lib.rs` — 14 nodes
-- `graph` — 5 nodes
+- `graph` — 7 nodes
+- `crates/mev-analytics/src/lib.rs` — 3 nodes
 
-## Nodes (19)
+## Nodes (24)
 
 - **PoolStore** — `crates/mev-state/src/lib.rs:L11`
 - **Address** — `graph`
@@ -26,17 +27,22 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.apply_log()** — `crates/mev-state/src/lib.rs:L71`
 - **.rate()** — `crates/mev-state/src/lib.rs:L117`
 - **.usd_per_raw_unit()** — `crates/mev-state/src/lib.rs:L96`
+- **lib.rs** — `crates/mev-analytics/src/lib.rs:L1`
 - **Option** — `graph`
 - **pair_key()** — `crates/mev-state/src/lib.rs:L16`
+- **pair_spreads()** — `crates/mev-analytics/src/lib.rs:L19`
 - **Vec** — `graph`
 - **.addresses()** — `crates/mev-state/src/lib.rs:L41`
 - **.insert()** — `crates/mev-state/src/lib.rs:L21`
 - **.set_state()** — `crates/mev-state/src/lib.rs:L64`
 - **lib.rs** — `crates/mev-state/src/lib.rs:L1`
+- **PairSpread** — `crates/mev-analytics/src/lib.rs:L8`
+- **Address** — `graph`
 - **HashMap** — `graph`
 - **.is_empty()** — `crates/mev-state/src/lib.rs:L37`
 - **.len()** — `crates/mev-state/src/lib.rs:L33`
 - **Log** — `graph`
+- **Vec** — `graph`
 
 ## Related communities
 

@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "19"
-graphify-node-count: 1
-graphify-internal-edges: 0
+graphify-node-count: 3
+graphify-internal-edges: 3
 tags:
   - graphify/community
 ---
@@ -13,11 +13,14 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-analytics/src/lib.rs` — 1 node
+- `crates/mev-analytics/src/bin/mev-analyze.rs` — 2 nodes
+- `graph` — 1 node
 
-## Nodes (1)
+## Nodes (3)
 
-- **lib.rs** — `crates/mev-analytics/src/lib.rs:L1`
+- **main()** — `crates/mev-analytics/src/bin/mev-analyze.rs:L13`
+- **mev-analyze.rs** — `crates/mev-analytics/src/bin/mev-analyze.rs:L1`
+- **Result** — `graph`
 
 ## Related communities
 
