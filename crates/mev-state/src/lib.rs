@@ -144,3 +144,228 @@ impl PoolStore {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::{Address, I256, U160, aliases::I24, aliases::U112};
+    use mev_bindings::IPancakeV3Pool;
+    use mev_types::{PoolInfo, PoolKind};
+
+    const A: Address = Address::with_last_byte(0xa);
+    const B: Address = Address::with_last_byte(0xb);
+    const USD: Address = Address::with_last_byte(0xc);
+
+    fn pool(addr: u8, kind: PoolKind, t0: Address, t1: Address, state: PoolState) -> Pool {
+        Pool::new(
+            PoolInfo {
+                address: Address::with_last_byte(addr),
+                dex: "t".into(),
+                kind,
+                token0: t0,
+                token1: t1,
+            },
+            state,
+        )
+    }
+
+    fn rpc_log(address: Address, data: alloy::primitives::LogData) -> Log {
+        Log {
+            inner: alloy::primitives::Log { address, data },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn indexes_by_pair_and_ignores_duplicate_inserts() {
+        let mut s = PoolStore::default();
+        let v2 = PoolKind::UniV2 { fee_bps: 30 };
+        s.insert(pool(
+            1,
+            v2,
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 1.0,
+                reserve1: 1.0,
+            },
+        ));
+        s.insert(pool(
+            2,
+            v2,
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 1.0,
+                reserve1: 1.0,
+            },
+        ));
+        s.insert(pool(
+            1,
+            v2,
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 9.0,
+                reserve1: 9.0,
+            },
+        ));
+        assert_eq!(s.len(), 2);
+        assert_eq!(s.siblings(&Address::with_last_byte(1)).len(), 2);
+        assert_eq!(
+            s.pools_for(B, A).len(),
+            2,
+            "pair lookup is order-independent"
+        );
+        assert!(s.siblings(&Address::with_last_byte(9)).is_empty());
+    }
+
+    #[test]
+    fn applies_v2_sync() {
+        let mut s = PoolStore::default();
+        s.insert(pool(
+            1,
+            PoolKind::UniV2 { fee_bps: 30 },
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 1.0,
+                reserve1: 1.0,
+            },
+        ));
+        let ev = IUniswapV2Pair::Sync {
+            reserve0: U112::from(500),
+            reserve1: U112::from(700),
+        };
+        let addr = Address::with_last_byte(1);
+        assert_eq!(
+            s.apply_log(&rpc_log(addr, ev.encode_log_data())),
+            Some(addr)
+        );
+        assert_eq!(
+            s.get(&addr).unwrap().state,
+            PoolState::V2 {
+                reserve0: 500.0,
+                reserve1: 700.0
+            }
+        );
+    }
+
+    #[test]
+    fn applies_v3_and_pancake_swaps() {
+        let mut s = PoolStore::default();
+        let start = PoolState::V3 {
+            sqrt_price: 1.0,
+            liquidity: 1.0,
+        };
+        s.insert(pool(1, PoolKind::UniV3 { fee: 500 }, A, B, start.clone()));
+        s.insert(pool(2, PoolKind::PancakeV3 { fee: 500 }, A, B, start));
+        let q96 = U160::from(1u8) << 96; // sqrt price 1.0
+        let uni = IUniswapV3Pool::Swap {
+            sender: A,
+            recipient: B,
+            amount0: I256::ZERO,
+            amount1: I256::ZERO,
+            sqrtPriceX96: q96 * U160::from(2u8),
+            liquidity: 42,
+            tick: I24::ZERO,
+        };
+        assert!(
+            s.apply_log(&rpc_log(Address::with_last_byte(1), uni.encode_log_data()))
+                .is_some()
+        );
+        assert_eq!(
+            s.get(&Address::with_last_byte(1)).unwrap().state,
+            PoolState::V3 {
+                sqrt_price: 2.0,
+                liquidity: 42.0
+            }
+        );
+        let pcs = IPancakeV3Pool::Swap {
+            sender: A,
+            recipient: B,
+            amount0: I256::ZERO,
+            amount1: I256::ZERO,
+            sqrtPriceX96: q96,
+            liquidity: 7,
+            tick: I24::ZERO,
+            protocolFeesToken0: 0,
+            protocolFeesToken1: 0,
+        };
+        assert!(
+            s.apply_log(&rpc_log(Address::with_last_byte(2), pcs.encode_log_data()))
+                .is_some()
+        );
+        assert_eq!(
+            s.get(&Address::with_last_byte(2)).unwrap().state,
+            PoolState::V3 {
+                sqrt_price: 1.0,
+                liquidity: 7.0
+            }
+        );
+    }
+
+    #[test]
+    fn ignores_unknown_pools_and_events() {
+        let mut s = PoolStore::default();
+        let ev = IUniswapV2Pair::Sync {
+            reserve0: U112::from(1),
+            reserve1: U112::from(1),
+        };
+        assert_eq!(
+            s.apply_log(&rpc_log(Address::with_last_byte(5), ev.encode_log_data())),
+            None
+        );
+        s.insert(pool(
+            1,
+            PoolKind::UniV2 { fee_bps: 30 },
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 1.0,
+                reserve1: 1.0,
+            },
+        ));
+        let other = alloy::primitives::LogData::new_unchecked(
+            vec![B256::with_last_byte(1)],
+            Default::default(),
+        );
+        assert_eq!(
+            s.apply_log(&rpc_log(Address::with_last_byte(1), other)),
+            None
+        );
+    }
+
+    #[test]
+    fn usd_price_direct_and_via_native() {
+        let mut s = PoolStore::default();
+        let v2 = PoolKind::UniV2 { fee_bps: 30 };
+        // 1 NATIVE(A, 18 dec raw) = 2000 USD raw units (USD has 6 dec): reserves 1e18 : 2000e6.
+        s.insert(pool(
+            1,
+            v2,
+            A,
+            USD,
+            PoolState::V2 {
+                reserve0: 1e18,
+                reserve1: 2_000e6,
+            },
+        ));
+        // 1 B = 0.5 A: reserves 2e18 B : 1e18 A (token0 = A, token1 = B).
+        s.insert(pool(
+            2,
+            v2,
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 1e18,
+                reserve1: 2e18,
+            },
+        ));
+        let usd_per_a = s.usd_per_raw_unit(A, USD, 6, A).unwrap();
+        assert!((usd_per_a * 1e18 - 2_000.0).abs() < 1e-6);
+        let usd_per_b = s.usd_per_raw_unit(B, USD, 6, A).unwrap();
+        assert!((usd_per_b * 1e18 - 1_000.0).abs() < 1e-6);
+        assert!((s.usd_per_raw_unit(USD, USD, 6, A).unwrap() - 1e-6).abs() < 1e-18);
+    }
+}

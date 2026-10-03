@@ -2884,6 +2884,7 @@ dependencies = [
  "anyhow",
  "mev-types",
  "serde",
+ "tempfile",
  "toml",
 ]
 
@@ -3138,6 +3139,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
 ]
 

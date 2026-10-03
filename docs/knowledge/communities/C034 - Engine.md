@@ -41,10 +41,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.scan_once()** — `crates/mev-engine/src/lib.rs:L266`
 - **lib.rs** — `crates/mev-sim/src/lib.rs:L1`
 - **.on_tx_done()** — `crates/mev-engine/src/lib.rs:L589`
-- **check_allowlist()** — `crates/mev-engine/src/lib.rs:L724`
+- **check_allowlist()** — `crates/mev-engine/src/lib.rs:L730`
 - **Mode** — `crates/mev-engine/src/lib.rs:L41`
-- **now_secs()** — `crates/mev-engine/src/lib.rs:L748`
-- **recv_opt()** — `crates/mev-engine/src/lib.rs:L741`
+- **now_secs()** — `crates/mev-engine/src/lib.rs:L754`
+- **recv_opt()** — `crates/mev-engine/src/lib.rs:L747`
 - **Result** — `graph`
 - **short()** — `crates/mev-sim/src/lib.rs:L80`
 - **.run()** — `crates/mev-engine/src/lib.rs:L213`

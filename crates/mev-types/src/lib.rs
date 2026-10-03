@@ -77,3 +77,37 @@ pub struct Opportunity {
     pub buy_pool: Address,
     pub sell_pool: Address,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hop_kinds_match_executor_constants() {
+        assert_eq!(PoolKind::UniV2 { fee_bps: 30 }.hop_kind(), 0);
+        assert_eq!(PoolKind::CamelotV2.hop_kind(), 1);
+        // All V3-style pools share the executor's swap() path.
+        assert_eq!(PoolKind::UniV3 { fee: 500 }.hop_kind(), 2);
+        assert_eq!(PoolKind::PancakeV3 { fee: 500 }.hop_kind(), 2);
+        assert_eq!(PoolKind::AlgebraV3.hop_kind(), 2);
+    }
+
+    #[test]
+    fn pool_info_other_and_has() {
+        let (a, b, c) = (
+            Address::with_last_byte(1),
+            Address::with_last_byte(2),
+            Address::with_last_byte(3),
+        );
+        let p = PoolInfo {
+            address: Address::ZERO,
+            dex: "x".into(),
+            kind: PoolKind::CamelotV2,
+            token0: a,
+            token1: b,
+        };
+        assert_eq!(p.other(a), b);
+        assert_eq!(p.other(b), a);
+        assert!(p.has(a) && p.has(b) && !p.has(c));
+    }
+}

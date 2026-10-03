@@ -428,3 +428,44 @@ pub fn build_store(
     );
     kept
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const USD: Address = Address::with_last_byte(0xc);
+    const WETH: Address = Address::with_last_byte(0xe);
+    const TOKEN: Address = Address::with_last_byte(0xf);
+
+    fn v2(addr: u8, t0: Address, t1: Address, r0: f64, r1: f64) -> Pool {
+        let info = PoolInfo {
+            address: Address::with_last_byte(addr),
+            dex: "t".into(),
+            kind: PoolKind::UniV2 { fee_bps: 30 },
+            token0: t0,
+            token1: t1,
+        };
+        Pool::new(
+            info,
+            PoolState::V2 {
+                reserve0: r0,
+                reserve1: r1,
+            },
+        )
+    }
+
+    #[test]
+    fn build_store_drops_illiquid_and_single_pool_pairs() {
+        // WETH/USD at $2,000 (USD 6 dec): two deep pools ($200k/side) -> kept.
+        let deep_a = v2(1, USD, WETH, 200_000e6, 100e18);
+        let deep_b = v2(2, USD, WETH, 200_000e6, 100e18);
+        // A third WETH/USD pool with ~$200/side -> dropped by the $5k floor.
+        let shallow = v2(3, USD, WETH, 200e6, 0.1e18);
+        // TOKEN/WETH has a single deep pool -> nothing to arbitrage against -> dropped.
+        let lonely = v2(4, TOKEN, WETH, 1_000_000e18, 100e18);
+        let store = build_store(vec![deep_a, deep_b, shallow, lonely], 5_000.0, USD, 6, WETH);
+        let mut kept: Vec<u8> = store.addresses().iter().map(|a| a.as_slice()[19]).collect();
+        kept.sort();
+        assert_eq!(kept, vec![1, 2]);
+    }
+}

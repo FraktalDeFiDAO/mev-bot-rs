@@ -254,3 +254,61 @@ impl Secrets {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo_config() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/arbitrum.toml")
+    }
+
+    #[test]
+    fn shipped_arbitrum_config_is_valid() {
+        let c = ChainConfig::load(&repo_config()).unwrap();
+        assert_eq!(c.chain_id, 42161);
+        assert!(!c.pairs.is_empty() && !c.dexes.is_empty());
+        assert!(c.token("WETH").is_ok());
+        assert_eq!(c.symbol(c.token("USDC").unwrap()), "USDC");
+        assert!(c.liquidation.as_ref().is_some_and(|l| l.enabled));
+        assert!(
+            c.aave.is_some() && c.compound_v3.is_some() && c.morpho.is_some() && c.fluid.is_some()
+        );
+        assert_eq!(c.pair_addresses().unwrap().len(), c.pairs.len());
+    }
+
+    #[test]
+    fn unknown_token_in_pairs_is_rejected() {
+        let raw = std::fs::read_to_string(repo_config()).unwrap();
+        let bad = raw.replacen("[\"WETH\", \"USDC\"]", "[\"WETH\", \"NOPE\"]", 1);
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bad.toml");
+        std::fs::write(&p, bad).unwrap();
+        let err = ChainConfig::load(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("NOPE"),
+            "error should name the bad symbol: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_symbol_falls_back_to_address() {
+        let c = ChainConfig::load(&repo_config()).unwrap();
+        let a = Address::with_last_byte(0x42);
+        assert_eq!(c.symbol(a), a.to_string());
+    }
+
+    #[test]
+    fn secrets_debug_never_prints_the_private_key() {
+        let s = Secrets {
+            http_url: "http://x".into(),
+            ws_url: "ws://x".into(),
+            private_key: Some("0xdeadbeef".into()),
+            profit_receiver: None,
+            executor: None,
+        };
+        let shown = format!("{s:?}");
+        assert!(!shown.contains("deadbeef"));
+        assert!(shown.contains("redacted"));
+    }
+}

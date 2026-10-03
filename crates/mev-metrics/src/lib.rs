@@ -88,3 +88,38 @@ fn open(dir: &std::path::Path, day: &str) -> Result<BufWriter<File>> {
         .open(dir.join(format!("events-{day}.jsonl")))?;
     Ok(BufWriter::new(f))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writes_jsonl_events_counters_and_heartbeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = Metrics::new(dir.path().to_path_buf()).unwrap();
+        m.event("candidate", json!({ "x": 1 }));
+        m.event("sent", json!({ "hash": "0xabc" }));
+        m.update(|c| {
+            c.sent += 2;
+            c.profit_usd += 1.5;
+        });
+        m.heartbeat();
+
+        let day = Utc::now().format("%Y-%m-%d").to_string();
+        let text = std::fs::read_to_string(dir.path().join(format!("events-{day}.jsonl"))).unwrap();
+        let lines: Vec<Value> = text
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["kind"], "candidate");
+        assert_eq!(lines[1]["data"]["hash"], "0xabc");
+        let c = m.snapshot();
+        assert_eq!((c.sent, c.profit_usd), (2, 1.5));
+        let hb: i64 = std::fs::read_to_string(dir.path().join("heartbeat"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!((Utc::now().timestamp() - hb).abs() < 5);
+    }
+}

@@ -149,3 +149,67 @@ pub fn to_sol_call(c: &mev_lending::ProtocolCall) -> ArbExecutor::ProtocolCall {
         approveAmount: c.approve_amount,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::{
+        primitives::{Address, U256},
+        sol_types::SolCall,
+    };
+
+    #[test]
+    fn hop_and_call_conversions_preserve_fields() {
+        let h = mev_types::Hop {
+            kind: 2,
+            pool: Address::with_last_byte(1),
+            token_in: Address::with_last_byte(2),
+            token_out: Address::with_last_byte(3),
+            zero_for_one: true,
+            fee_bps: 30,
+        };
+        let s = to_sol_hop(&h);
+        assert_eq!(
+            (
+                s.kind,
+                s.pool,
+                s.tokenIn,
+                s.tokenOut,
+                s.zeroForOne,
+                s.feeBps
+            ),
+            (2, h.pool, h.token_in, h.token_out, true, 30)
+        );
+        let c = mev_lending::ProtocolCall {
+            target: Address::with_last_byte(9),
+            data: vec![1, 2, 3].into(),
+            approve_spender: Address::with_last_byte(8),
+            approve_amount: U256::from(77),
+        };
+        let sc = to_sol_call(&c);
+        assert_eq!(
+            (
+                sc.target,
+                sc.data.to_vec(),
+                sc.approveSpender,
+                sc.approveAmount
+            ),
+            (c.target, vec![1, 2, 3], c.approve_spender, c.approve_amount)
+        );
+    }
+
+    #[test]
+    fn liquidate_calldata_round_trips_through_the_abi() {
+        let call = ArbExecutor::liquidateCall {
+            debt: Address::with_last_byte(1),
+            collateral: Address::with_last_byte(2),
+            flashAmount: U256::from(1_000),
+            minProfit: U256::from(5),
+            calls: vec![],
+            hops: vec![],
+        };
+        let decoded = ArbExecutor::liquidateCall::abi_decode(&call.abi_encode()).unwrap();
+        assert_eq!(decoded.debt, call.debt);
+        assert_eq!(decoded.flashAmount, call.flashAmount);
+    }
+}

@@ -55,3 +55,43 @@ pub fn pair_spreads(store: &PoolStore) -> Vec<PairSpread> {
     out.sort_by(|a, b| b.best_edge_bps.total_cmp(&a.best_edge_bps));
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mev_dex::PoolState;
+    use mev_types::{PoolInfo, PoolKind};
+
+    fn v2(addr: u8, r0: f64, r1: f64) -> Pool {
+        let info = PoolInfo {
+            address: Address::with_last_byte(addr),
+            dex: "t".into(),
+            kind: PoolKind::UniV2 { fee_bps: 30 },
+            token0: Address::with_last_byte(1),
+            token1: Address::with_last_byte(2),
+        };
+        Pool::new(
+            info,
+            PoolState::V2 {
+                reserve0: r0,
+                reserve1: r1,
+            },
+        )
+    }
+
+    #[test]
+    fn detects_positive_and_negative_edges() {
+        let mut s = PoolStore::default();
+        s.insert(v2(10, 1e6, 2e6));
+        s.insert(v2(11, 1e6, 2.2e6)); // 10% apart: well above 2 × 0.3% fees
+        let spreads = pair_spreads(&s);
+        assert_eq!(spreads.len(), 1);
+        assert!(spreads[0].best_edge_bps > 0.0);
+        assert_eq!(spreads[0].pools, 2);
+
+        let mut t = PoolStore::default();
+        t.insert(v2(10, 1e6, 2e6));
+        t.insert(v2(11, 1e6, 2e6)); // identical prices: fees make every round trip negative
+        assert!(pair_spreads(&t)[0].best_edge_bps < 0.0);
+    }
+}
