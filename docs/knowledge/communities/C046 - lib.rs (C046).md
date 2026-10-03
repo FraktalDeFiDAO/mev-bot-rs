@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "46"
-graphify-node-count: 19
-graphify-internal-edges: 29
+graphify-node-count: 18
+graphify-internal-edges: 28
 tags:
   - graphify/community
 ---
@@ -13,10 +13,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-lending-spark/src/lib.rs` — 13 nodes
+- `crates/mev-lending-spark/src/lib.rs` — 12 nodes
 - `graph` — 6 nodes
 
-## Nodes (19)
+## Nodes (18)
 
 - **Adapter** — `crates/mev-lending-spark/src/lib.rs:L17`
 - **.plan()** — `crates/mev-lending-spark/src/lib.rs:L49`
@@ -32,7 +32,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Result** — `graph`
 - **.id()** — `crates/mev-lending-spark/src/lib.rs:L27`
 - **.index()** — `crates/mev-lending-spark/src/lib.rs:L37`
-- **.status()** — `crates/mev-lending-spark/src/lib.rs:L31`
 - **is_not_live_and_never_plans()** — `crates/mev-lending-spark/src/lib.rs:L71`
 - **Option** — `graph`
 - **ProtocolId** — `graph`
@@ -40,6 +39,5 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C048 - Adapter|Adapter]] — 1 cross-community edges

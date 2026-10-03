@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "43"
-graphify-node-count: 34
-graphify-internal-edges: 76
+graphify-node-count: 32
+graphify-internal-edges: 73
 tags:
   - graphify/community
 ---
@@ -14,17 +14,15 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Source files
 
 - `crates/mev-lending-morpho/src/lib.rs` — 19 nodes
-- `graph` — 13 nodes
+- `graph` — 12 nodes
 - `crates/mev-config/src/lib.rs` — 1 node
-- `crates/mev-lending/src/lib.rs` — 1 node
 
-## Nodes (34)
+## Nodes (32)
 
 - **MorphoAdapter** — `crates/mev-lending-morpho/src/lib.rs:L76`
 - **.health()** — `crates/mev-lending-morpho/src/lib.rs:L286`
 - **.plan()** — `crates/mev-lending-morpho/src/lib.rs:L352`
 - **.market_states()** — `crates/mev-lending-morpho/src/lib.rs:L191`
-- **AdapterRpc** — `crates/mev-lending/src/lib.rs:L90`
 - **.new()** — `crates/mev-lending-morpho/src/lib.rs:L91`
 - **.market_ids()** — `crates/mev-lending-morpho/src/lib.rs:L132`
 - **lib.rs** — `crates/mev-lending-morpho/src/lib.rs:L1`
@@ -47,7 +45,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.id()** — `crates/mev-lending-morpho/src/lib.rs:L254`
 - **HashMap** — `graph`
 - **DynProvider** — `graph`
-- **DynProvider** — `graph`
 - **Mutex** — `graph`
 - **Option** — `graph`
 - **PathBuf** — `graph`
@@ -57,11 +54,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 6 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 2 cross-community edges
-- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C048 - Adapter|Adapter]] — 1 cross-community edges

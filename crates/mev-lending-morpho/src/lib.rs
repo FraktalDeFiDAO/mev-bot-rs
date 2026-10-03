@@ -129,6 +129,11 @@ impl MorphoAdapter {
         Ok(Self { feeds, ..me })
     }
 
+    /// Track a (market, borrower) learned elsewhere (another indexer, a liquidation feed, tests).
+    pub fn track(&mut self, id: B256, borrower: Address) {
+        self.index.insert((id, borrower));
+    }
+
     fn market_ids(&self) -> Vec<B256> {
         self.index
             .accounts()

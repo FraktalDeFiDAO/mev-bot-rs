@@ -83,8 +83,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 16 cross-community edges
-- [[docs/knowledge/communities/C048 - Adapter|Adapter]] — 6 cross-community edges
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 22 cross-community edges
 - [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 4 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 3 cross-community edges
 - [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 3 cross-community edges

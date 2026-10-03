@@ -18,4 +18,8 @@ mev-oracle = { workspace = true }
 mev-rpc = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3"
+mev-config = { workspace = true }
+mev-rpc = { workspace = true }
+tokio = { workspace = true }
 proptest = { workspace = true }

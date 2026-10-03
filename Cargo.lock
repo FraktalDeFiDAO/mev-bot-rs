@@ -3038,6 +3038,8 @@ dependencies = [
  "mev-oracle",
  "mev-rpc",
  "proptest",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 
@@ -3064,6 +3066,8 @@ dependencies = [
  "mev-lending",
  "mev-oracle",
  "mev-rpc",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 
@@ -3106,6 +3110,8 @@ dependencies = [
  "mev-oracle",
  "mev-rpc",
  "proptest",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 

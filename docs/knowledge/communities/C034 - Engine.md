@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "34"
-graphify-node-count: 50
-graphify-internal-edges: 109
+graphify-node-count: 49
+graphify-internal-edges: 108
 tags:
   - graphify/community
 ---
@@ -16,9 +16,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - `crates/mev-engine/src/lib.rs` — 21 nodes
 - `graph` — 21 nodes
 - `crates/mev-sim/src/lib.rs` — 7 nodes
-- `crates/mev-risk/src/lib.rs` — 1 node
 
-## Nodes (50)
+## Nodes (49)
 
 - **Engine** — `crates/mev-engine/src/lib.rs:L48`
 - **lib.rs** — `crates/mev-engine/src/lib.rs:L1`
@@ -56,7 +55,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Address** — `graph`
 - **Arc** — `graph`
 - **DynProvider** — `graph`
-- **loan_cap()** — `crates/mev-risk/src/lib.rs:L102`
 - **String** — `graph`
 - **String** — `graph`
 - **UnboundedReceiver** — `graph`

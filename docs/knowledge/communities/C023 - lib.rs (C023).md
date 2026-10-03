@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "23"
-graphify-node-count: 44
-graphify-internal-edges: 78
+graphify-node-count: 54
+graphify-internal-edges: 94
 tags:
   - graphify/community
 ---
@@ -13,15 +13,16 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `graph` — 19 nodes
+- `graph` — 21 nodes
 - `crates/mev-exec/src/lib.rs` — 18 nodes
+- `crates/mev-types/src/lib.rs` — 10 nodes
 - `crates/mev-bindings/src/lib.rs` — 5 nodes
-- `crates/mev-types/src/lib.rs` — 2 nodes
 
-## Nodes (44)
+## Nodes (54)
 
 - **Sender** — `crates/mev-exec/src/lib.rs:L23`
 - **Opportunity** — `crates/mev-types/src/lib.rs:L69`
+- **PoolInfo** — `crates/mev-types/src/lib.rs:L34`
 - **lib.rs** — `crates/mev-exec/src/lib.rs:L1`
 - **.send_calldata()** — `crates/mev-exec/src/lib.rs:L102`
 - **.send_liquidation()** — `crates/mev-exec/src/lib.rs:L90`
@@ -31,9 +32,12 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Result** — `graph`
 - **.new()** — `crates/mev-exec/src/lib.rs:L43`
 - **.send()** — `crates/mev-exec/src/lib.rs:L73`
+- **lib.rs** — `crates/mev-types/src/lib.rs:L1`
 - **.sign_and_broadcast()** — `crates/mev-exec/src/lib.rs:L125`
 - **.wait()** — `crates/mev-exec/src/lib.rs:L164`
+- **Address** — `graph`
 - **execute_calldata()** — `crates/mev-exec/src/lib.rs:L200`
+- **PoolKind** — `crates/mev-types/src/lib.rs:L8`
 - **TxHash** — `graph`
 - **U256** — `graph`
 - **Vec** — `graph`
@@ -45,28 +49,35 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **liquidate_calldata_decodes_to_the_plan()** — `crates/mev-exec/src/lib.rs:L283`
 - **to_sol_call()** — `crates/mev-bindings/src/lib.rs:L144`
 - **to_sol_hop()** — `crates/mev-bindings/src/lib.rs:L133`
+- **.has()** — `crates/mev-types/src/lib.rs:L51`
+- **.other()** — `crates/mev-types/src/lib.rs:L43`
 - **Address** — `graph`
 - **DynProvider** — `graph`
 - **execute_calldata_decodes_to_the_opportunity()** — `crates/mev-exec/src/lib.rs:L263`
 - **hop()** — `crates/mev-exec/src/lib.rs:L239`
+- **.hop_kind()** — `crates/mev-types/src/lib.rs:L23`
 - **AtomicU64** — `graph`
 - **Duration** — `graph`
 - **Error** — `graph`
 - **EthereumWallet** — `graph`
 - **F** — `graph`
+- **hop_kinds_match_executor_constants()** — `crates/mev-types/src/lib.rs:L86`
 - **IntoIterator** — `graph`
 - **Item** — `graph`
 - **liquidate_calldata_round_trips_through_the_abi()** — `crates/mev-bindings/src/lib.rs:L202`
 - **Option** — `graph`
 - **Output** — `graph`
+- **pool_info_other_and_has()** — `crates/mev-types/src/lib.rs:L96`
 - **recognizes_nonce_errors_from_nodes()** — `crates/mev-exec/src/lib.rs:L251`
 - **Self** — `graph`
+- **String** — `graph`
 - **String** — `graph`
 - **U256** — `graph`
 - **Vec** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 7 cross-community edges
+- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 8 cross-community edges
 - [[docs/knowledge/communities/C034 - Engine|Engine]] — 7 cross-community edges
 - [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 3 cross-community edges
