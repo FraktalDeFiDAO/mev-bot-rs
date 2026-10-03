@@ -2819,7 +2819,17 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "mev-analytics"
 version = "0.1.0"
 dependencies = [
+ "alloy",
+ "anyhow",
+ "dotenvy",
+ "mev-bindings",
+ "mev-config",
+ "mev-dex",
+ "mev-discovery",
+ "mev-rpc",
+ "mev-state",
  "mev-types",
+ "tokio",
 ]
 
 [[package]]
@@ -2839,6 +2849,7 @@ dependencies = [
  "dotenvy",
  "mev-config",
  "mev-engine",
+ "mev-rpc",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2974,6 +2985,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "mev-bindings",
+ "tokio",
  "tracing",
 ]
 

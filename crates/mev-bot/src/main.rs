@@ -42,8 +42,11 @@ async fn main() -> Result<()> {
         CliMode::Shadow => Mode::Shadow,
         CliMode::Live => Mode::Live,
     };
-    Engine::bootstrap(cfg, secrets, mode, args.data_dir)
-        .await?
-        .run()
-        .await
+    // Retry bootstrap with backoff instead of exiting: a crash makes podman restart us
+    // immediately, which turns a network outage into a tight restart loop.
+    let mut engine = mev_rpc::retry_forever("bootstrap", || {
+        Engine::bootstrap(cfg.clone(), secrets.clone(), mode, args.data_dir.clone())
+    })
+    .await;
+    engine.run().await
 }

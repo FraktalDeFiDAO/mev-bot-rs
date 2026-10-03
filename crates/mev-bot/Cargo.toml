@@ -14,3 +14,4 @@ dotenvy = { workspace = true }
 clap = { workspace = true }
 mev-config = { workspace = true }
 mev-engine = { workspace = true }
+mev-rpc = { workspace = true }

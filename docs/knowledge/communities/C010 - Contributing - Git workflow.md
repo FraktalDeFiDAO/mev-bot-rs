@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "10"
-graphify-node-count: 9
-graphify-internal-edges: 8
+graphify-node-count: 10
+graphify-internal-edges: 9
 tags:
   - graphify/community
 ---
@@ -13,18 +13,19 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `CONTRIBUTING.md` — 9 nodes
+- `CONTRIBUTING.md` — 10 nodes
 
-## Nodes (9)
+## Nodes (10)
 
 - **Contributing / Git workflow** — `CONTRIBUTING.md:L1`
-- **Branches** — `CONTRIBUTING.md:L11`
-- **Commits** — `CONTRIBUTING.md:L28`
+- **Branches** — `CONTRIBUTING.md:L22`
+- **Commits** — `CONTRIBUTING.md:L39`
+- **Containers (podman)** — `CONTRIBUTING.md:L11`
 - **CONTRIBUTING.md** — `CONTRIBUTING.md:L1`
-- **Never commit** — `CONTRIBUTING.md:L56`
-- **Pull requests** — `CONTRIBUTING.md:L41`
-- **Releases & deploys** — `CONTRIBUTING.md:L49`
-- **Server-side protection** — `CONTRIBUTING.md:L61`
+- **Never commit** — `CONTRIBUTING.md:L67`
+- **Pull requests** — `CONTRIBUTING.md:L52`
+- **Releases & deploys** — `CONTRIBUTING.md:L60`
+- **Server-side protection** — `CONTRIBUTING.md:L72`
 - **Setup** — `CONTRIBUTING.md:L5`
 
 ## Related communities

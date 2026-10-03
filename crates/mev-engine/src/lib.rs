@@ -22,7 +22,7 @@ use mev_config::{ChainConfig, Secrets};
 use mev_exec::{Landed, Sender};
 use mev_metrics::Metrics;
 use mev_risk::{RiskGuard, RiskLimits, loan_cap};
-use mev_rpc::Rpc;
+use mev_rpc::{Backoff, Rpc};
 use mev_search::{SearchParams, two_pool_arbs};
 use mev_sim::{SimOutcome, Simulator};
 use mev_state::PoolStore;
@@ -154,9 +154,24 @@ impl Engine {
         let (tx_done, mut rx_done) = mpsc::unbounded_channel::<TxDone>();
         let mut resync = tokio::time::interval(Duration::from_secs(60));
         let mut summary = tokio::time::interval(Duration::from_secs(60));
+        let mut backoff = Backoff::default();
         loop {
-            let mut logs =
-                Box::pin(mev_ingest::pool_logs(&self.rpc.ws, self.store.addresses()).await?);
+            // Never exit on network trouble: resubscribe, and if the WS provider itself is dead
+            // (alloy gave up reconnecting), replace it — with backoff so outages don't spin.
+            let mut logs = loop {
+                match mev_ingest::pool_logs(&self.rpc.ws, self.store.addresses()).await {
+                    Ok(stream) => break Box::pin(stream),
+                    Err(e) => {
+                        let d = backoff.next_delay();
+                        warn!(error = %format!("{e:#}"), retry_in_s = d.as_secs(), "subscribe failed; reconnecting WS");
+                        tokio::time::sleep(d).await;
+                        if let Err(e) = self.rpc.reconnect_ws().await {
+                            warn!(error = %format!("{e:#}"), "WS reconnect failed");
+                        }
+                    }
+                }
+            };
+            backoff.reset();
             info!("subscribed to pool events");
             loop {
                 tokio::select! {

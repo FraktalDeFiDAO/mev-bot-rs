@@ -10,3 +10,4 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 mev-bindings = { workspace = true }
+tokio = { workspace = true }

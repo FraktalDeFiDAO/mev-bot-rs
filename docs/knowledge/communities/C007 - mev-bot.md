@@ -19,9 +19,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - **mev-bot** — `CLAUDE.md:L1`
 - **CLAUDE.md** — `CLAUDE.md:L1`
-- **graphify** — `CLAUDE.md:L27`
-- **Knowledge graph & Obsidian** — `CLAUDE.md:L21`
-- **Token discipline** — `CLAUDE.md:L11`
+- **graphify** — `CLAUDE.md:L28`
+- **Knowledge graph & Obsidian** — `CLAUDE.md:L22`
+- **Token discipline** — `CLAUDE.md:L12`
 
 ## Related communities
 

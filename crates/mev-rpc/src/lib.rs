@@ -5,13 +5,17 @@ use alloy::{
     providers::{DynProvider, Provider, ProviderBuilder, WsConnect},
     sol_types::SolCall,
 };
+use std::{future::Future, time::Duration};
+
 use anyhow::{Context, Result};
 use mev_bindings::{IMulticall3, MULTICALL3};
+use tracing::warn;
 
 #[derive(Clone)]
 pub struct Rpc {
     pub http: DynProvider,
     pub ws: DynProvider,
+    ws_url: String,
 }
 
 impl Rpc {
@@ -19,12 +23,19 @@ impl Rpc {
         let http = ProviderBuilder::new()
             .connect_http(http_url.parse().context("invalid HTTP URL")?)
             .erased();
-        let ws = ProviderBuilder::new()
-            .connect_ws(WsConnect::new(ws_url))
-            .await
-            .context("WS connect failed")?
-            .erased();
-        Ok(Self { http, ws })
+        let ws = connect_ws(ws_url).await?;
+        Ok(Self {
+            http,
+            ws,
+            ws_url: ws_url.to_string(),
+        })
+    }
+
+    /// Replace the WS provider with a fresh connection. Needed after alloy's own reconnect
+    /// gives up (e.g. a multi-minute DNS outage): the old provider is dead for good.
+    pub async fn reconnect_ws(&mut self) -> Result<()> {
+        self.ws = connect_ws(&self.ws_url).await?;
+        Ok(())
     }
 
     /// Batch many read calls into Multicall3 `aggregate3` requests. `None` = that call failed.
@@ -52,6 +63,62 @@ impl Rpc {
     }
 }
 
+async fn connect_ws(url: &str) -> Result<DynProvider> {
+    Ok(ProviderBuilder::new()
+        .connect_ws(WsConnect::new(url))
+        .await
+        .context("WS connect failed")?
+        .erased())
+}
+
+/// Exponential backoff (1s doubling, capped at 60s) for retrying network operations.
+#[derive(Debug, Clone)]
+pub struct Backoff {
+    next: Duration,
+}
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Self {
+            next: Duration::from_secs(1),
+        }
+    }
+}
+
+impl Backoff {
+    pub const MAX: Duration = Duration::from_secs(60);
+
+    /// Delay to wait now; doubles the next one.
+    pub fn next_delay(&mut self) -> Duration {
+        let d = self.next;
+        self.next = (self.next * 2).min(Self::MAX);
+        d
+    }
+
+    pub fn reset(&mut self) {
+        self.next = Duration::from_secs(1);
+    }
+}
+
+/// Retry `op` until it succeeds, sleeping with exponential backoff between attempts.
+pub async fn retry_forever<T, F, Fut>(what: &str, mut op: F) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let mut backoff = Backoff::default();
+    loop {
+        match op().await {
+            Ok(v) => return v,
+            Err(e) => {
+                let d = backoff.next_delay();
+                warn!(what, error = %format!("{e:#}"), retry_in_s = d.as_secs(), "failed; retrying");
+                tokio::time::sleep(d).await;
+            }
+        }
+    }
+}
+
 /// Encode a typed call for `Rpc::multicall`.
 pub fn call<C: SolCall>(target: Address, c: C) -> (Address, Bytes) {
     (target, c.abi_encode().into())
@@ -60,4 +127,18 @@ pub fn call<C: SolCall>(target: Address, c: C) -> (Address, Bytes) {
 /// Decode a multicall result for a typed call.
 pub fn decode<C: SolCall>(data: &Option<Bytes>) -> Option<C::Return> {
     data.as_ref().and_then(|d| C::abi_decode_returns(d).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_doubles_caps_and_resets() {
+        let mut b = Backoff::default();
+        let delays: Vec<u64> = (0..8).map(|_| b.next_delay().as_secs()).collect();
+        assert_eq!(delays, vec![1, 2, 4, 8, 16, 32, 60, 60]);
+        b.reset();
+        assert_eq!(b.next_delay().as_secs(), 1);
+    }
 }
