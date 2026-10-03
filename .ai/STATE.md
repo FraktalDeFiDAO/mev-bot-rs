@@ -6,7 +6,8 @@ Durable facts and next actions only.
 ---
 
 **Updated:** 2026-10-03
-**Branch:** `feat/mvp-live-arb` — draft PR #5. User merges PRs.
+**Branch:** `feat/algebra-pancake-longtail` — PR #6 (stacked on draft PR #5). User merges PRs.
+**Executor:** `0xb41b46dd9f070Ef57A8c80fa2b27E0a425c6bD85` (Arbitrum).
 **Goal:** live arbitrage trades on Arbitrum today; repo as reusable building-block crates.
 
 ## Done and verified
@@ -24,6 +25,12 @@ Durable facts and next actions only.
 - Zero trades = coverage: watched majors are efficient; volume is on Uniswap v4, PancakeSwap v3,
   Camelot v3 (Algebra), and long-tail tokens. Tool: `target/release/mev-analyze` (use a getLogs-capable
   RPC, e.g. ARBITRUM_HTTP_URL=https://arb1.arbitrum.io/rpc; Alchemy free caps getLogs at 10 blocks).
+
+## Latest finding (DECISIONS #23)
+
+Pipeline correct end-to-end (model ≈ on-chain sim). 133 pools incl. PancakeV3/Camelot V3 + long-tail.
+Opportunities $0.001–$0.014 vs gas $0.016–$0.027/tx → nothing net-profitable; guard correctly idle.
+Tools: `target/release/mev-scan`, `target/release/mev-analyze`.
 
 ## Next
 
