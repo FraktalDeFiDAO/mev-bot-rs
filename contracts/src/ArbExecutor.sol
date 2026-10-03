@@ -14,6 +14,10 @@ interface IBalancerVault {
     ) external;
 }
 
+interface IWETH {
+    function deposit() external payable;
+}
+
 interface IUniV2Pair {
     function getReserves() external view returns (uint112, uint112, uint32);
     function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external;
@@ -73,6 +77,8 @@ contract ArbExecutor {
     }
 
     IBalancerVault public immutable vault;
+    /// Native ETH received from a protocol during a liquidation is wrapped into this.
+    IWETH public immutable weth;
     address public immutable owner;
     address public immutable profitReceiver;
 
@@ -80,6 +86,8 @@ contract ArbExecutor {
     mapping(address => bool) public allowedTarget;
 
     bool transient flashActive;
+    /// True only while liquidation protocol calls run: the only time ETH may be received.
+    bool transient liquidating;
     address transient expectedPool;
     address transient expectedTokenIn;
     uint256 transient expectedMaxIn;
@@ -94,10 +102,17 @@ contract ArbExecutor {
 
     event TargetSet(address indexed target, bool allowed);
 
-    constructor(address vault_, address profitReceiver_) {
+    constructor(address vault_, address weth_, address profitReceiver_) {
         vault = IBalancerVault(vault_);
+        weth = IWETH(weth_);
         owner = msg.sender;
         profitReceiver = profitReceiver_;
+    }
+
+    /// @dev Protocols that pay seized collateral in native ETH (e.g. Fluid ETH vaults). Rejected
+    /// outside a liquidation so ETH can't be parked here.
+    receive() external payable {
+        if (!liquidating) revert Unauthorized();
     }
 
     /// @notice Allow or revoke a liquidation call target / approval spender.
@@ -196,6 +211,7 @@ contract ArbExecutor {
     function _liquidate(bytes memory inner, address debt) internal returns (uint256 minProfit) {
         (address collateral, uint256 minProfit_, ProtocolCall[] memory calls, Hop[] memory hops) =
             abi.decode(inner, (address, uint256, ProtocolCall[], Hop[]));
+        liquidating = true;
         for (uint256 i; i < calls.length; ++i) {
             ProtocolCall memory c = calls[i];
             if (!allowedTarget[c.target]) revert TargetNotAllowed(c.target);
@@ -211,6 +227,9 @@ contract ArbExecutor {
             }
             if (c.approveAmount > 0) _approve(debt, c.approveSpender, 0);
         }
+        liquidating = false;
+        // Native ETH collateral -> WETH, so the swap route and accounting stay ERC20-only.
+        if (address(this).balance > 0) weth.deposit{value: address(this).balance}();
         if (collateral != debt) _runHops(hops, IERC20(collateral).balanceOf(address(this)));
         return minProfit_;
     }

@@ -86,6 +86,37 @@ interface IMorphoOracle {
     function price() external view returns (uint256);
 }
 
+interface IFluidVaultT1 {
+    function operate(uint256 nftId, int256 newCol, int256 newDebt, address to)
+        external
+        payable
+        returns (uint256, int256, int256);
+    function liquidate(uint256 debtAmt, uint256 colPerUnitDebt, address to, bool absorb)
+        external
+        payable
+        returns (uint256 actualDebtAmt, uint256 actualColAmt);
+}
+
+interface IFluidOracle {
+    function getExchangeRateOperate() external view returns (uint256);
+    function getExchangeRateLiquidate() external view returns (uint256);
+}
+
+interface IFluidVaultResolver {
+    struct LiquidationStruct {
+        address vault;
+        address tokenIn;
+        address tokenOut;
+        uint256 tokenInAmtOne;
+        uint256 tokenOutAmtOne;
+        uint256 tokenInAmtTwo;
+        uint256 tokenOutAmtTwo;
+        bool absorbAvailable;
+    }
+
+    function getVaultLiquidation(address vault, uint256 tokenInAmt) external returns (LiquidationStruct memory);
+}
+
 interface IAlgebraFactory {
     function poolByPair(address, address) external view returns (address);
 }
@@ -118,7 +149,7 @@ contract ArbExecutorForkTest is Test {
     function setUp() public {
         vm.createSelectFork(vm.envOr("ARBITRUM_HTTP_URL", string("https://arb1.arbitrum.io/rpc")));
         vm.prank(owner);
-        exec = new ArbExecutor(VAULT, receiver);
+        exec = new ArbExecutor(VAULT, WETH, receiver);
         vm.prank(owner);
         exec.setTarget(AAVE_POOL, true);
         v3Pool = IV3Factory(UNI_V3_FACTORY).getPool(WETH, USDC, 500);
@@ -211,14 +242,17 @@ contract ArbExecutorForkTest is Test {
 
     /// Round trip through a V3-style pool and back via Sushi V2 after creating an arb, so the new
     /// callback is exercised for real. `v3Like` = Pancake V3 or Algebra pool for WETH/USDC.
+    /// `dump` = WETH dumped into Sushi to create the gap. Kept small for concentrated-liquidity
+    /// pools: a large gap makes the second leg cross many ticks, and every tick is a remote storage
+    /// read for the fork backend (public RPCs throttle -> FatalExternalError, not a contract bug).
     function _arbVia(address v3Like) internal returns (uint256 profit) {
-        _createArb(30 ether);
+        _createArb(3 ether);
         bool usdcIsToken0OnSushi = IV2Pair(sushiPair).token0() == USDC;
         ArbExecutor.Hop[] memory hops = new ArbExecutor.Hop[](2);
         hops[0] = ArbExecutor.Hop(0, sushiPair, USDC, WETH, usdcIsToken0OnSushi, 30);
         hops[1] = ArbExecutor.Hop(2, v3Like, WETH, USDC, WETH < USDC, 0);
         vm.prank(owner);
-        profit = exec.execute(USDC, 2_000e6, 1, hops);
+        profit = exec.execute(USDC, 500e6, 1, hops);
         assertEq(IERC20Full(USDC).balanceOf(address(exec)), 0, "executor holds no USDC");
         assertEq(IERC20Full(WETH).balanceOf(address(exec)), 0, "executor holds no WETH");
     }
@@ -493,5 +527,71 @@ contract ArbExecutorForkTest is Test {
         assertEq(IERC20Full(WBTC).balanceOf(address(exec)), 0, "executor holds no WBTC");
         assertEq(IERC20Approve(USDC).allowance(address(exec), MORPHO), 0, "approval reset");
         emit log_named_decimal_uint("morpho liquidation profit USDC", profit, 6);
+    }
+
+    // ---------------------------------------------------------------- Fluid (native ETH collateral)
+
+    address constant FLUID_ETH_ARB = 0xf55B8e9F0c51Ace009f4b41d03321675d4C643b3; // collateral ETH, debt ARB
+    address constant FLUID_ETH_ARB_ORACLE = 0x916f49Bc155A1A2E47e44afA588A6DF3890bB9eB;
+    address constant FLUID_VAULT_RESOLVER = 0xA5C3E16523eeeDDcC34706b0E6bE88b4c6EA95cC;
+    address constant ARB = 0x912CE59144191C1204E64559FE8253a0e49E6548;
+
+    function test_fluidLiquidationWithNativeEthCollateral() public {
+        // Real position: 1 ETH collateral, borrow ARB at ~70% of the oracle value.
+        uint256 rate = IFluidOracle(FLUID_ETH_ARB_ORACLE).getExchangeRateLiquidate(); // 1e27-scaled ARB per ETH
+        uint256 borrowArb = 1 ether * rate / 1e27 * 70 / 100;
+        vm.deal(borrower, 1 ether);
+        vm.prank(borrower);
+        IFluidVaultT1(FLUID_ETH_ARB).operate{value: 1 ether}(0, int256(1 ether), int256(borrowArb), borrower);
+
+        // ETH crashes 45% against ARB: the position falls past the liquidation threshold.
+        uint256 mocked = rate * 55 / 100;
+        vm.mockCall(
+            FLUID_ETH_ARB_ORACLE,
+            abi.encodeWithSelector(IFluidOracle.getExchangeRateLiquidate.selector),
+            abi.encode(mocked)
+        );
+        vm.mockCall(
+            FLUID_ETH_ARB_ORACLE,
+            abi.encodeWithSelector(IFluidOracle.getExchangeRateOperate.selector),
+            abi.encode(mocked)
+        );
+
+        // Offer up to 3,000 ARB of debt; the vault takes only what is liquidatable (the rest of the
+        // flash loan is returned). The resolver can't be used here: it re-simulates internally,
+        // which conflicts with the mocked oracle. Live, the adapter reads it via eth_call.
+        uint256 debtAmt = 3_000 ether;
+        uint256 colPerUnitDebt = 0;
+
+        ArbExecutor.ProtocolCall[] memory calls = new ArbExecutor.ProtocolCall[](1);
+        calls[0] = ArbExecutor.ProtocolCall(
+            FLUID_ETH_ARB,
+            abi.encodeCall(IFluidVaultT1.liquidate, (debtAmt, colPerUnitDebt, address(exec), false)),
+            FLUID_ETH_ARB,
+            debtAmt
+        );
+        // ETH arrives natively, gets wrapped, then WETH -> ARB on Uniswap V3.
+        address wethArb = IV3Factory(UNI_V3_FACTORY).getPool(WETH, ARB, 500);
+        ArbExecutor.Hop[] memory hops = new ArbExecutor.Hop[](1);
+        hops[0] = ArbExecutor.Hop(2, wethArb, WETH, ARB, WETH < ARB, 0);
+
+        vm.prank(owner);
+        exec.setTarget(FLUID_ETH_ARB, true);
+        vm.prank(owner);
+        uint256 profit = exec.liquidate(ARB, WETH, debtAmt, 1e18, calls, hops);
+
+        assertGt(profit, 1e18, "expected >1 ARB profit");
+        assertEq(address(exec).balance, 0, "no ETH left");
+        assertEq(IERC20Full(WETH).balanceOf(address(exec)), 0, "no WETH left");
+        assertEq(IERC20Full(ARB).balanceOf(address(exec)), 0, "no ARB left");
+        assertEq(IERC20Approve(ARB).allowance(address(exec), FLUID_ETH_ARB), 0, "approval reset");
+        emit log_named_decimal_uint("fluid liquidation profit ARB", profit, 18);
+    }
+
+    function test_rejectsEthOutsideLiquidation() public {
+        vm.deal(attacker, 1 ether);
+        vm.prank(attacker);
+        (bool ok,) = address(exec).call{value: 1 ether}("");
+        assertFalse(ok, "plain ETH transfers must be rejected");
     }
 }

@@ -9,6 +9,7 @@ set -a; source .env; set +a
 export PATH="$HOME/.foundry/bin:$PATH"
 VAULT=0xBA12222222228d8Ba445958a75a0704d566BF2C8
 AAVE_POOL=0x794a61358D6845594F94dc1DB02A252b5b4814aD
+WETH=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
 
 DEPLOYER=$(cast wallet address --private-key "$PRIVATE_KEY")
 BAL=$(cast balance "$DEPLOYER" --rpc-url "$ARBITRUM_HTTP_URL" --ether)
@@ -26,7 +27,7 @@ read -r -p "Deploy ArbExecutor to Arbitrum mainnet now? [y/N] " ok
 [[ $ok == y || $ok == Y ]] || { echo "aborted"; exit 1; }
 
 OUT=$(cd contracts && forge create src/ArbExecutor.sol:ArbExecutor --rpc-url "$ARBITRUM_HTTP_URL" \
-  --private-key "$PRIVATE_KEY" --broadcast --constructor-args "$VAULT" "$PROFIT_RECEIVER")
+  --private-key "$PRIVATE_KEY" --broadcast --constructor-args "$VAULT" "$WETH" "$PROFIT_RECEIVER")
 ADDR=$(echo "$OUT" | awk '/Deployed to:/ {print $3}')
 TX=$(echo "$OUT" | awk '/Transaction hash:/ {print $3}')
 [[ -n $ADDR ]] || { echo "$OUT" | grep -v -i private; echo "deploy failed"; exit 1; }
