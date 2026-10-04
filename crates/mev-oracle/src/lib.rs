@@ -95,6 +95,45 @@ pub fn effective_target(to: Option<Address>, input: &[u8]) -> Option<Address> {
     to
 }
 
+mod report {
+    alloy::sol! {
+        function forward(address to, bytes data);
+        /// OCR2 (incl. `DualAggregator`): report = (uint32 ts, bytes32 observers, int192[] obs, int192 juels).
+        function transmit(bytes32[3] reportContext, bytes report, bytes32[] rs, bytes32[] ss, bytes32 rawVs);
+        /// OCR1 `OffchainAggregator`: report = (bytes32 context, bytes32 observers, int192[] obs).
+        function transmit(bytes report, bytes32[] rs, bytes32[] ss, bytes32 rawVs);
+    }
+}
+
+/// The new answer a Chainlink report transaction will write, read from its calldata before it is
+/// in a block: `(aggregator, answer)`. The answer is the median observation, exactly what the
+/// aggregator stores (verified against `NewTransmission` on Arbitrum ETH/USD). Handles direct
+/// `transmit` calls and `forward(aggregator, transmit(...))` via an operator's forwarder.
+pub fn report_answer(to: Option<Address>, input: &[u8]) -> Option<(Address, f64)> {
+    use alloy::{
+        primitives::{B256, aliases::I192},
+        sol_types::{SolCall, SolValue},
+    };
+    let (aggregator, inner) = match report::forwardCall::abi_decode(input) {
+        Ok(f) => (f.to, f.data.to_vec()),
+        Err(_) => (to?, input.to_vec()),
+    };
+    let observations: Vec<I192> = if let Ok(t) = report::transmit_0Call::abi_decode(&inner) {
+        <(u32, B256, Vec<I192>, I192)>::abi_decode_params(&t.report)
+            .ok()?
+            .2
+    } else if let Ok(t) = report::transmit_1Call::abi_decode(&inner) {
+        <(B256, B256, Vec<I192>)>::abi_decode_params(&t.report)
+            .ok()?
+            .2
+    } else {
+        return None;
+    };
+    // Observations arrive sorted; the aggregator takes the middle one.
+    let median = observations.get(observations.len() / 2)?;
+    Some((aggregator, median.to_string().parse().ok()?))
+}
+
 /// Matches transaction targets against watched feed contracts.
 #[derive(Debug, Default, Clone)]
 pub struct FeedWatcher<T: Clone> {
@@ -190,6 +229,28 @@ mod tests {
         );
         // Unrelated selector / short input: no match.
         assert!(w.matches_tx(Some(forwarder), &[0x6f, 0xad]).is_empty());
+    }
+
+    #[test]
+    fn report_answer_matches_the_on_chain_answer() {
+        // Real Arbitrum ETH/USD update (block 511618219, tx 0x1bfa…2707) sent via a forwarder.
+        let hex = include_str!("../tests/fixtures/eth_usd_forward_transmit.hex");
+        let input = alloy::hex::decode(hex.trim()).unwrap();
+        let forwarder = Address::with_last_byte(0xf0);
+        let (agg, answer) = report_answer(Some(forwarder), &input).unwrap();
+        assert_eq!(
+            agg,
+            alloy::primitives::address!("a5E1a36938769cbd5a26f5e19D8FCB379f597c83")
+        );
+        // NewTransmission.answer emitted by that tx.
+        assert_eq!(answer, 269_591_416_460.0);
+        // The same transmit sent directly to the aggregator decodes too.
+        let inner = {
+            use alloy::sol_types::SolCall;
+            report::forwardCall::abi_decode(&input).unwrap().data
+        };
+        assert_eq!(report_answer(Some(agg), &inner), Some((agg, answer)));
+        assert_eq!(report_answer(Some(agg), &[0xde, 0xad, 0xbe, 0xef]), None);
     }
 
     #[test]

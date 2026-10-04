@@ -35,6 +35,13 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 /// Share of the flash lender's balance we're willing to borrow.
+/// Gas a backrun liquidation is priced at (flash loan + protocol call + swap), and its limit.
+/// Unsimulated, so the limit is generous; unused gas isn't charged.
+const BACKRUN_GAS: u64 = 900_000;
+const BACKRUN_GAS_LIMIT: u64 = 2_000_000;
+/// Share of the oracle-price bonus expected to survive swap fees and slippage.
+const BACKRUN_BONUS_HAIRCUT: f64 = 0.7;
+
 const LENDER_SHARE: f64 = 0.5;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -554,7 +561,10 @@ impl Engine {
         let tx_done = tx_done.clone();
         let metrics = self.metrics.clone();
         tokio::spawn(async move {
-            let done = match sender.send(&opp, min_profit, gas_limit).await {
+            let done = match sender
+                .send(&opp, min_profit, gas_limit, Some(gas_price as u128))
+                .await
+            {
                 Ok(hash) => {
                     let latency_ms = seen.elapsed().as_millis() as u64;
                     metrics.event(
@@ -588,6 +598,7 @@ impl Engine {
     async fn on_runner_event(&mut self, ev: RunnerEvent, tx_done: &mpsc::UnboundedSender<TxDone>) {
         match ev {
             RunnerEvent::Plan(p) => self.on_plan(p, tx_done).await,
+            RunnerEvent::Backrun { plan, lead } => self.on_backrun(plan, lead, tx_done).await,
             RunnerEvent::NoPlan(h) => self.metrics.event(
                 "liq_no_plan",
                 json!({ "account": h.account.to_string(), "hf": h.health_factor, "debt_usd": h.debt_usd }),
@@ -600,33 +611,141 @@ impl Engine {
     }
 
     /// Route, simulate, and (in live mode) send a liquidation planned by an adapter.
-    async fn on_plan(&mut self, plan: Plan, tx_done: &mpsc::UnboundedSender<TxDone>) {
-        let Some(liq) = self.liq.as_ref() else { return };
-        let via = liq.via.clone();
-        self.metrics.update(|c| c.liq_planned += 1);
+    /// Checks shared by simulated and backrun liquidations: size sanity, swap route, lender
+    /// capacity. Logs the reason and returns None when the plan can't be sent.
+    async fn liq_precheck(
+        &mut self,
+        plan: &Plan,
+    ) -> Option<(Vec<mev_types::Hop>, serde_json::Value)> {
+        let via = self.liq.as_ref()?.via.clone();
         let base = json!({ "protocol": plan.protocol, "account": plan.account.to_string(),
             "collateral": self.cfg.symbol(plan.collateral_asset), "debt": self.cfg.symbol(plan.debt_asset),
             "bonus_usd": plan.bonus_usd });
         if plan.bonus_usd < self.cfg.risk.min_profit_usd {
-            return self.metrics.event("liq_dust", base);
+            self.metrics.event("liq_dust", base);
+            return None;
         }
         if plan.bonus_usd > self.cfg.risk.max_bonus_usd {
             // Seen live: bad-debt Morpho markets whose oracles still price dead collateral.
-            return self.metrics.event("liq_implausible", base);
+            self.metrics.event("liq_implausible", base);
+            return None;
         }
         let hops = if plan.collateral_asset == plan.debt_asset {
             vec![]
         } else {
-            match self.route(&plan, &via).await {
+            match self.route(plan, &via).await {
                 Some(h) => h,
-                None => return self.metrics.event("liq_no_route", base),
+                None => {
+                    self.metrics.event("liq_no_route", base);
+                    return None;
+                }
             }
         };
-        match self.max_loan.get(&plan.debt_asset) {
-            Some(cap) if f64::from(plan.flash_amount) <= *cap => {}
-            Some(_) => return self.metrics.event("liq_too_large", base),
-            None => return self.metrics.event("liq_no_lender", base),
+        let why = match self.max_loan.get(&plan.debt_asset) {
+            Some(cap) if f64::from(plan.flash_amount) <= *cap => return Some((hops, base)),
+            Some(_) => "liq_too_large",
+            None => "liq_no_lender",
+        };
+        self.metrics.event(why, base);
+        None
+    }
+
+    /// A liquidation predicted from a price update not yet in a block: send at once, without
+    /// simulation (the chain doesn't have the price yet). The executor's on-chain `minProfit`
+    /// check (>= gas) is the guard, so a wrong prediction costs only gas.
+    async fn on_backrun(
+        &mut self,
+        plan: Plan,
+        lead: Duration,
+        tx_done: &mpsc::UnboundedSender<TxDone>,
+    ) {
+        self.metrics.update(|c| c.liq_planned += 1);
+        let Some((hops, base)) = self.liq_precheck(&plan).await else {
+            return;
+        };
+        let Some(debt_px) = self.price(plan.debt_asset) else {
+            return self.metrics.event("liq_no_price", base);
+        };
+        let native_px = self.price(self.native).unwrap_or(0.0);
+        let gas_price = self.gas_price().await;
+        let gas_usd = BACKRUN_GAS as f64 * gas_price * native_px;
+        // Unsimulated: discount the oracle-price bonus for swap fees and slippage.
+        let net_usd = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT - gas_usd;
+        let lead_ms = lead.as_millis() as u64;
+        let ev = json!({ "liq": base, "net_usd": net_usd, "gas_usd": gas_usd, "lead_ms": lead_ms });
+        if net_usd <= 0.0 {
+            return self.metrics.event("liq_backrun_unprofitable", ev);
         }
+        self.metrics.update(|c| c.liq_profitable += 1);
+        self.metrics.event("liq_backrun", ev.clone());
+        if self.mode != Mode::Live {
+            return;
+        }
+        let Some(sender) = self.sender.clone() else {
+            return;
+        };
+        if let Err(block) = self.risk.check_concurrent(net_usd, gas_usd, now_secs()) {
+            return self.metrics.event(
+                "risk_block",
+                json!({ "liq": ev, "reason": format!("{block:?}") }),
+            );
+        }
+        let min_profit = if debt_px > 0.0 {
+            U256::from((gas_usd / debt_px) as u128)
+        } else {
+            U256::ZERO
+        };
+        self.risk.mark_sent();
+        self.metrics.update(|c| c.sent += 1);
+        let tx_done = tx_done.clone();
+        let metrics = self.metrics.clone();
+        tokio::spawn(async move {
+            let sent = sender
+                .send_liquidation_fast(
+                    &plan,
+                    &hops,
+                    min_profit,
+                    BACKRUN_GAS_LIMIT,
+                    gas_price as u128,
+                )
+                .await;
+            let done = match sent {
+                Ok(hash) => {
+                    metrics.event(
+                        "sent",
+                        json!({ "hash": hash, "kind": "liquidation_backrun", "net_usd": net_usd, "lead_ms": lead_ms }),
+                    );
+                    info!(%hash, protocol = plan.protocol, account = %plan.account, lead_ms, "sent liquidation backrun");
+                    match sender.wait(hash, Duration::from_secs(30)).await {
+                        Ok(landed) => TxDone::Landed {
+                            hash,
+                            kind: "liquidation_backrun",
+                            est_profit_usd: net_usd,
+                            landed,
+                        },
+                        Err(e) => TxDone::Failed {
+                            hash: Some(hash),
+                            error: e.to_string(),
+                        },
+                    }
+                }
+                Err(e) => TxDone::Failed {
+                    hash: None,
+                    error: e.to_string(),
+                },
+            };
+            let _ = tx_done.send(done);
+        });
+    }
+
+    async fn on_plan(&mut self, plan: Plan, tx_done: &mpsc::UnboundedSender<TxDone>) {
+        if self.liq.is_none() {
+            return;
+        }
+        self.metrics.update(|c| c.liq_planned += 1);
+        let Some((hops, base)) = self.liq_precheck(&plan).await else {
+            return;
+        };
         let Some(sim) = &self.sim else {
             return self.metrics.event("liq_candidate", base);
         };

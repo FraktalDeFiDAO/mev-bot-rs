@@ -53,6 +53,12 @@ pub struct RunnerConfig {
 #[derive(Debug, Clone)]
 pub enum RunnerEvent {
     Plan(Plan),
+    /// Predicted from a price update seen in the sequencer feed, before it is in a block: send
+    /// now, unsimulated (the chain doesn't have the price yet). `lead` = time since the feed frame.
+    Backrun {
+        plan: Plan,
+        lead: Duration,
+    },
     /// Liquidatable but nothing worth taking (bad debt, dust, unsupported shape).
     NoPlan(Health),
     /// Price-feed transaction seen in the sequencer feed (for metrics).
@@ -84,7 +90,15 @@ pub struct Runner {
     feeds: FeedWatcher<usize>,
     /// When each account was last planned and its current cooldown.
     last_plan: HashMap<AccountRef, (Instant, Duration)>,
+    /// When each account was last backrun (one attempt per account per `BACKRUN_COOLDOWN`).
+    last_backrun: HashMap<AccountRef, Instant>,
 }
+
+/// A failed backrun costs gas; don't retry the same account on every subsequent update.
+const BACKRUN_COOLDOWN: Duration = Duration::from_secs(30);
+/// Per price update, only the biggest predicted liquidations are sent (bounds gas lost to
+/// mispredictions in a crash; the regular re-poll picks up the rest).
+const MAX_BACKRUNS_PER_UPDATE: usize = 3;
 
 impl Runner {
     /// Adapters that aren't `Live` are logged and skipped.
@@ -119,6 +133,7 @@ impl Runner {
             slots,
             feeds,
             last_plan: HashMap::new(),
+            last_backrun: HashMap::new(),
         }
     }
 
@@ -278,6 +293,27 @@ impl Runner {
         let Some(feed) = self.feeds.matched_contract(st.to, &st.input) else {
             return;
         };
+        let report = mev_oracle::report_answer(st.to, &st.input).filter(|(agg, _)| *agg == feed);
+        let mut predicted: Vec<Plan> = Vec::new();
+        for i in hits.iter().copied() {
+            let Some((_, answer)) = report else { break };
+            predicted.extend(self.slots[i].adapter.predict(feed, answer));
+        }
+        predicted.sort_by(|a, b| b.bonus_usd.total_cmp(&a.bonus_usd));
+        {
+            for plan in predicted.into_iter().take(MAX_BACKRUNS_PER_UPDATE) {
+                let recent = self
+                    .last_backrun
+                    .get(&plan.account)
+                    .is_some_and(|t| t.elapsed() < BACKRUN_COOLDOWN);
+                if recent {
+                    continue;
+                }
+                self.last_backrun.insert(plan.account, Instant::now());
+                let lead = st.received.elapsed();
+                let _ = tx.send(RunnerEvent::Backrun { plan, lead });
+            }
+        }
         for i in hits {
             let slot = &mut self.slots[i];
             if slot.burst.is_none() {
@@ -421,6 +457,28 @@ mod tests {
         }
         fn affected(&self, feed: Address, _a: &AccountRef) -> bool {
             feed == self.feed
+        }
+        /// Below $3000 (ETH/USD, 8 decimals) the fake account becomes liquidatable.
+        fn predict(&self, feed: Address, answer: f64) -> Vec<Plan> {
+            if feed != self.feed || answer >= 3_000e8 {
+                return vec![];
+            }
+            let h = Health {
+                account: self.accounts()[0],
+                health_factor: 0.99,
+                debt_usd: 100.0,
+                collateral_usd: 101.0,
+            };
+            vec![Plan {
+                protocol: "fake",
+                account: h.account,
+                debt_asset: Address::ZERO,
+                collateral_asset: Address::ZERO,
+                flash_amount: alloy::primitives::U256::from(1),
+                expected_collateral: 1.0,
+                bonus_usd: 5.0,
+                calls: vec![],
+            }]
         }
         fn targets(&self) -> Vec<Address> {
             vec![]
@@ -610,6 +668,37 @@ mod tests {
         r.slots[0].burst = None;
         r.on_feed_tx(&other, &tx);
         assert!(r.slots[0].burst.is_none(), "unrelated tx must not trigger");
+    }
+
+    #[tokio::test]
+    async fn real_price_report_triggers_one_backrun_per_cooldown() {
+        // Real Arbitrum ETH/USD report (answer $2695.91) sent through a Chainlink forwarder.
+        let hex = include_str!("../../mev-oracle/tests/fixtures/eth_usd_forward_transmit.hex");
+        let input: alloy::primitives::Bytes = alloy::hex::decode(hex.trim()).unwrap().into();
+        let agg: Address = "0xa5E1a36938769cbd5a26f5e19D8FCB379f597c83"
+            .parse()
+            .unwrap();
+        let fake = Fake {
+            hf: Arc::new(Mutex::new(1.02)),
+            status: AdapterStatus::Live,
+            feed: agg,
+        };
+        let mut r = Runner::new(cfg(), vec![Box::new(fake)]);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut st = sequenced(Some(Address::with_last_byte(0xf0))); // forwarder
+        st.input = input;
+        r.on_feed_tx(&st, &tx);
+        assert!(
+            matches!(rx.try_recv(), Ok(RunnerEvent::Backrun { .. })),
+            "backrun first"
+        );
+        assert!(matches!(rx.try_recv(), Ok(RunnerEvent::FeedTrigger { .. })));
+        assert!(r.slots[0].burst.is_some(), "the re-poll burst still runs");
+        r.on_feed_tx(&st, &tx);
+        assert!(
+            matches!(rx.try_recv(), Ok(RunnerEvent::FeedTrigger { .. })),
+            "same account within the cooldown: no second backrun"
+        );
     }
 
     fn sequenced(to: Option<Address>) -> SequencedTx {

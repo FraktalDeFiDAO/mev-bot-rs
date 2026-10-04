@@ -43,6 +43,28 @@ impl RiskGuard {
 
     /// Decide whether a trade may be sent. `now_secs` = unix time (for daily rollover).
     pub fn check(&mut self, net_profit_usd: f64, gas_usd: f64, now_secs: u64) -> Result<(), Block> {
+        self.check_inner(net_profit_usd, gas_usd, now_secs, false)
+    }
+
+    /// Like `check`, but allowed while another transaction is in flight: backruns must land in
+    /// the same block as a price update and can't wait for a pending arbitrage's receipt.
+    /// Kill switch, failure pause, profit floor and the daily gas cap still apply.
+    pub fn check_concurrent(
+        &mut self,
+        net_profit_usd: f64,
+        gas_usd: f64,
+        now_secs: u64,
+    ) -> Result<(), Block> {
+        self.check_inner(net_profit_usd, gas_usd, now_secs, true)
+    }
+
+    fn check_inner(
+        &mut self,
+        net_profit_usd: f64,
+        gas_usd: f64,
+        now_secs: u64,
+        concurrent: bool,
+    ) -> Result<(), Block> {
         self.roll_day(now_secs);
         if self.kill_file.exists() {
             return Err(Block::KillSwitch);
@@ -52,7 +74,7 @@ impl RiskGuard {
                 consecutive_failures: self.consecutive_failures,
             });
         }
-        if self.in_flight {
+        if self.in_flight && !concurrent {
             return Err(Block::InFlight);
         }
         if net_profit_usd < self.limits.min_profit_usd {
@@ -132,6 +154,25 @@ mod tests {
             max_consecutive_failures: 2,
         };
         RiskGuard::new(limits, PathBuf::from("/nonexistent/STOP"))
+    }
+
+    #[test]
+    fn backruns_may_overlap_a_pending_tx_but_keep_other_limits() {
+        let mut g = guard();
+        g.check(1.0, 0.01, 0).unwrap();
+        g.mark_sent();
+        assert!(matches!(g.check(1.0, 0.01, 0), Err(Block::InFlight)));
+        assert!(g.check_concurrent(1.0, 0.01, 0).is_ok());
+        assert!(matches!(
+            g.check_concurrent(0.05, 0.01, 0),
+            Err(Block::BelowMinProfit { .. })
+        ));
+        g.record(true, 1.0, 0); // daily gas cap ($1) reached
+        g.mark_sent();
+        assert!(matches!(
+            g.check_concurrent(1.0, 0.01, 0),
+            Err(Block::DailyGasCap { .. })
+        ));
     }
 
     #[test]

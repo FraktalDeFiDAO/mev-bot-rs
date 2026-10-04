@@ -2979,6 +2979,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "futures",
  "mev-bindings",
  "mev-lending",
  "mev-rpc",
