@@ -32,7 +32,8 @@ services:
     cap_drop:
       - ALL
     pids_limit: 128
-    restart: unless-stopped
+    # "always": podman-restart.service only revives these after a host reboot.
+    restart: always
     healthcheck:
       # The engine writes a heartbeat every 60s; unhealthy if older than 3 minutes.
       test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(cat /var/lib/mev-bot/arbitrum/heartbeat 2>/dev/null || echo 0) )) -lt 180"]

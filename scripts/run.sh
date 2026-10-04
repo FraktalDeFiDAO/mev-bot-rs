@@ -13,7 +13,8 @@ cd "$(dirname "$0")/.."
 export UID GID="$(id -g)"
 CHAIN=arbitrum
 STOP_FILE="data/$CHAIN/STOP"
-compose() { podman compose "$@"; }
+# podman-compose explicitly: `podman compose` may delegate to docker-compose (and the Docker daemon).
+compose() { podman-compose "$@"; }
 
 preflight() {
   [[ -f .env ]] || { echo "missing .env (see docs/planning/README.md)"; exit 1; }
