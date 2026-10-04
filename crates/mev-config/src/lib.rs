@@ -45,6 +45,10 @@ pub struct RiskConfig {
     /// trades that turn out unprofitable, so a stale model costs gas, not capital.
     #[serde(default)]
     pub arb_presimulate: bool,
+    /// Daily gas arbitrage may spend (of `max_gas_usd_per_day`); the rest stays for liquidations.
+    /// Default: two thirds.
+    #[serde(default)]
+    pub max_arb_gas_usd_per_day: Option<f64>,
 }
 
 /// Find long-tail pairs from recent swap activity instead of only the fixed `pairs` list.

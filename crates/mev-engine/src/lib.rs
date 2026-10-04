@@ -193,6 +193,10 @@ impl Engine {
             min_profit_usd: cfg.risk.min_profit_usd,
             max_gas_usd_per_day: cfg.risk.max_gas_usd_per_day,
             max_consecutive_failures: cfg.risk.max_consecutive_failures,
+            max_arb_gas_usd_per_day: cfg
+                .risk
+                .max_arb_gas_usd_per_day
+                .unwrap_or(cfg.risk.max_gas_usd_per_day * 2.0 / 3.0),
         };
         let metrics = Arc::new(Metrics::new(data_dir.clone())?);
         let risk = RiskGuard::new(limits, data_dir.join("STOP"));
@@ -618,7 +622,7 @@ impl Engine {
         let Some(sender) = self.sender.clone() else {
             return;
         };
-        if let Err(block) = self.risk.check(net_usd, gas_usd, now_secs()) {
+        if let Err(block) = self.risk.check_arb(net_usd, gas_usd, now_secs()) {
             self.metrics.event(
                 "risk_block",
                 json!({ "opp": base, "reason": format!("{block:?}") }),
@@ -919,7 +923,15 @@ impl Engine {
             } => {
                 let gas_usd =
                     landed.gas_used as f64 * landed.effective_gas_price as f64 * native_px;
-                self.risk.record(landed.success, gas_usd, now_secs());
+                if kind == "arb" {
+                    self.risk.record_arb_gas(gas_usd, now_secs());
+                }
+                if !landed.success && kind != "liquidation" {
+                    // Arbs and unsimulated backruns revert when another bot got there first.
+                    self.risk.record_lost_race(gas_usd, now_secs());
+                } else {
+                    self.risk.record(landed.success, gas_usd, now_secs());
+                }
                 self.metrics.update(|c| {
                     c.gas_usd += gas_usd;
                     if landed.success {
