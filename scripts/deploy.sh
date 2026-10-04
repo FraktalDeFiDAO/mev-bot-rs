@@ -3,6 +3,7 @@
 #
 #   scripts/deploy.sh shadow          simulate only (no transactions)
 #   scripts/deploy.sh live --yes      REAL FUNDS: refuses without --yes
+#   SERVER=mev-ohio REMOTE_DIR=/home/ubuntu/src/mev-bot BUILD=local scripts/deploy.sh live --yes
 #
 # Flow: develop locally -> PR -> merge to main on GitHub -> `git pull` main here -> deploy.
 # Steps: checks (on main, clean tree, equal to origin/main), gate (scripts/check.sh in the dev
@@ -15,6 +16,9 @@ cd "$(dirname "$0")/.."
 
 SERVER=${SERVER:-administrator@194.163.145.241}
 REMOTE_DIR=${REMOTE_DIR:-/home/administrator/src/mev-bot-v3}
+# BUILD=local: build the image here and stream it to the server (for hosts too small to compile,
+# e.g. the 2 GB AWS t3.small). BUILD=server (default): the server builds it.
+BUILD=${BUILD:-server}
 
 mode="" yes=0
 for a in "$@"; do
@@ -44,6 +48,13 @@ ssh "$SERVER" "set -e; cd $REMOTE_DIR; git fetch -q origin
   fi
   git checkout -q -B main $sha; git branch -q -u origin/main main; git log --oneline -1"
 
+if [[ $BUILD == local ]]; then
+  echo "== build image locally and stream it to the server"
+  podman build -q -t localhost/mev-bot:dev -f Containerfile --build-arg APP_UID=1000 --build-arg APP_GID=1000 . >/dev/null
+  podman save localhost/mev-bot:dev | zstd -q -T0 | ssh "$SERVER" 'zstd -dq | podman load -q' >/dev/null
+fi
+
+no_build=$([[ $BUILD == local ]] && echo 1 || true)
 echo "== server: save old log, rebuild, restart ($mode)"
 ssh "$SERVER" "set -e; cd $REMOTE_DIR; mkdir -p data/logs
   if podman container exists mev-bot-arbitrum; then
@@ -51,7 +62,7 @@ ssh "$SERVER" "set -e; cd $REMOTE_DIR; mkdir -p data/logs
     podman logs mev-bot-arbitrum 2>&1 | gzip > \$f && echo \"   saved \$f\"
     ls -1t data/logs/mev-bot-arbitrum-*.log.gz | tail -n +21 | xargs -r rm -f
   fi
-  echo y | scripts/run.sh $mode | tail -1"
+  echo y | NO_BUILD=$no_build scripts/run.sh $mode | tail -1"
 
 tag=deploy-$(date -u +%Y%m%d-%H%M%S)
 git tag "$tag" "$sha" && git push -q origin "$tag"
