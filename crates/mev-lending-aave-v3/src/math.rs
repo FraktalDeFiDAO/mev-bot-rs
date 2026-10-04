@@ -16,6 +16,9 @@ pub struct ReserveInfo {
     pub liquidation_bonus_bps: u32,
     /// Share of the bonus Aave keeps (bps of the bonus, e.g. 1000 = 10%).
     pub protocol_fee_bps: u32,
+    /// Collateral weight in the health factor (bps, e.g. 8300 = 83%).
+    #[serde(default)]
+    pub liquidation_threshold_bps: u32,
     /// Oracle price, USD per whole token.
     pub price_usd: f64,
 }
@@ -117,6 +120,98 @@ pub fn plan(pos: &Position, reserves: &[ReserveInfo]) -> Option<LiquidationPlan>
     best
 }
 
+/// Predicted health below this triggers a backrun. A little under 1.0 so calibration error doesn't
+/// send transactions for positions that stay healthy (each costs gas when the contract reverts).
+pub const PREDICT_HF_MAX: f64 = 0.9995;
+
+/// Aave's health factor from balances and prices: Σ collateral·price·LT / Σ debt·price.
+/// None without debt. Ignores e-mode; `predict` calibrates that away per user.
+pub fn model_hf(pos: &Position, reserves: &[ReserveInfo]) -> Option<f64> {
+    let info = |a: &Address| reserves.iter().find(|r| r.asset == *a);
+    let debt: f64 = pos
+        .debt
+        .iter()
+        .filter_map(|(a, amt)| info(a).map(|r| r.usd(*amt)))
+        .sum();
+    if debt <= 0.0 {
+        return None;
+    }
+    let weighted: f64 = pos
+        .collateral
+        .iter()
+        .filter_map(|(a, amt)| {
+            info(a).map(|r| r.usd(*amt) * r.liquidation_threshold_bps as f64 / 10_000.0)
+        })
+        .sum();
+    Some(weighted / debt)
+}
+
+/// A position cached for prediction: balances, plus `calibration` = on-chain HF / `model_hf` at
+/// snapshot time (absorbs e-mode thresholds and rounding).
+#[derive(Debug, Clone)]
+pub struct Cached {
+    pub pos: Position,
+    pub calibration: f64,
+}
+
+impl Cached {
+    /// Calibrate against the on-chain health factor in `pos`.
+    pub fn new(pos: Position, reserves: &[ReserveInfo]) -> Option<Self> {
+        let model = model_hf(&pos, reserves)?;
+        (model > 0.0).then(|| Self {
+            calibration: pos.health_factor / model,
+            pos,
+        })
+    }
+}
+
+/// Apply a price move: every asset in `assets` is repriced by `ratio` (new / old aggregator
+/// answer) in `reserves`, which keeps the move for later updates. Returns the cached positions
+/// that hold one of `assets` and this move pushes under water (healthy before, liquidatable
+/// after), with their liquidation plans. Positions already under water are the regular
+/// re-poll's job, not a race against the price update.
+pub fn predict(
+    reserves: &mut [ReserveInfo],
+    cached: &[Cached],
+    assets: &[Address],
+    ratio: f64,
+) -> Vec<(Position, LiquidationPlan)> {
+    if !(ratio.is_finite() && ratio > 0.0) {
+        return vec![];
+    }
+    let hf = |c: &Cached, reserves: &[ReserveInfo]| {
+        model_hf(&c.pos, reserves).map(|h| h * c.calibration)
+    };
+    let exposed = |p: &Position| {
+        p.collateral
+            .iter()
+            .chain(&p.debt)
+            .any(|(a, _)| assets.contains(a))
+    };
+    let candidates: Vec<&Cached> = cached
+        .iter()
+        .filter(|c| exposed(&c.pos) && hf(c, reserves).is_some_and(|h| h >= PREDICT_HF_MAX))
+        .collect();
+    for r in reserves.iter_mut().filter(|r| assets.contains(&r.asset)) {
+        r.price_usd *= ratio;
+    }
+    candidates
+        .into_iter()
+        .filter_map(|c| {
+            let hf = hf(c, reserves)?;
+            if hf >= PREDICT_HF_MAX {
+                return None;
+            }
+            let pos = Position {
+                health_factor: hf,
+                ..c.pos.clone()
+            };
+            let plan = plan(&pos, reserves)?;
+            Some((pos, plan))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,6 +227,7 @@ mod tests {
                 decimals: 18,
                 liquidation_bonus_bps: 10_500,
                 protocol_fee_bps: 1_000,
+                liquidation_threshold_bps: 8_300,
                 price_usd: 2_000.0,
             },
             ReserveInfo {
@@ -139,6 +235,7 @@ mod tests {
                 decimals: 6,
                 liquidation_bonus_bps: 10_450,
                 protocol_fee_bps: 1_000,
+                liquidation_threshold_bps: 7_800,
                 price_usd: 1.0,
             },
         ]
@@ -179,6 +276,46 @@ mod tests {
         let p = plan(&pos(0.99, 1.0, 1_900.0), &reserves()).unwrap();
         assert!((p.debt_usd - 1_900.0).abs() < 1e-6);
     }
+    #[test]
+    fn model_hf_weights_collateral_by_threshold() {
+        // 10 WETH @ $2000, LT 83% = $16.6k weighted; $15k debt.
+        let hf = model_hf(&pos(0.0, 10.0, 15_000.0), &reserves()).unwrap();
+        assert!((hf - 16_600.0 / 15_000.0).abs() < 1e-9);
+        assert!(model_hf(&pos(0.0, 10.0, 0.0), &reserves()).is_none());
+    }
+
+    #[test]
+    fn predict_flags_positions_a_price_drop_makes_liquidatable() {
+        let mut rs = reserves();
+        // On-chain HF 1.122 vs model 1.1067: calibration (e.g. e-mode) carries through.
+        let c = Cached::new(pos(1.122, 10.0, 15_000.0), &rs).unwrap();
+        let cached = vec![c.clone()];
+        // ETH -5%: model 1.0513 * 1.0138 = 1.066 -> still healthy.
+        assert!(predict(&mut rs, &cached, &[WETH], 0.95).is_empty());
+        // A further -10% (prices persist across updates): 0.959 -> liquidatable, planned.
+        let hits = predict(&mut rs, &cached, &[WETH], 0.90);
+        assert_eq!(hits.len(), 1);
+        let (p, plan) = &hits[0];
+        assert!(p.health_factor < PREDICT_HF_MAX && p.health_factor > 0.9);
+        assert_eq!((plan.collateral, plan.debt), (WETH, USDC));
+        assert!((rs[0].price_usd - 2_000.0 * 0.95 * 0.90).abs() < 1e-6);
+        // Already under water: a further drop is not a new crossing.
+        assert!(predict(&mut rs, &cached, &[WETH], 0.99).is_empty());
+    }
+
+    #[test]
+    fn predict_ignores_unexposed_positions_and_bad_ratios() {
+        let mut rs = reserves();
+        let cached = vec![Cached::new(pos(1.01, 10.0, 16_000.0), &rs).unwrap()];
+        let other = Address::with_last_byte(9);
+        assert!(predict(&mut rs, &cached, &[other], 0.5).is_empty());
+        assert!(predict(&mut rs, &cached, &[WETH], f64::NAN).is_empty());
+        assert!(predict(&mut rs, &cached, &[WETH], 0.0).is_empty());
+        assert_eq!(
+            rs[0].price_usd, 2_000.0,
+            "rejected ratios don't move prices"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -195,8 +332,8 @@ mod props {
             hf in 0.5f64..0.9999, weth in 0.01f64..1e4, debt in 10.0f64..5e7, px in 100.0f64..1e5,
         ) {
             let reserves = vec![
-                ReserveInfo { asset: WETH, decimals: 18, liquidation_bonus_bps: 10_500, protocol_fee_bps: 1_000, price_usd: px },
-                ReserveInfo { asset: USDC, decimals: 6, liquidation_bonus_bps: 10_450, protocol_fee_bps: 1_000, price_usd: 1.0 },
+                ReserveInfo { asset: WETH, decimals: 18, liquidation_bonus_bps: 10_500, protocol_fee_bps: 1_000, liquidation_threshold_bps: 8_300, price_usd: px },
+                ReserveInfo { asset: USDC, decimals: 6, liquidation_bonus_bps: 10_450, protocol_fee_bps: 1_000, liquidation_threshold_bps: 7_800, price_usd: 1.0 },
             ];
             let pos = Position { user: Address::ZERO, health_factor: hf, collateral: vec![(WETH, weth * 1e18)], debt: vec![(USDC, debt * 1e6)] };
             if let Some(p) = plan(&pos, &reserves) {

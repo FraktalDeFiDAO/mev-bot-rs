@@ -17,7 +17,7 @@ use alloy::{
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use math::{Position, ReserveInfo};
+use math::{Cached, LiquidationPlan, Position, ReserveInfo};
 use mev_bindings::{IAaveDataProvider, IAaveOracle, IAavePool, IERC20};
 use mev_config::AaveConfig;
 use mev_lending::{
@@ -29,6 +29,10 @@ use mev_rpc::{call, decode, multicall};
 use tracing::{info, warn};
 
 alloy::sol! {
+    #[sol(rpc)]
+    interface IAggregator {
+        function latestAnswer() external view returns (int256);
+    }
     function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken);
 }
 
@@ -57,6 +61,18 @@ pub struct AaveV3Adapter {
     feed_masks: HashMap<Address, U256>,
     /// User -> `UserConfigurationMap`, refreshed by sweeps for at-risk users.
     user_masks: Mutex<HashMap<Address, U256>>,
+    /// Aggregator -> reserves it prices (for repricing on a predicted update).
+    feed_assets: HashMap<Address, Vec<Address>>,
+    /// State for backrun prediction, refreshed by sweeps and moved by each predicted update.
+    snapshot: Mutex<Snapshot>,
+}
+
+#[derive(Default)]
+struct Snapshot {
+    reserves: Vec<ReserveInfo>,
+    cached: Vec<Cached>,
+    /// Aggregator -> last known answer (on-chain at refresh, then from the feed).
+    answers: HashMap<Address, f64>,
 }
 
 impl AaveV3Adapter {
@@ -133,6 +149,17 @@ impl AaveV3Adapter {
             )
         })
         .collect();
+        let feed_assets: HashMap<Address, Vec<Address>> =
+            mev_lending::feed_index(&aggregators, |src| {
+                asset_sources
+                    .iter()
+                    .filter(|(_, s)| *s == src)
+                    .map(|(a, _)| *a)
+                    .collect()
+            })
+            .into_iter()
+            .map(|(agg, assets)| (agg, assets.into_iter().collect()))
+            .collect();
         info!(
             protocol = ID,
             reserves = reserves.len(),
@@ -148,6 +175,8 @@ impl AaveV3Adapter {
             decimals,
             feed_masks,
             user_masks: Mutex::new(HashMap::new()),
+            feed_assets,
+            snapshot: Mutex::new(Snapshot::default()),
         })
     }
 
@@ -193,6 +222,10 @@ impl AaveV3Adapter {
     }
 
     async fn reserves_info(&self) -> Result<Vec<ReserveInfo>> {
+        self.reserves_info_on(&self.rpc.fast).await
+    }
+
+    async fn reserves_info_on(&self, p: &DynProvider) -> Result<Vec<ReserveInfo>> {
         let mut calls = Vec::new();
         for a in &self.reserves {
             calls.push(call(
@@ -208,7 +241,7 @@ impl AaveV3Adapter {
                 IAaveOracle::getAssetPriceCall { asset: *a },
             ));
         }
-        let res = multicall(&self.rpc.fast, &calls, 200).await?;
+        let res = multicall(p, &calls, 200).await?;
         Ok(self
             .reserves
             .iter()
@@ -227,6 +260,7 @@ impl AaveV3Adapter {
                         .unwrap_or(u8::try_from(c.decimals).unwrap_or(18)),
                     liquidation_bonus_bps: u32::try_from(c.liquidationBonus).unwrap_or(0),
                     protocol_fee_bps: u32::try_from(fee).unwrap_or(0),
+                    liquidation_threshold_bps: u32::try_from(c.liquidationThreshold).unwrap_or(0),
                     price_usd: f64::from(px) / 1e8,
                 })
             })
@@ -234,23 +268,53 @@ impl AaveV3Adapter {
     }
 
     async fn position(&self, user: Address, health_factor: f64) -> Result<Position> {
-        let calls: Vec<_> = self
-            .reserves
+        let mut v = self
+            .positions_on(&self.rpc.fast, &[(user, health_factor)])
+            .await?;
+        v.pop().context("no position")
+    }
+
+    /// Balances per reserve for each `(user, health factor)`, in one batched multicall.
+    async fn positions_on(
+        &self,
+        p: &DynProvider,
+        users: &[(Address, f64)],
+    ) -> Result<Vec<Position>> {
+        let n = self.reserves.len().max(1);
+        let calls: Vec<_> = users
             .iter()
-            .map(|a| {
-                call(
-                    self.cfg.data_provider,
-                    IAaveDataProvider::getUserReserveDataCall { asset: *a, user },
-                )
+            .flat_map(|(user, _)| {
+                self.reserves.iter().map(|a| {
+                    call(
+                        self.cfg.data_provider,
+                        IAaveDataProvider::getUserReserveDataCall {
+                            asset: *a,
+                            user: *user,
+                        },
+                    )
+                })
             })
             .collect();
-        let res = multicall(&self.rpc.fast, &calls, 200).await?;
+        let res = multicall(p, &calls, 200).await?;
+        Ok(users
+            .iter()
+            .zip(res.chunks(n))
+            .map(|((user, hf), rows)| self.position_from(*user, *hf, rows))
+            .collect())
+    }
+
+    fn position_from(
+        &self,
+        user: Address,
+        health_factor: f64,
+        rows: &[Option<alloy::primitives::Bytes>],
+    ) -> Position {
         let mut pos = Position {
             user,
             health_factor,
             ..Default::default()
         };
-        for (a, r) in self.reserves.iter().zip(res.iter()) {
+        for (a, r) in self.reserves.iter().zip(rows.iter()) {
             let Some(d) = decode::<IAaveDataProvider::getUserReserveDataCall>(r) else {
                 continue;
             };
@@ -263,7 +327,84 @@ impl AaveV3Adapter {
                 pos.debt.push((*a, debt));
             }
         }
-        Ok(pos)
+        pos
+    }
+
+    /// Refresh the prediction snapshot for at-risk users (sweep RPC: free, not latency-critical).
+    async fn refresh_snapshot(&self, hs: &[Health]) {
+        let users: Vec<(Address, f64)> = hs
+            .iter()
+            .filter(|h| h.debt_usd > 0.0 && h.health_factor < EXPOSURE_HF)
+            .map(|h| (h.account.account, h.health_factor))
+            .collect();
+        let p = &self.rpc.sweep;
+        let aggs: Vec<Address> = self.feed_assets.keys().copied().collect();
+        let answer_calls: Vec<_> = aggs
+            .iter()
+            .map(|a| call(*a, IAggregator::latestAnswerCall {}))
+            .collect();
+        let fetched = async {
+            let reserves = self.reserves_info_on(p).await?;
+            let positions = self.positions_on(p, &users).await?;
+            let answers = multicall(p, &answer_calls, 200).await?;
+            anyhow::Ok((reserves, positions, answers))
+        };
+        match fetched.await {
+            Ok((reserves, positions, answers)) => {
+                let cached = positions
+                    .into_iter()
+                    .filter_map(|pos| Cached::new(pos, &reserves))
+                    .collect();
+                let answers = aggs
+                    .iter()
+                    .zip(answers.iter())
+                    .filter_map(|(a, r)| {
+                        let v = decode::<IAggregator::latestAnswerCall>(r)?;
+                        Some((*a, v.to_string().parse::<f64>().ok()?))
+                    })
+                    .collect();
+                *self.snapshot.lock().unwrap() = Snapshot {
+                    reserves,
+                    cached,
+                    answers,
+                };
+            }
+            Err(e) => warn!(protocol = ID, error = %format!("{e:#}"), "prediction snapshot"),
+        }
+    }
+
+    /// Executor plan for liquidating `pos` as sized by `p`.
+    fn build_plan(&self, account: AccountRef, pos: &Position, p: &LiquidationPlan) -> Plan {
+        let debt_raw = pos
+            .debt
+            .iter()
+            .find(|(a, _)| *a == p.debt)
+            .map(|(_, d)| *d)
+            .unwrap_or(0.0);
+        let flash = U256::from((debt_raw * FLASH_BUFFER) as u128 + 1);
+        let data = liquidationCallCall {
+            collateralAsset: p.collateral,
+            debtAsset: p.debt,
+            user: account.account,
+            debtToCover: U256::MAX,
+            receiveAToken: false,
+        }
+        .abi_encode();
+        Plan {
+            protocol: ID,
+            account,
+            debt_asset: p.debt,
+            collateral_asset: p.collateral,
+            flash_amount: flash,
+            expected_collateral: p.collateral_out,
+            bonus_usd: p.bonus_usd,
+            calls: vec![ProtocolCall {
+                target: self.cfg.pool,
+                data: data.into(),
+                approve_spender: self.cfg.pool,
+                approve_amount: flash,
+            }],
+        }
     }
 }
 
@@ -326,6 +467,7 @@ impl LiquidationAdapter for AaveV3Adapter {
             .collect();
         if !fast {
             self.refresh_user_masks(&hs).await;
+            self.refresh_snapshot(&hs).await;
         }
         Ok(hs)
     }
@@ -333,39 +475,25 @@ impl LiquidationAdapter for AaveV3Adapter {
     async fn plan(&self, h: &Health, _executor: Address) -> Result<Option<Plan>> {
         let reserves = self.reserves_info().await?;
         let pos = self.position(h.account.account, h.health_factor).await?;
-        let Some(p) = math::plan(&pos, &reserves) else {
-            return Ok(None);
+        Ok(math::plan(&pos, &reserves).map(|p| self.build_plan(h.account, &pos, &p)))
+    }
+
+    fn predict(&self, feed: Address, answer: f64) -> Vec<Plan> {
+        let Some(assets) = self.feed_assets.get(&feed) else {
+            return vec![];
         };
-        let debt_raw = pos
-            .debt
-            .iter()
-            .find(|(a, _)| *a == p.debt)
-            .map(|(_, d)| *d)
-            .unwrap_or(0.0);
-        let flash = U256::from((debt_raw * FLASH_BUFFER) as u128 + 1);
-        let data = liquidationCallCall {
-            collateralAsset: p.collateral,
-            debtAsset: p.debt,
-            user: h.account.account,
-            debtToCover: U256::MAX,
-            receiveAToken: false,
-        }
-        .abi_encode();
-        Ok(Some(Plan {
-            protocol: ID,
-            account: h.account,
-            debt_asset: p.debt,
-            collateral_asset: p.collateral,
-            flash_amount: flash,
-            expected_collateral: p.collateral_out,
-            bonus_usd: p.bonus_usd,
-            calls: vec![ProtocolCall {
-                target: self.cfg.pool,
-                data: data.into(),
-                approve_spender: self.cfg.pool,
-                approve_amount: flash,
-            }],
-        }))
+        let mut snap = self.snapshot.lock().unwrap();
+        let old = snap.answers.insert(feed, answer);
+        let Some(old) = old.filter(|o| *o != 0.0) else {
+            return vec![]; // first sighting: nothing to compare against
+        };
+        let Snapshot {
+            reserves, cached, ..
+        } = &mut *snap;
+        math::predict(reserves, cached, assets, answer / old)
+            .into_iter()
+            .map(|(pos, p)| self.build_plan(self.account(pos.user), &pos, &p))
+            .collect()
     }
 
     fn price_feeds(&self) -> Vec<Address> {

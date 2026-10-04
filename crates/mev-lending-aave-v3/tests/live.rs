@@ -82,3 +82,76 @@ async fn adapter_reads_real_reserves_feeds_and_a_real_borrower() {
         );
     }
 }
+
+/// Backrun prediction on real positions: sweep the bot's cached borrowers (fills the prediction
+/// snapshot), then predict at today's ETH price (calibration: ~nobody liquidatable, as on-chain)
+/// and at a hypothetical -40% (plenty, with well-formed plans). Needs `data/arbitrum`'s index.
+#[tokio::test]
+#[ignore = "network"]
+async fn predicts_liquidations_from_a_price_report_on_real_positions() {
+    alloy::sol! {
+        #[sol(rpc)]
+        interface IAgg { function latestAnswer() external view returns (int256); }
+    }
+    let cache =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/arbitrum/aave_v3_borrowers.json");
+    if !cache.exists() {
+        eprintln!("skipping: no {}", cache.display());
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let idx = dir.path().join("aave_v3_borrowers.json");
+    std::fs::copy(&cache, &idx).unwrap();
+    let c = cfg().aave.unwrap();
+    let r = rpc();
+    let a = AaveV3Adapter::new(c, r.clone(), idx).await.unwrap();
+    let accounts = a.accounts();
+    let hs = a.health(&accounts, false).await.unwrap();
+    let liquidatable_now = hs
+        .iter()
+        .filter(|h| h.health_factor < 0.9995 && h.debt_usd > 0.0)
+        .count();
+
+    // ETH/USD aggregator (WETH's Aave source resolves to it).
+    let eth_usd: Address = "0xa5E1a36938769cbd5a26f5e19D8FCB379f597c83"
+        .parse()
+        .unwrap();
+    assert!(a.price_feeds().contains(&eth_usd));
+    let now: f64 = IAgg::new(eth_usd, &r.fast)
+        .latestAnswer()
+        .call()
+        .await
+        .unwrap()
+        .to_string()
+        .parse()
+        .unwrap();
+
+    // Same price as the snapshot: nothing newly crosses (calibration reproduces on-chain HFs).
+    let same = a.predict(eth_usd, now);
+    assert!(
+        same.is_empty(),
+        "calibration: {} predicted at today's price ({} already liquidatable on-chain)",
+        same.len(),
+        liquidatable_now
+    );
+    // ETH -40% (prices persist, so this is relative to the answer just reported).
+    let crash = a.predict(eth_usd, now * 0.6);
+    eprintln!(
+        "{} accounts, {} at-risk swept, liquidatable now {}, predicted at today's price {}, at -40% {}",
+        accounts.len(),
+        hs.iter()
+            .filter(|h| h.health_factor < 1.10 && h.debt_usd > 0.0)
+            .count(),
+        liquidatable_now,
+        same.len(),
+        crash.len()
+    );
+    assert!(
+        crash.len() > same.len(),
+        "an ETH crash must liquidate ETH-collateral borrowers"
+    );
+    for p in &crash {
+        assert!(p.bonus_usd > 0.0 && p.flash_amount > alloy::primitives::U256::ZERO);
+        assert_eq!(p.calls.len(), 1);
+    }
+}

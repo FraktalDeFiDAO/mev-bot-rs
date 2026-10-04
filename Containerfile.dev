@@ -1,7 +1,7 @@
 # Development toolchain: Rust + Foundry. Used by scripts/dev.sh; the repo is bind-mounted.
 FROM docker.io/library/archlinux@sha256:bf88f8143c3ef21b14d0ebb8140099f0bf75ecfc3699f357ff92317a73f5aba9
 
-RUN pacman -Syu --noconfirm --needed ca-certificates cargo rust gcc git curl clang \
+RUN pacman -Syu --noconfirm --needed ca-certificates cargo rust gcc git curl clang python \
     && pacman -Scc --noconfirm
 ARG APP_UID=1000
 ARG APP_GID=1000

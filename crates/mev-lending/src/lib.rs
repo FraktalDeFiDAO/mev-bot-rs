@@ -134,6 +134,15 @@ pub trait LiquidationAdapter: Send + Sync {
         true
     }
 
+    /// Backrun hook: `feed` (one of `price_feeds`) is about to report `answer` — seen in the
+    /// sequencer feed, not yet in a block. Return plans for positions that price makes
+    /// liquidatable, from cached state only (no RPC: this runs on the latency-critical path).
+    /// They can't be simulated (the chain doesn't have the price yet); the executor's on-chain
+    /// profit check is the guard. Default: no prediction.
+    fn predict(&self, _feed: Address, _answer: f64) -> Vec<Plan> {
+        Vec::new()
+    }
+
     /// Contracts the executor must allowlist (call targets and approval spenders).
     fn targets(&self) -> Vec<Address>;
 

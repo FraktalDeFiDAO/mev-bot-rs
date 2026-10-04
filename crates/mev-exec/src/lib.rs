@@ -69,12 +69,14 @@ impl Sender {
         Ok(self.reader.get_balance(self.address).await?)
     }
 
-    /// Send an arbitrage through the executor.
+    /// Send an arbitrage through the executor. `gas_price` (wei): a cached value saves a round
+    /// trip on the latency-critical path; `None` fetches one.
     pub async fn send(
         &self,
         opp: &Opportunity,
         min_profit: U256,
         gas_limit: u64,
+        gas_price: Option<u128>,
     ) -> Result<TxHash> {
         let calldata = ArbExecutor::executeCall {
             token: opp.loan_token,
@@ -83,7 +85,7 @@ impl Sender {
             hops: opp.hops.iter().map(to_sol_hop).collect(),
         }
         .abi_encode();
-        self.send_calldata(calldata, gas_limit).await
+        self.send_calldata(calldata, gas_limit, gas_price).await
     }
 
     /// Send a liquidation (any protocol) through the executor.
@@ -94,13 +96,39 @@ impl Sender {
         min_profit: U256,
         gas_limit: u64,
     ) -> Result<TxHash> {
-        self.send_calldata(liquidate_calldata(plan, hops, min_profit), gas_limit)
+        self.send_calldata(liquidate_calldata(plan, hops, min_profit), gas_limit, None)
             .await
     }
 
+    /// Latency-critical liquidation (backrun): uses the caller's cached `gas_price` (wei)
+    /// instead of fetching one first.
+    pub async fn send_liquidation_fast(
+        &self,
+        plan: &Plan,
+        hops: &[Hop],
+        min_profit: U256,
+        gas_limit: u64,
+        gas_price: u128,
+    ) -> Result<TxHash> {
+        self.send_calldata(
+            liquidate_calldata(plan, hops, min_profit),
+            gas_limit,
+            Some(gas_price),
+        )
+        .await
+    }
+
     /// Sign once and broadcast the same raw tx to every endpoint; first success wins.
-    async fn send_calldata(&self, calldata: Vec<u8>, gas_limit: u64) -> Result<TxHash> {
-        let base_fee = self.reader.get_gas_price().await?;
+    async fn send_calldata(
+        &self,
+        calldata: Vec<u8>,
+        gas_limit: u64,
+        gas_price: Option<u128>,
+    ) -> Result<TxHash> {
+        let base_fee = match gas_price {
+            Some(g) => g,
+            None => self.reader.get_gas_price().await?,
+        };
         match self
             .sign_and_broadcast(&calldata, gas_limit, base_fee)
             .await
@@ -146,7 +174,8 @@ impl Sender {
             let raw = raw.clone();
             async move { p.send_raw_transaction(&raw).await.map(|_| ()) }
         });
-        let results = futures_join_all(sends).await;
+        // All endpoints at once: the sequencer endpoint must not wait behind the RPC.
+        let results = futures::future::join_all(sends).await;
         if results.iter().all(|r| r.is_err()) {
             // Nothing accepted it — give the nonce back.
             self.nonce.fetch_sub(1, Ordering::SeqCst);
@@ -224,17 +253,6 @@ pub fn liquidate_calldata(plan: &Plan, hops: &[Hop], min_profit: U256) -> Vec<u8
         hops: hops.iter().map(to_sol_hop).collect(),
     }
     .abi_encode()
-}
-
-async fn futures_join_all<F: std::future::Future>(
-    futs: impl IntoIterator<Item = F>,
-) -> Vec<F::Output> {
-    let handles: Vec<_> = futs.into_iter().collect();
-    let mut out = Vec::with_capacity(handles.len());
-    for f in handles {
-        out.push(f.await);
-    }
-    out
 }
 
 #[cfg(test)]
