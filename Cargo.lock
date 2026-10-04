@@ -2893,6 +2893,7 @@ dependencies = [
  "mev-config",
  "mev-engine",
  "mev-rpc",
+ "mev-types",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3170,6 +3171,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "mev-types",
  "serde",
  "serde_json",
  "tempfile",
