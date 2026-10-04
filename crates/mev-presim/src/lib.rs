@@ -107,6 +107,41 @@ pub fn to_rpc_log(l: &SimLog) -> alloy::rpc::types::Log {
     }
 }
 
+/// What happened to feed transactions (per summary interval): why pool updates were or weren't
+/// learned early.
+#[derive(Debug, Default)]
+pub struct PresimStats {
+    pub feed: std::sync::atomic::AtomicU64,
+    pub candidates: std::sync::atomic::AtomicU64,
+    pub skipped_busy: std::sync::atomic::AtomicU64,
+    pub moved_pools: std::sync::atomic::AtomicU64,
+    pub no_pool_effect: std::sync::atomic::AtomicU64,
+    pub timeouts: std::sync::atomic::AtomicU64,
+    pub errors: std::sync::atomic::AtomicU64,
+    /// Sum of simulate round-trip ms (for the mean).
+    pub sim_ms_total: std::sync::atomic::AtomicU64,
+}
+
+impl PresimStats {
+    /// One-line summary since the last call; resets the counters.
+    pub fn take_summary(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        let t = |a: &std::sync::atomic::AtomicU64| a.swap(0, Relaxed);
+        let (feed, cand, busy) = (t(&self.feed), t(&self.candidates), t(&self.skipped_busy));
+        let (moved, none, to, err) = (
+            t(&self.moved_pools),
+            t(&self.no_pool_effect),
+            t(&self.timeouts),
+            t(&self.errors),
+        );
+        let sims = moved + none;
+        let mean = t(&self.sim_ms_total).checked_div(sims).unwrap_or(0);
+        format!(
+            "feed={feed} candidates={cand} skipped_busy={busy} moved_pools={moved} no_pool_effect={none} timeouts={to} errors={err} mean_sim_ms={mean}"
+        )
+    }
+}
+
 /// Pool logs a feed transaction is about to emit, and when the feed delivered it.
 #[derive(Debug, Clone)]
 pub struct Presimulated {
@@ -124,25 +159,47 @@ pub async fn run(
     max_in_flight: usize,
     timeout: std::time::Duration,
     out: tokio::sync::mpsc::UnboundedSender<Presimulated>,
+    stats: std::sync::Arc<PresimStats>,
 ) {
+    use std::sync::atomic::Ordering::Relaxed;
     let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(max_in_flight.max(1)));
     while let Some(st) = feed.recv().await {
         if out.is_closed() {
             return;
         }
+        stats.feed.fetch_add(1, Relaxed);
         if !is_candidate(&st) {
             continue;
         }
+        stats.candidates.fetch_add(1, Relaxed);
         let Ok(permit) = slots.clone().try_acquire_owned() else {
+            stats.skipped_busy.fetch_add(1, Relaxed);
             continue;
         };
-        let (p, out) = (p.clone(), out.clone());
+        let (p, out, stats) = (p.clone(), out.clone(), stats.clone());
         tokio::spawn(async move {
+            let t = std::time::Instant::now();
             let res = tokio::time::timeout(timeout, simulate_logs(&p, &st.tx)).await;
             drop(permit);
-            let Ok(Ok(logs)) = res else { return };
+            let logs = match res {
+                Err(_) => {
+                    stats.timeouts.fetch_add(1, Relaxed);
+                    return;
+                }
+                Ok(Err(_)) => {
+                    stats.errors.fetch_add(1, Relaxed);
+                    return;
+                }
+                Ok(Ok(logs)) => logs,
+            };
+            stats
+                .sim_ms_total
+                .fetch_add(t.elapsed().as_millis() as u64, Relaxed);
             let logs: Vec<_> = pool_events(&logs).map(to_rpc_log).collect();
-            if !logs.is_empty() {
+            if logs.is_empty() {
+                stats.no_pool_effect.fetch_add(1, Relaxed);
+            } else {
+                stats.moved_pools.fetch_add(1, Relaxed);
                 let _ = out.send(Presimulated {
                     tx: st.hash,
                     received: st.received,
