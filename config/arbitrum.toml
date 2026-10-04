@@ -87,6 +87,7 @@ min_profit_usd = 0.05          # net of gas
 max_gas_usd_per_day = 3.0
 max_consecutive_failures = 10
 max_loan_usd = 50000.0
+arb_presimulate = false       # live arbs send on the local model; executor minProfit (>= gas) is the guard
 
 [tokens]
 WETH = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
