@@ -5,8 +5,9 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
 ---
 
 **Updated:** 2026-10-04 (evening)
-**Running:** LIVE on `administrator@194.163.145.241:~/src/mev-bot-v3` (Contabo FR), deployed from
-`main` @ `0d2e729` via `scripts/deploy.sh` (DECISIONS #38–39). Never run a second live bot.
+**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot` (t3.small, DECISIONS #44) since 2026-10-04
+22:57 UTC; Contabo stopped (rollback only). Deploy: `scripts/deploy.sh live --yes` (defaults to Ohio,
+builds locally). Never run a second live bot.
 **Executor:** `0xc0B4BA513359979793B9aaa8C74b526aD644AF8D`. Hot wallet ~0.007 ETH.
 
 ## Open PRs (user merges; squash-only)
