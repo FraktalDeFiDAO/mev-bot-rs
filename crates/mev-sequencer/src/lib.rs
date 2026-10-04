@@ -131,13 +131,17 @@ pub fn decode_l2_message(bytes: &[u8], depth: usize, out: &mut Vec<TxEnvelope>) 
     }
 }
 
+/// The feed sends several frames a second; this long without one means the connection is dead
+/// even if the socket is still open (seen live: a reconnect that never delivered a frame).
+pub const FEED_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Connect to the feed and forward every sequenced transaction. Reconnects with backoff forever;
 /// returns only when the receiver is dropped.
 pub async fn run(url: String, tx: mpsc::UnboundedSender<SequencedTx>) {
     let mut backoff = mev_rpc::Backoff::default();
     loop {
         let started = Instant::now();
-        match stream_once(&url, &tx).await {
+        match stream_once(&url, &tx, FEED_IDLE_TIMEOUT).await {
             Ok(()) => return, // receiver dropped
             Err(e) => {
                 // A connection that stayed up a while was healthy: start backoff over.
@@ -152,17 +156,31 @@ pub async fn run(url: String, tx: mpsc::UnboundedSender<SequencedTx>) {
     }
 }
 
-async fn stream_once(url: &str, tx: &mpsc::UnboundedSender<SequencedTx>) -> Result<()> {
-    let (mut ws, _) = tokio_tungstenite::connect_async(url)
+async fn stream_once(
+    url: &str,
+    tx: &mpsc::UnboundedSender<SequencedTx>,
+    idle: Duration,
+) -> Result<()> {
+    let (mut ws, _) = tokio::time::timeout(idle, tokio_tungstenite::connect_async(url))
         .await
+        .context("feed connect timed out")?
         .context("feed connect")?;
     info!(url, "sequencer feed connected");
-    while let Some(frame) = ws.next().await {
+    // Only data frames count as liveness: pings alone don't mean transactions are flowing.
+    let mut last_data = tokio::time::Instant::now();
+    loop {
+        let Some(frame) = tokio::time::timeout_at(last_data + idle, ws.next())
+            .await
+            .with_context(|| format!("feed stalled: no frame for {}s", idle.as_secs()))?
+        else {
+            break;
+        };
         let text = match frame.context("feed read")? {
             Message::Text(t) => t,
             Message::Close(_) => anyhow::bail!("feed closed by server"),
             _ => continue,
         };
+        last_data = tokio::time::Instant::now();
         let received = Instant::now();
         let parsed = match parse_broadcast(&text) {
             Ok(p) => p,
@@ -259,6 +277,31 @@ mod tests {
         let mut out = vec![];
         decode_l2_message(&bad, 0, &mut out);
         assert!(out.is_empty());
+    }
+
+    /// A server that accepts the WebSocket, then only pings: the reader must give up, not hang.
+    #[tokio::test]
+    async fn silent_feed_times_out_instead_of_hanging() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(sock).await.unwrap();
+            use futures::SinkExt;
+            loop {
+                if ws.send(Message::Ping(vec![].into())).await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let idle = Duration::from_millis(300);
+        let res = tokio::time::timeout(Duration::from_secs(5), stream_once(&url, &tx, idle))
+            .await
+            .expect("stream_once hung on a silent feed");
+        let err = format!("{:#}", res.unwrap_err());
+        assert!(err.contains("feed stalled"), "{err}");
     }
 
     #[test]
