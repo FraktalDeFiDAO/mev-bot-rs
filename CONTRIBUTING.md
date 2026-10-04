@@ -59,10 +59,23 @@ docs(planning): record node provider decision
 
 ## Releases & deploys
 
-- Tag `main` with SemVer: `git tag -s v0.3.0 -m "v0.3.0" && git push origin v0.3.0`.
-- Only tagged commits are deployed to the live bot. Contract deployments record address + tag in
-  `docs/planning/DECISIONS.md`.
-- Rollback = redeploy the previous tag.
+Develop locally, the server only pulls:
+
+```
+feature branch -> PR -> merge on GitHub -> git checkout main && git pull -> scripts/deploy.sh live --yes
+```
+
+- The bot runs on `administrator@194.163.145.241:~/src/mev-bot-v3` (DECISIONS #38). Never run it
+  locally at the same time: one wallet, one bot.
+- `scripts/deploy.sh shadow | live --yes` deploys `origin/main` only: clean tree, gate passes, the
+  server fetches with a **read-only deploy key** (`~/.ssh/mev-bot-deploy`, host alias
+  `github-mev-bot`) and checks out that exact commit. Every deploy is tagged `deploy-<UTC>`.
+- Never edit files on the server; the deploy refuses a dirty server checkout. Server-only state is
+  `.env` (copied by hand, chmod 600) and `data/` (indexes, logs, kill switch), both untracked.
+- Rollback: `git checkout <older deploy tag>` is not deployable by design; revert on a branch, PR,
+  merge, deploy.
+- Releases: tag `main` with SemVer (`git tag -s v0.3.0 -m "v0.3.0" && git push origin v0.3.0`).
+  Contract deployments record address + tag in `docs/planning/DECISIONS.md`.
 
 ## Never commit
 
