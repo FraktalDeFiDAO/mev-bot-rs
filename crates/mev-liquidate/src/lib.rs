@@ -25,7 +25,11 @@ const BURST_EVERY: Duration = Duration::from_millis(250);
 /// How long a burst lasts.
 const BURST_FOR: Duration = Duration::from_millis(1_800);
 /// Don't re-plan the same account more often than this.
+/// Re-plan cooldown per account: starts here and doubles each time the same account is still
+/// liquidatable (a real opportunity gets liquidated and disappears; one that persists is
+/// unworkable — bad debt, no route, too large — and each re-plan costs paid RPC calls).
 const REPLAN_COOLDOWN: Duration = Duration::from_secs(3);
+const REPLAN_COOLDOWN_MAX: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
@@ -70,7 +74,8 @@ pub struct Runner {
     cfg: RunnerConfig,
     slots: Vec<Slot>,
     feeds: FeedWatcher<usize>,
-    last_plan: HashMap<AccountRef, Instant>,
+    /// When each account was last planned and its current cooldown.
+    last_plan: HashMap<AccountRef, (Instant, Duration)>,
 }
 
 impl Runner {
@@ -162,10 +167,29 @@ impl Runner {
         all_done
     }
 
+    /// Health-sweep every adapter concurrently (one slow venue must not delay the others).
+    async fn sweep_all(&mut self) {
+        let jobs = self.slots.iter().map(|s| async move {
+            let accounts = s.adapter.accounts();
+            let res = s.adapter.health(&accounts, false).await;
+            (accounts.len(), res)
+        });
+        let results = futures::future::join_all(jobs).await;
+        for (i, (n, res)) in results.into_iter().enumerate() {
+            self.apply_sweep(i, n, res);
+        }
+    }
+
+    #[cfg(test)]
     async fn sweep(&mut self, i: usize) {
         let accounts = self.slots[i].adapter.accounts();
+        let res = self.slots[i].adapter.health(&accounts, false).await;
+        self.apply_sweep(i, accounts.len(), res);
+    }
+
+    fn apply_sweep(&mut self, i: usize, accounts: usize, res: anyhow::Result<Vec<Health>>) {
         let id = self.slots[i].adapter.id();
-        match self.slots[i].adapter.health(&accounts, false).await {
+        match res {
             Ok(hs) => {
                 let at_risk: HashMap<AccountRef, Health> = hs
                     .into_iter()
@@ -175,7 +199,7 @@ impl Runner {
                 let liquidatable = at_risk.values().filter(|h| h.liquidatable()).count();
                 info!(
                     protocol = id,
-                    accounts = accounts.len(),
+                    accounts,
                     at_risk = at_risk.len(),
                     liquidatable,
                     "sweep"
@@ -203,16 +227,15 @@ impl Runner {
         for h in hs {
             self.slots[i].at_risk.insert(h.account, h);
             if !h.liquidatable() || !self.worth_watching(&h) {
+                self.last_plan.remove(&h.account); // healthy again: reset its backoff
                 continue;
             }
-            if self
-                .last_plan
-                .get(&h.account)
-                .is_some_and(|t| t.elapsed() < REPLAN_COOLDOWN)
-            {
-                continue;
-            }
-            self.last_plan.insert(h.account, Instant::now());
+            let cooldown = match self.last_plan.get(&h.account) {
+                Some((at, cd)) if at.elapsed() < *cd => continue,
+                Some((_, cd)) => (*cd * 2).min(REPLAN_COOLDOWN_MAX),
+                None => REPLAN_COOLDOWN,
+            };
+            self.last_plan.insert(h.account, (Instant::now(), cooldown));
             let ev = match self.slots[i].adapter.plan(&h, self.cfg.executor).await {
                 Ok(Some(p)) => RunnerEvent::Plan(p),
                 Ok(None) => RunnerEvent::NoPlan(h),
@@ -266,11 +289,7 @@ impl Runner {
                         index_tick.reset();
                     }
                 }
-                _ = sweep.tick() => {
-                    for i in 0..self.slots.len() {
-                        self.sweep(i).await;
-                    }
-                }
+                _ = sweep.tick() => self.sweep_all().await,
                 _ = fallback.tick() => {
                     for i in 0..self.slots.len() {
                         if !self.poll(i, &tx).await { return; }
@@ -475,6 +494,23 @@ mod tests {
             rx.try_recv().is_err(),
             "cooldown prevents immediate re-plan"
         );
+
+        // Persistently liquidatable (unworkable) accounts back off exponentially...
+        let acct = *r.slots[0].at_risk.keys().next().unwrap();
+        r.last_plan.insert(
+            acct,
+            (
+                Instant::now() - Duration::from_secs(100),
+                Duration::from_secs(40),
+            ),
+        );
+        assert!(r.poll(0, &tx).await);
+        assert!(matches!(rx.try_recv(), Ok(RunnerEvent::Plan(_))));
+        assert_eq!(r.last_plan[&acct].1, Duration::from_secs(80));
+        // ...and the backoff resets once the account is healthy again.
+        *hf.lock().unwrap() = 1.02;
+        assert!(r.poll(0, &tx).await);
+        assert!(!r.last_plan.contains_key(&acct));
     }
 
     #[tokio::test]

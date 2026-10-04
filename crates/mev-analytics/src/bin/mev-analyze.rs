@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
     )?;
     let blocks: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1200);
     let secrets = Secrets::from_env(&cfg.name.to_uppercase())?;
-    let rpc = Rpc::connect(&secrets.http_url, &secrets.ws_url).await?;
+    let rpc = Rpc::connect(&secrets.http_urls(), &secrets.ws_urls()).await?;
     let usd = cfg.token(&cfg.usd_token)?;
     let native = cfg.token(&cfg.native_token)?;
 

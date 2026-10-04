@@ -6,6 +6,7 @@ use alloy::{
     sol_types::SolCall,
 };
 pub mod meter;
+pub mod rotate;
 
 use std::{future::Future, sync::Arc, time::Duration};
 
@@ -13,6 +14,7 @@ use alloy::rpc::client::ClientBuilder;
 use anyhow::{Context, Result};
 pub use meter::{MeterLayer, RpcMeter};
 use mev_bindings::{IMulticall3, MULTICALL3};
+pub use rotate::RotatingTransport;
 use tracing::warn;
 
 #[derive(Clone)]
@@ -21,27 +23,61 @@ pub struct Rpc {
     pub ws: DynProvider,
     /// Requests made through `http` (the paid, latency-critical endpoint).
     pub meter: Arc<RpcMeter>,
-    ws_url: String,
+    ws_urls: Vec<String>,
+    /// Index into `ws_urls` of the current WS connection.
+    ws_idx: usize,
 }
 
 impl Rpc {
-    pub async fn connect(http_url: &str, ws_url: &str) -> Result<Self> {
+    /// Paid reads rotate across all `http_urls` (falling through on rate limits / provider errors);
+    /// the WS connects to the first `ws_urls` entry that answers.
+    pub async fn connect(http_urls: &[String], ws_urls: &[String]) -> Result<Self> {
+        anyhow::ensure!(
+            !http_urls.is_empty() && !ws_urls.is_empty(),
+            "need at least one HTTP and one WS URL"
+        );
         let meter = RpcMeter::new();
-        let http = metered_http_provider(http_url, meter.clone())?;
-        let ws = connect_ws(ws_url).await?;
-        Ok(Self {
-            http,
-            ws,
-            meter,
-            ws_url: ws_url.to_string(),
-        })
+        let http = if http_urls.len() == 1 {
+            metered_http_provider(&http_urls[0], meter.clone())?
+        } else {
+            metered_rotating_provider(http_urls, meter.clone())?
+        };
+        let mut last_err = None;
+        for (i, url) in ws_urls.iter().enumerate() {
+            match connect_ws(url).await {
+                Ok(ws) => {
+                    return Ok(Self {
+                        http,
+                        ws,
+                        meter,
+                        ws_urls: ws_urls.to_vec(),
+                        ws_idx: i,
+                    });
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap())
     }
 
     /// Replace the WS provider with a fresh connection. Needed after alloy's own reconnect
     /// gives up (e.g. a multi-minute DNS outage): the old provider is dead for good.
     pub async fn reconnect_ws(&mut self) -> Result<()> {
-        self.ws = connect_ws(&self.ws_url).await?;
-        Ok(())
+        // Try the next endpoint first (the current one just failed), wrapping around.
+        let n = self.ws_urls.len();
+        let mut last_err = None;
+        for k in 1..=n {
+            let i = (self.ws_idx + k) % n;
+            match connect_ws(&self.ws_urls[i]).await {
+                Ok(ws) => {
+                    self.ws = ws;
+                    self.ws_idx = i;
+                    return Ok(());
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        Err(last_err.unwrap())
     }
 
     /// Batch many read calls into Multicall3 `aggregate3` requests. `None` = that call failed.
@@ -50,31 +86,48 @@ impl Rpc {
     }
 }
 
+/// Chunks in flight at once. With a rotating provider each lands on a different endpoint.
+const MULTICALL_CONCURRENCY: usize = 4;
+
 /// Multicall3 batching on any provider, `chunk` calls per request (lower it for gas-heavy calls).
+/// Chunks run concurrently (bounded); results keep the input order.
 pub async fn multicall(
     provider: &DynProvider,
     calls: &[(Address, Bytes)],
     chunk: usize,
 ) -> Result<Vec<Option<Bytes>>> {
+    use futures::{StreamExt, TryStreamExt};
     let mc = IMulticall3::new(MULTICALL3, provider);
-    let mut out = Vec::with_capacity(calls.len());
-    for part in calls.chunks(chunk.max(1)) {
-        let batch: Vec<IMulticall3::Call3> = part
-            .iter()
-            .map(|(target, data)| IMulticall3::Call3 {
-                target: *target,
-                allowFailure: true,
-                callData: data.clone(),
-            })
-            .collect();
-        let res = mc
-            .aggregate3(batch)
-            .call()
-            .await
-            .context("multicall failed")?;
-        out.extend(res.into_iter().map(|r| r.success.then_some(r.returnData)));
-    }
-    Ok(out)
+    let parts: Vec<Vec<IMulticall3::Call3>> = calls
+        .chunks(chunk.max(1))
+        .map(|part| {
+            part.iter()
+                .map(|(target, data)| IMulticall3::Call3 {
+                    target: *target,
+                    allowFailure: true,
+                    callData: data.clone(),
+                })
+                .collect()
+        })
+        .collect();
+    let results: Vec<Vec<IMulticall3::Result>> = futures::stream::iter(parts)
+        .map(|batch| {
+            let mc = &mc;
+            async move {
+                mc.aggregate3(batch)
+                    .call()
+                    .await
+                    .context("multicall failed")
+            }
+        })
+        .buffered(MULTICALL_CONCURRENCY)
+        .try_collect()
+        .await?;
+    Ok(results
+        .into_iter()
+        .flatten()
+        .map(|r| r.success.then_some(r.returnData))
+        .collect())
 }
 
 /// True for HTTP 429 / provider rate-limit errors (back off instead of shrinking requests).
@@ -88,6 +141,14 @@ pub fn metered_http_provider(url: &str, meter: Arc<RpcMeter>) -> Result<DynProvi
     let client = ClientBuilder::default()
         .layer(MeterLayer(meter))
         .http(url.parse().context("invalid HTTP URL")?);
+    Ok(ProviderBuilder::new().connect_client(client).erased())
+}
+
+/// Metered provider rotating across several HTTP endpoints (falls through on provider errors).
+pub fn metered_rotating_provider(urls: &[String], meter: Arc<RpcMeter>) -> Result<DynProvider> {
+    let client = ClientBuilder::default()
+        .layer(MeterLayer(meter))
+        .transport(RotatingTransport::http(urls)?, false);
     Ok(ProviderBuilder::new().connect_client(client).erased())
 }
 

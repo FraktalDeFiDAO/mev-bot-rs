@@ -3156,6 +3156,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
+ "futures",
  "mev-lending",
  "mev-oracle",
  "mev-sequencer",
@@ -3202,6 +3203,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "futures",
  "mev-bindings",
  "tokio",
  "tower",

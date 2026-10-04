@@ -18,9 +18,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Nodes (5)
 
 - **Testing** — `docs/planning/TESTING.md:L1`
-- **Bugs these tests caught** — `docs/planning/TESTING.md:L30`
-- **E2E safety** — `docs/planning/TESTING.md:L24`
-- **Gate** — `docs/planning/TESTING.md:L15`
+- **Bugs these tests caught** — `docs/planning/TESTING.md:L32`
+- **E2E safety** — `docs/planning/TESTING.md:L26`
+- **Gate** — `docs/planning/TESTING.md:L16`
 - **TESTING.md** — `docs/planning/TESTING.md:L1`
 
 ## Related communities

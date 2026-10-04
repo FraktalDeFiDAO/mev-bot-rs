@@ -36,6 +36,10 @@ pub struct RiskConfig {
     pub max_gas_usd_per_day: f64,
     pub max_consecutive_failures: u32,
     pub max_loan_usd: f64,
+    /// Liquidation plans claiming a bigger bonus than this are treated as broken/manipulated
+    /// oracles (e.g. bad-debt markets pricing dead collateral) and skipped.
+    #[serde(default = "default_max_bonus_usd")]
+    pub max_bonus_usd: f64,
 }
 
 /// Find long-tail pairs from recent swap activity instead of only the fixed `pairs` list.
@@ -64,6 +68,9 @@ pub struct LiquidationConfig {
     pub scan_rpc: String,
     /// RPC for full health sweeps (eth_call only, so any public RPC works).
     pub sweep_rpc: String,
+    /// More sweep RPCs: requests rotate across all of them and fall through on rate limits.
+    #[serde(default)]
+    pub sweep_rpc_fallbacks: Vec<String>,
     /// Accounts below this health factor are polled on price-feed updates.
     pub at_risk_hf: f64,
     /// Ignore positions with less debt (or collateral) than this: the bonus wouldn't cover gas.
@@ -215,6 +222,26 @@ pub struct Secrets {
     pub private_key: Option<String>,
     pub profit_receiver: Option<Address>,
     pub executor: Option<Address>,
+    /// Additional endpoints (`<PREFIX>_HTTP_URL_2..9`, `<PREFIX>_WS_URL_2..9`), e.g. a second
+    /// Alchemy app: paid reads rotate across all HTTP URLs, WS fails over in order.
+    pub extra_http_urls: Vec<String>,
+    pub extra_ws_urls: Vec<String>,
+}
+
+impl Secrets {
+    /// Primary HTTP URL followed by the extras.
+    pub fn http_urls(&self) -> Vec<String> {
+        std::iter::once(self.http_url.clone())
+            .chain(self.extra_http_urls.iter().cloned())
+            .collect()
+    }
+
+    /// Primary WS URL followed by the extras.
+    pub fn ws_urls(&self) -> Vec<String> {
+        std::iter::once(self.ws_url.clone())
+            .chain(self.extra_ws_urls.iter().cloned())
+            .collect()
+    }
 }
 
 impl std::fmt::Debug for Secrets {
@@ -251,8 +278,23 @@ impl Secrets {
                 .filter(|k| !k.trim().is_empty()),
             profit_receiver: addr("PROFIT_RECEIVER")?,
             executor: addr("EXECUTOR_ADDRESS")?,
+            extra_http_urls: numbered(prefix, "HTTP_URL"),
+            extra_ws_urls: numbered(prefix, "WS_URL"),
         })
     }
+}
+
+fn default_max_bonus_usd() -> f64 {
+    50_000.0
+}
+
+/// `<PREFIX>_<KEY>_2` .. `_9`, in order, skipping unset/empty ones.
+fn numbered(prefix: &str, key: &str) -> Vec<String> {
+    (2..=9)
+        .filter_map(|i| std::env::var(format!("{prefix}_{key}_{i}")).ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
@@ -306,9 +348,16 @@ mod tests {
             private_key: Some("0xdeadbeef".into()),
             profit_receiver: None,
             executor: None,
+            extra_http_urls: vec!["http://y".into()],
+            extra_ws_urls: vec![],
         };
         let shown = format!("{s:?}");
         assert!(!shown.contains("deadbeef"));
         assert!(shown.contains("redacted"));
+        assert_eq!(
+            s.http_urls(),
+            vec!["http://x".to_string(), "http://y".to_string()]
+        );
+        assert_eq!(s.ws_urls(), vec!["ws://x".to_string()]);
     }
 }

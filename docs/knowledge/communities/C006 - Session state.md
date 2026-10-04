@@ -18,8 +18,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Nodes (4)
 
 - **Session state** — `.ai/STATE.md:L1`
-- **Done and verified** — `.ai/STATE.md:L11`
-- **Next** — `.ai/STATE.md:L21`
+- **Done and verified** — `.ai/STATE.md:L12`
+- **Next** — `.ai/STATE.md:L24`
 - **STATE.md** — `.ai/STATE.md:L1`
 
 ## Related communities

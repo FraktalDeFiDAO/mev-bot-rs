@@ -64,6 +64,8 @@ pub struct Engine {
     meters: Vec<(&'static str, Arc<RpcMeter>)>,
     /// Cached L2 gas price (wei) and when it was read: one RPC call per 10 s, not per simulation.
     gas_price: Option<(Instant, f64)>,
+    /// Tokens we looked up swap routes for on demand (and when): at most one lookup per hour.
+    route_lookups: HashMap<Address, Instant>,
 }
 
 /// Liquidation side of the engine (the runner and its adapters run as their own task).
@@ -104,7 +106,7 @@ impl Engine {
         data_dir: PathBuf,
     ) -> Result<Self> {
         info!(chain = cfg.name, ?mode, "starting");
-        let rpc = Rpc::connect(&secrets.http_url, &secrets.ws_url).await?;
+        let rpc = Rpc::connect(&secrets.http_urls(), &secrets.ws_urls()).await?;
         let usd = cfg.token(&cfg.usd_token)?;
         let native = cfg.token(&cfg.native_token)?;
 
@@ -219,6 +221,7 @@ impl Engine {
             liq,
             meters,
             gas_price: None,
+            route_lookups: HashMap::new(),
         })
     }
 
@@ -229,6 +232,17 @@ impl Engine {
         let mut summary = tokio::time::interval(Duration::from_secs(60));
         let mut backoff = Backoff::default();
         let mut liq_rx = self.liq.as_mut().and_then(|l| l.rx.take());
+        // Created once, outside the loops: a signal arriving while a handler runs is not lost.
+        // SIGTERM is what `podman stop` sends.
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let shutdown = async move {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = sigterm.recv() => {}
+            }
+        };
+        tokio::pin!(shutdown);
         loop {
             // Never exit on network trouble: resubscribe, and if the WS provider itself is dead
             // (alloy gave up reconnecting), replace it — with backoff so outages don't spin.
@@ -264,7 +278,7 @@ impl Engine {
                         }
                     }
                     _ = summary.tick() => self.log_summary(),
-                    _ = tokio::signal::ctrl_c() => { info!("shutting down"); return Ok(()); }
+                    _ = &mut shutdown => { info!("shutting down"); return Ok(()); }
                 }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -330,6 +344,50 @@ impl Engine {
         self.store.len()
     }
 
+    /// Swap route for seized collateral. If none is known, look the token's pools up once (per
+    /// hour) through the DEX factories: markets found after startup (Morpho grows its index
+    /// continuously) otherwise never get routes. New pools are refreshed by the periodic resync.
+    async fn route(&mut self, plan: &Plan, via: &[Address]) -> Option<Vec<mev_types::Hop>> {
+        let (col, debt, amt) = (
+            plan.collateral_asset,
+            plan.debt_asset,
+            plan.expected_collateral,
+        );
+        if let Some((h, _)) = best_route(&self.store, col, debt, amt, via) {
+            return Some(h);
+        }
+        if self
+            .route_lookups
+            .get(&col)
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(3600))
+        {
+            return None;
+        }
+        self.route_lookups.insert(col, Instant::now());
+        let pairs: Vec<(Address, Address)> = std::iter::once((col, debt))
+            .chain(via.iter().map(|v| (col, *v)))
+            .filter(|(a, b)| a != b)
+            .collect();
+        let found = async {
+            let infos = mev_discovery::discover_pools(&self.rpc, &self.cfg, &pairs).await?;
+            mev_discovery::load_pools(&self.rpc, infos).await
+        }
+        .await;
+        match found {
+            Ok(pools) => {
+                let n = pools.len();
+                for p in pools {
+                    self.store.insert(p);
+                }
+                info!(token = %col, pools = n, "on-demand route discovery");
+            }
+            Err(e) => {
+                warn!(token = %col, error = %format!("{e:#}"), "on-demand route discovery failed")
+            }
+        }
+        best_route(&self.store, col, debt, amt, via).map(|(h, _)| h)
+    }
+
     /// L2 gas price, cached for 10 s (simulations come in bursts; each fetch is a paid call).
     async fn gas_price(&mut self) -> f64 {
         if let Some((at, wei)) = self.gas_price
@@ -384,6 +442,9 @@ impl Engine {
             candidates = c.candidates,
             simulated = c.simulated,
             profitable = c.sim_profitable,
+            liq_planned = c.liq_planned,
+            liq_profitable = c.liq_profitable,
+            feed_triggers = c.feed_triggers,
             sent = c.sent,
             ok = c.landed_ok,
             reverted = c.landed_reverted,
@@ -537,17 +598,15 @@ impl Engine {
         if plan.bonus_usd < self.cfg.risk.min_profit_usd {
             return self.metrics.event("liq_dust", base);
         }
+        if plan.bonus_usd > self.cfg.risk.max_bonus_usd {
+            // Seen live: bad-debt Morpho markets whose oracles still price dead collateral.
+            return self.metrics.event("liq_implausible", base);
+        }
         let hops = if plan.collateral_asset == plan.debt_asset {
             vec![]
         } else {
-            match best_route(
-                &self.store,
-                plan.collateral_asset,
-                plan.debt_asset,
-                plan.expected_collateral,
-                &via,
-            ) {
-                Some((h, _)) => h,
+            match self.route(&plan, &via).await {
+                Some(h) => h,
                 None => return self.metrics.event("liq_no_route", base),
             }
         };
@@ -702,7 +761,13 @@ async fn wire_executor(
     info!(%exec, %owner, %receiver, "executor");
     let sender = match (&secrets.private_key, mode) {
         (Some(pk), Mode::Live) => {
-            let extra: Vec<String> = cfg.sequencer_rpc.iter().cloned().collect();
+            // Broadcast to the sequencer and every extra endpoint (the primary is the reader).
+            let extra: Vec<String> = cfg
+                .sequencer_rpc
+                .iter()
+                .cloned()
+                .chain(secrets.extra_http_urls.iter().cloned())
+                .collect();
             let s = Sender::new(pk, rpc.http.clone(), &extra, exec, cfg.chain_id).await?;
             if s.address != owner {
                 bail!(
@@ -734,7 +799,13 @@ async fn build_liquidation(
     let arpc = AdapterRpc {
         fast: rpc.http.clone(),
         scan: metered(&lcfg.scan_rpc, "scan", meters)?,
-        sweep: metered(&lcfg.sweep_rpc, "sweep", meters)?,
+        sweep: metered_rotating(
+            std::iter::once(lcfg.sweep_rpc.clone())
+                .chain(lcfg.sweep_rpc_fallbacks.clone())
+                .collect(),
+            "sweep",
+            meters,
+        )?,
     };
     let mut adapters: Vec<Box<dyn LiquidationAdapter>> = Vec::new();
     if let Some(a) = cfg.aave.clone().filter(|a| a.enabled) {
@@ -789,6 +860,16 @@ fn metered(
     let m = RpcMeter::new();
     meters.push((name, m.clone()));
     mev_rpc::metered_http_provider(url, m)
+}
+
+fn metered_rotating(
+    urls: Vec<String>,
+    name: &'static str,
+    meters: &mut Vec<(&'static str, Arc<RpcMeter>)>,
+) -> Result<alloy::providers::DynProvider> {
+    let m = RpcMeter::new();
+    meters.push((name, m.clone()));
+    mev_rpc::metered_rotating_provider(&urls, m)
 }
 
 /// Warn (with the exact fix) about liquidation targets the executor hasn't allowlisted.
