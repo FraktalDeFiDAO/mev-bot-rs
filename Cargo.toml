@@ -57,6 +57,7 @@ mev-metrics = { path = "crates/mev-metrics" }
 mev-analytics = { path = "crates/mev-analytics" }
 mev-engine = { path = "crates/mev-engine" }
 mev-sequencer = { path = "crates/mev-sequencer" }
+mev-presim = { path = "crates/mev-presim" }
 
 [profile.release]
 lto = "fat"

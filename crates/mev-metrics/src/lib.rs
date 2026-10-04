@@ -15,6 +15,8 @@ use serde_json::{Value, json};
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Counters {
     pub updates: u64,
+    /// Pool updates learned from simulating feed txs (before their block).
+    pub presim_updates: u64,
     pub candidates: u64,
     pub simulated: u64,
     pub sim_profitable: u64,

@@ -67,6 +67,7 @@ pub struct Engine {
     last_sim: HashMap<(Address, Address), Instant>,
     mode: Mode,
     liq: Option<LiqCtx>,
+    presim_rx: Option<PresimRx>,
     /// Request meters per provider ("fast" = paid), drained into the minute summary.
     meters: Vec<(&'static str, Arc<RpcMeter>)>,
     /// (fetched at, wei); refreshed in the background so hot paths never wait on it.
@@ -77,6 +78,9 @@ pub struct Engine {
 }
 
 /// Liquidation side of the engine (the runner and its adapters run as their own task).
+/// Pool logs from simulated feed txs (feed-driven arbitrage).
+type PresimRx = mpsc::UnboundedReceiver<mev_presim::Presimulated>;
+
 struct LiqCtx {
     via: Vec<Address>,
     rx: Option<mpsc::UnboundedReceiver<RunnerEvent>>,
@@ -194,19 +198,60 @@ impl Engine {
         let risk = RiskGuard::new(limits, data_dir.join("STOP"));
         info!(pools = store.len(), kill_switch = %data_dir.join("STOP").display(), "ready");
 
+        // Sequencer feed, shared by the liquidation runner (price-feed triggers, backruns) and the
+        // pre-simulator (feed-driven arbitrage).
+        let presim_cfg = cfg
+            .presim
+            .clone()
+            .filter(|p| p.enabled && !p.rpc_urls.is_empty());
+        let (liq_feed, presim_feed) = match cfg.sequencer_feed.clone() {
+            Some(url) => {
+                let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<mev_sequencer::SequencedTx>();
+                tokio::spawn(mev_sequencer::run(url, raw_tx));
+                let (liq_tx, liq_rx) = mpsc::unbounded_channel();
+                let (pre_tx, pre_rx) = mpsc::unbounded_channel();
+                let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
+                tokio::spawn(async move {
+                    while let Some(st) = raw_rx.recv().await {
+                        if want_pre {
+                            let _ = pre_tx.send(st.clone());
+                        }
+                        if want_liq {
+                            let _ = liq_tx.send(st);
+                        }
+                    }
+                });
+                (Some(liq_rx), Some(pre_rx))
+            }
+            None => (None, None),
+        };
+        let presim_rx = match (presim_cfg, presim_feed) {
+            (Some(pc), Some(feed)) => {
+                let p = metered_rotating(pc.rpc_urls.clone(), "presim", &mut meters)?;
+                let (tx, rx) = mpsc::unbounded_channel();
+                tokio::spawn(mev_presim::run(
+                    feed,
+                    p,
+                    pc.max_in_flight,
+                    Duration::from_millis(pc.timeout_ms),
+                    tx,
+                ));
+                info!(
+                    rpcs = pc.rpc_urls.len(),
+                    max_in_flight = pc.max_in_flight,
+                    "feed pre-simulation on"
+                );
+                Some(rx)
+            }
+            _ => None,
+        };
         let liq = match liq_setup {
             Some((runner, via)) => {
                 if let Some(exec) = secrets.executor {
                     check_allowlist(&rpc, exec, &runner.targets()).await;
                 }
-                // Sequencer feed: real-time txs drive price-feed-triggered re-checks.
-                let feed = cfg.sequencer_feed.clone().map(|url| {
-                    let (tx, rx) = mpsc::unbounded_channel();
-                    tokio::spawn(mev_sequencer::run(url, tx));
-                    rx
-                });
                 let (tx, rx) = mpsc::unbounded_channel();
-                tokio::spawn(runner.run(feed, tx));
+                tokio::spawn(runner.run(liq_feed, tx));
                 Some(LiqCtx { via, rx: Some(rx) })
             }
             None => None,
@@ -227,6 +272,7 @@ impl Engine {
             last_sim: HashMap::new(),
             mode,
             liq,
+            presim_rx,
             meters,
             gas_price: Default::default(),
             gas_refreshing: Default::default(),
@@ -241,6 +287,7 @@ impl Engine {
         let mut summary = tokio::time::interval(Duration::from_secs(60));
         let mut backoff = Backoff::default();
         let mut liq_rx = self.liq.as_mut().and_then(|l| l.rx.take());
+        let mut presim_rx = self.presim_rx.take();
         // Created once, outside the loops: a signal arriving while a handler runs is not lost.
         // SIGTERM is what `podman stop` sends.
         let mut sigterm =
@@ -277,6 +324,15 @@ impl Engine {
                         if let Some(pool) = self.store.apply_log(&log) {
                             self.metrics.update(|c| c.updates += 1);
                             self.on_pool_update(pool, Instant::now(), &tx_done).await;
+                        }
+                    }
+                    Some(pre) = recv_opt(&mut presim_rx) => {
+                        // Same path as block logs, a block early; the real logs overwrite it.
+                        for log in &pre.logs {
+                            if let Some(pool) = self.store.apply_log(log) {
+                                self.metrics.update(|c| c.presim_updates += 1);
+                                self.on_pool_update(pool, pre.received, &tx_done).await;
+                            }
                         }
                     }
                     Some(done) = rx_done.recv() => self.on_tx_done(done),
@@ -458,6 +514,7 @@ impl Engine {
         let c = self.metrics.snapshot();
         info!(
             updates = c.updates,
+            presim_updates = c.presim_updates,
             candidates = c.candidates,
             simulated = c.simulated,
             profitable = c.sim_profitable,

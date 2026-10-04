@@ -142,3 +142,11 @@ fees = [100, 500, 2500, 10000]
 name = "camelot_v3"
 type = "algebra"
 factory = "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"
+
+# Feed-driven arbitrage: simulate sequencer-feed txs (eth_simulateV1) to see the pools they move
+# a block early. Measured from the server: PublicNode p50 37 ms / p90 57 ms, dRPC p50 66 ms.
+[presim]
+enabled = true
+rpc_urls = ["https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.drpc.org"]
+max_in_flight = 16
+timeout_ms = 250
