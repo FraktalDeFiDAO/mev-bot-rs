@@ -9,6 +9,9 @@ pub struct RiskLimits {
     pub min_profit_usd: f64,
     pub max_gas_usd_per_day: f64,
     pub max_consecutive_failures: u32,
+    /// Share of `max_gas_usd_per_day` arbitrage may use, so lost arb races can't spend the gas
+    /// liquidations need.
+    pub max_arb_gas_usd_per_day: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +28,7 @@ pub struct RiskGuard {
     kill_file: PathBuf,
     day: u64,
     spent_usd: f64,
+    arb_spent_usd: f64,
     consecutive_failures: u32,
     in_flight: bool,
 }
@@ -36,6 +40,7 @@ impl RiskGuard {
             kill_file,
             day: 0,
             spent_usd: 0.0,
+            arb_spent_usd: 0.0,
             consecutive_failures: 0,
             in_flight: false,
         }
@@ -90,6 +95,28 @@ impl RiskGuard {
         Ok(())
     }
 
+    /// `check` plus the arbitrage gas sub-budget.
+    pub fn check_arb(
+        &mut self,
+        net_profit_usd: f64,
+        gas_usd: f64,
+        now_secs: u64,
+    ) -> Result<(), Block> {
+        self.check(net_profit_usd, gas_usd, now_secs)?;
+        if self.arb_spent_usd + gas_usd > self.limits.max_arb_gas_usd_per_day {
+            return Err(Block::DailyGasCap {
+                spent_usd: self.arb_spent_usd,
+            });
+        }
+        Ok(())
+    }
+
+    /// Gas spent on arbitrage (counts toward both the total and the arbitrage budget).
+    pub fn record_arb_gas(&mut self, gas_usd: f64, now_secs: u64) {
+        self.roll_day(now_secs);
+        self.arb_spent_usd += gas_usd;
+    }
+
     pub fn mark_sent(&mut self) {
         self.in_flight = true;
     }
@@ -106,6 +133,16 @@ impl RiskGuard {
         }
     }
 
+    /// A race lost on-chain (unsimulated or front-run tx reverted by the executor's profit
+    /// check): costs gas, counted against the daily cap, but not a sign anything is broken, so it
+    /// doesn't advance the failure streak that pauses all sending (seen live: 10 lost arb races
+    /// paused liquidations too).
+    pub fn record_lost_race(&mut self, gas_usd: f64, now_secs: u64) {
+        self.roll_day(now_secs);
+        self.in_flight = false;
+        self.spent_usd += gas_usd;
+    }
+
     pub fn spent_today_usd(&self) -> f64 {
         self.spent_usd
     }
@@ -115,6 +152,7 @@ impl RiskGuard {
         if day != self.day {
             self.day = day;
             self.spent_usd = 0.0;
+            self.arb_spent_usd = 0.0;
         }
     }
 }
@@ -152,6 +190,7 @@ mod tests {
             min_profit_usd: 0.1,
             max_gas_usd_per_day: 1.0,
             max_consecutive_failures: 2,
+            max_arb_gas_usd_per_day: 0.5,
         };
         RiskGuard::new(limits, PathBuf::from("/nonexistent/STOP"))
     }
@@ -173,6 +212,33 @@ mod tests {
             g.check_concurrent(1.0, 0.01, 0),
             Err(Block::DailyGasCap { .. })
         ));
+    }
+
+    #[test]
+    fn lost_races_cost_gas_but_never_pause() {
+        let mut g = guard(); // pauses after 2 failures, $1/day
+        for _ in 0..5 {
+            g.mark_sent();
+            g.record_lost_race(0.1, 0);
+        }
+        assert!(g.check(1.0, 0.01, 0).is_ok(), "5 lost races: still sending");
+        g.record_lost_race(0.5, 0); // $1.0 spent
+        assert!(matches!(
+            g.check(1.0, 0.01, 0),
+            Err(Block::DailyGasCap { .. })
+        ));
+    }
+
+    #[test]
+    fn arbitrage_has_its_own_slice_of_the_gas_budget() {
+        let mut g = guard(); // $1/day total, $0.5 for arbs
+        g.record_lost_race(0.45, 0);
+        g.record_arb_gas(0.45, 0);
+        assert!(matches!(
+            g.check_arb(1.0, 0.1, 0),
+            Err(Block::DailyGasCap { .. })
+        ));
+        assert!(g.check(1.0, 0.1, 0).is_ok(), "liquidations keep the rest");
     }
 
     #[test]
@@ -220,7 +286,7 @@ mod props {
     proptest! {
         #[test]
         fn approved_sends_never_exceed_the_daily_gas_cap(gas in proptest::collection::vec(0.0f64..0.5, 1..60)) {
-            let limits = RiskLimits { min_profit_usd: 0.0, max_gas_usd_per_day: 3.0, max_consecutive_failures: u32::MAX };
+            let limits = RiskLimits { min_profit_usd: 0.0, max_gas_usd_per_day: 3.0, max_consecutive_failures: u32::MAX, max_arb_gas_usd_per_day: 3.0 };
             let mut g = RiskGuard::new(limits, PathBuf::from("/nonexistent/STOP"));
             for cost in gas {
                 if g.check(1.0, cost, 0).is_ok() {
