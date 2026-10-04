@@ -1,0 +1,6 @@
+﻿Venue,Can a normal user liquidate?,Practical note
+**Aave V3 on Arbitrum**,**Yes**,"Aave states liquidations are permissionless: if health factor is insufficient, “any address” can initiate liquidation and receive repaid debt + bonus."
+**Silo**,**Yes**,Silo docs say collateral-sale liquidations are “always permissionless and economically incentivized”; terms also say any third party may perform liquidations.
+**Compound III / Comet on Arbitrum**,"**Yes, but different shape**",A bot/individual can call `absorb`; profit usually comes from later `buyCollateral` at a discount when reserves are below target.
+**Fluid Vaults on Arbitrum**,**Likely open arbitrage/liquidation**,Fluid describes liquidations as discounted trades: “any trader” can sell debt back to the vault for discounted collateral.
+**Dolomite / Radiant / Morpho-like / Spark-like / Gearbox-like deployments**,**Audit candidates**,"Treat as money-market/leverage surfaces to verify per current contract: look for public `liquidate`/`absorb` and check fees/rakes, e.g. Dolomite documents Arbitrum liquidation penalties and a March-2026 liquidation-fee rake."

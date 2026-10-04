@@ -1,0 +1,43 @@
+name: mev-bot
+
+services:
+  bot:
+    image: localhost/mev-bot:dev
+    build:
+      context: .
+      dockerfile: Containerfile
+      args:
+        APP_UID: "${UID:-1000}"
+        APP_GID: "${GID:-1000}"
+    container_name: mev-bot-arbitrum
+    # Host networking: no NAT hop between the bot and the RPC / sequencer (latency).
+    network_mode: host
+    userns_mode: keep-id
+    user: "${UID:-1000}:${GID:-1000}"
+    command: ["--mode", "${MEV_MODE:-shadow}", "--config", "/app/config/arbitrum.toml"]
+    # Secrets and endpoints come from the git-ignored .env; never baked into the image.
+    env_file: .env
+    environment:
+      RUST_LOG: "${RUST_LOG:-info}"
+      NO_COLOR: "1"
+    volumes:
+      - ./data:/var/lib/mev-bot:Z
+      # Config is mounted so pair/pool tweaks don't need an image rebuild.
+      - ./config:/app/config:ro,Z
+    tmpfs:
+      - /tmp:rw,size=16m
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    # "always": podman-restart.service only revives these after a host reboot.
+    restart: always
+    healthcheck:
+      # The engine writes a heartbeat every 60s; unhealthy if older than 3 minutes.
+      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(cat /var/lib/mev-bot/arbitrum/heartbeat 2>/dev/null || echo 0) )) -lt 180"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 120s

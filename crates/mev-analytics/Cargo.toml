@@ -1,0 +1,23 @@
+[package]
+name = "mev-analytics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+dotenvy = { workspace = true }
+mev-types = { workspace = true }
+mev-config = { workspace = true }
+mev-bindings = { workspace = true }
+mev-rpc = { workspace = true }
+mev-dex = { workspace = true }
+mev-state = { workspace = true }
+mev-discovery = { workspace = true }
+mev-engine = { workspace = true }
+
+[dev-dependencies]
+mev-types = { workspace = true }

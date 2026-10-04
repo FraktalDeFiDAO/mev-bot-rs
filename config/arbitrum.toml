@@ -1,0 +1,143 @@
+name = "arbitrum"
+chain_id = 42161
+balancer_vault = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
+# Raw txs also go straight to the Arbitrum sequencer (fastest path, no API key needed).
+sequencer_rpc = "https://arb1-sequencer.arbitrum.io/rpc"
+# Real-time stream of sequenced txs (free; ~0.9 s ahead of RPC receipts).
+sequencer_feed = "wss://arb1.arbitrum.io/feed"
+min_pool_liquidity_usd = 5000.0
+gas_limit_estimate = 1500000
+loan_tokens = ["WETH", "USDC", "USDT", "WBTC", "ARB", "DAI", "USDC.e"]
+usd_token = "USDC"
+native_token = "WETH"
+
+pairs = [
+  ["WETH", "USDC"], ["WETH", "USDC.e"], ["WETH", "USDT"], ["WETH", "DAI"], ["WETH", "WBTC"],
+  ["WETH", "ARB"], ["WETH", "GMX"], ["WETH", "LINK"], ["WETH", "PENDLE"], ["WETH", "UNI"],
+  ["ARB", "USDC"], ["ARB", "USDT"], ["WBTC", "USDC"], ["WBTC", "USDT"], ["USDC", "USDT"],
+  ["USDC", "USDC.e"], ["USDC", "DAI"], ["GMX", "USDC"], ["LINK", "USDC"], ["PENDLE", "USDC"],
+]
+
+[auto_discovery]
+enabled = true
+blocks = 2400            # ~10 min of Arbitrum blocks
+step = 200
+log_rpc = "https://arb1.arbitrum.io/rpc"   # official RPC allows wide getLogs ranges
+pair_with = ["WETH", "USDC", "USDT"]
+max_tokens = 150
+
+[liquidation]
+enabled = true
+scan_rpc = "https://arb1.arbitrum.io/rpc"                # only public RPC verified to return complete wide getLogs
+sweep_rpc = "https://arbitrum-one-rpc.publicnode.com"    # heavy health sweeps (eth_call only)
+# Sweeps rotate across these too, falling through on rate limits (PublicNode alone hit -32005).
+sweep_rpc_fallbacks = ["https://arbitrum.drpc.org", "https://arbitrum-one.public.blastapi.io", "https://arb1.arbitrum.io/rpc"]   # all verified to serve eth_call (meowrpc does not)
+at_risk_hf = 1.05
+min_debt_usd = 20.0              # bonus on less won't cover gas
+sweep_secs = 300
+fallback_poll_secs = 30          # sequencer price-feed triggers are the fast path
+route_via = ["WETH", "USDC", "USDT"]
+
+[aave]
+enabled = true
+pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+data_provider = "0x243Aa95cAC2a25651eda86e80bEe66114413c43b"
+oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"
+from_block = 7700000             # Aave v3 Arbitrum deployment
+scan_step = 2000000
+
+[compound_v3]
+enabled = true
+from_block = 87000000            # first Arbitrum Comet (USDC.e), May 2023
+scan_step = 2000000
+min_storefront_usd = 20.0
+
+[[compound_v3.comets]]
+address = "0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf"   # USDC
+
+[[compound_v3.comets]]
+address = "0xd98Be00b5D27fc98112BdE293e487f8D4cA57d07"   # USDT0
+
+[[compound_v3.comets]]
+address = "0x6f7D514bbD4aFf3BcD1140B7344b32f063dEe486"   # WETH (prices in ETH)
+usd_feed = "0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612" # Chainlink ETH/USD
+
+[[compound_v3.comets]]
+address = "0xA5EDBDD9646f8dFF606d7448e414884C7d905dCA"   # USDC.e
+
+[morpho]
+enabled = true
+morpho = "0x6c247b1F6182318877311737BaC0844bAa518F5e"
+usd_oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"   # Aave oracle: loan-token USD prices
+from_block = 250000000           # before Morpho Blue's Arbitrum deployment
+scan_step = 2000000
+
+[fluid]
+enabled = true
+vault_resolver = "0xA5C3E16523eeeDDcC34706b0E6bE88b4c6EA95cC"
+usd_oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"
+# T1 vaults with liquidations in the last 30 days (2026-10-03 scan): 67 + 5 of 98 events.
+vaults = [
+  "0xf55B8e9F0c51Ace009f4b41d03321675d4C643b3",   # ETH collateral / ARB debt
+  "0x82b27fa821419f5689381b565a8b0786aa2548de",   # WBTC collateral / USDT0 debt
+]
+
+[risk]
+min_profit_usd = 0.05          # net of gas
+max_gas_usd_per_day = 3.0
+max_consecutive_failures = 10
+max_loan_usd = 50000.0
+
+[tokens]
+WETH = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
+USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+"USDC.e" = "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8"
+USDT = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
+DAI = "0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1"
+WBTC = "0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f"
+ARB = "0x912CE59144191C1204E64559FE8253a0e49E6548"
+GMX = "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"
+LINK = "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4"
+PENDLE = "0x0c880f6761F1af8d9Aa9C466984b80DAb9a8c9e8"
+UNI = "0xFa7F8980b0f1E64A2062791cc3b0871572f1F7f0"
+
+
+[[dexes]]
+name = "uniswap_v3"
+type = "univ3"
+factory = "0x1F98431c8aD98523631AE4a59f267346ea31F984"
+fees = [100, 500, 3000, 10000]
+
+[[dexes]]
+name = "sushi_v3"
+type = "univ3"
+factory = "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e"
+fees = [100, 500, 3000, 10000]
+
+[[dexes]]
+name = "uniswap_v2"
+type = "univ2"
+factory = "0xf1D7CC64Fb4452F05c498126312eBE29f30Fbcf9"
+fee_bps = 30
+
+[[dexes]]
+name = "sushi_v2"
+type = "univ2"
+factory = "0xc35DADB65012eC5796536bD9864eD8773aBc74C4"
+fee_bps = 30
+
+[[dexes]]
+name = "camelot_v2"
+type = "camelot"
+factory = "0x6EcCab422D763aC031210895C81787E87B43A652"
+
+[[dexes]]
+name = "pancake_v3"
+type = "pancakev3"
+factory = "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865"
+fees = [100, 500, 2500, 10000]
+
+[[dexes]]
+name = "camelot_v3"
+type = "algebra"
+factory = "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"

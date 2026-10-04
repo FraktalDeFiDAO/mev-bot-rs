@@ -1,0 +1,38 @@
+[package]
+name = "mev-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+serde_json = { workspace = true }
+mev-types = { workspace = true }
+mev-config = { workspace = true }
+mev-bindings = { workspace = true }
+mev-rpc = { workspace = true }
+mev-ingest = { workspace = true }
+mev-discovery = { workspace = true }
+mev-state = { workspace = true }
+mev-sim = { workspace = true }
+mev-search = { workspace = true }
+mev-risk = { workspace = true }
+mev-exec = { workspace = true }
+mev-metrics = { workspace = true }
+mev-lending = { workspace = true }
+mev-liquidate = { workspace = true }
+mev-lending-aave-v3 = { workspace = true }
+mev-lending-compound-v3 = { workspace = true }
+mev-lending-morpho = { workspace = true }
+mev-lending-fluid = { workspace = true }
+mev-lending-silo = { workspace = true }
+mev-lending-radiant = { workspace = true }
+mev-lending-spark = { workspace = true }
+mev-lending-dolomite = { workspace = true }
+mev-lending-gearbox = { workspace = true }
+mev-sequencer = { workspace = true }

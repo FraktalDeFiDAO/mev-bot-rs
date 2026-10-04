@@ -1,0 +1,363 @@
+//! Per-chain TOML config plus secrets from the environment (never from files in the repo).
+
+use std::{collections::HashMap, path::Path};
+
+use anyhow::{Context, Result, anyhow};
+use mev_types::Address;
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DexType {
+    Univ2,
+    Camelot,
+    Univ3,
+    Pancakev3,
+    Algebra,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DexConfig {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: DexType,
+    pub factory: Address,
+    /// V2 fixed fee in basis points.
+    #[serde(default)]
+    pub fee_bps: u16,
+    /// V3 fee tiers to look up.
+    #[serde(default)]
+    pub fees: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RiskConfig {
+    pub min_profit_usd: f64,
+    pub max_gas_usd_per_day: f64,
+    pub max_consecutive_failures: u32,
+    pub max_loan_usd: f64,
+    /// Liquidation plans claiming a bigger bonus than this are treated as broken/manipulated
+    /// oracles (e.g. bad-debt markets pricing dead collateral) and skipped.
+    #[serde(default = "default_max_bonus_usd")]
+    pub max_bonus_usd: f64,
+}
+
+/// Find long-tail pairs from recent swap activity instead of only the fixed `pairs` list.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutoDiscovery {
+    pub enabled: bool,
+    /// Recent blocks to scan for Swap/Sync events.
+    pub blocks: u64,
+    /// Blocks per eth_getLogs request.
+    pub step: u64,
+    /// RPC used only for the log scan (free tiers often cap getLogs ranges).
+    pub log_rpc: String,
+    /// Each active token is paired with these (loan-able) tokens.
+    pub pair_with: Vec<String>,
+    /// Cap on active tokens taken from the scan (most active first).
+    pub max_tokens: usize,
+}
+
+/// Settings shared by all liquidation adapters.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LiquidationConfig {
+    pub enabled: bool,
+    /// RPC for account-discovery log scans. Must return complete wide-range getLogs results —
+    /// several public RPCs silently truncate them (verified 2026-10-03: only arb1.arbitrum.io/rpc
+    /// was complete).
+    pub scan_rpc: String,
+    /// RPC for full health sweeps (eth_call only, so any public RPC works).
+    pub sweep_rpc: String,
+    /// More sweep RPCs: requests rotate across all of them and fall through on rate limits.
+    #[serde(default)]
+    pub sweep_rpc_fallbacks: Vec<String>,
+    /// Accounts below this health factor are polled on price-feed updates.
+    pub at_risk_hf: f64,
+    /// Ignore positions with less debt (or collateral) than this: the bonus wouldn't cover gas.
+    pub min_debt_usd: f64,
+    pub sweep_secs: u64,
+    /// Fallback at-risk poll period; sequencer price-feed triggers handle the fast path.
+    pub fallback_poll_secs: u64,
+    /// Swap routes for seized collateral may go through these tokens.
+    pub route_via: Vec<String>,
+}
+
+/// Aave v3 adapter.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AaveConfig {
+    pub enabled: bool,
+    pub pool: Address,
+    pub data_provider: Address,
+    pub oracle: Address,
+    /// First block to index Borrow events from (pool deployment).
+    pub from_block: u64,
+    pub scan_step: u64,
+}
+
+/// One Compound III (Comet) market.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CometConfig {
+    pub address: Address,
+    /// Chainlink feed converting the Comet's price unit to USD (only for non-USD-priced Comets,
+    /// e.g. the WETH Comet prices in ETH).
+    pub usd_feed: Option<Address>,
+}
+
+/// Compound III adapter.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CompoundV3Config {
+    pub enabled: bool,
+    pub from_block: u64,
+    pub scan_step: u64,
+    /// Discounted protocol collateral reserves worth less than this (USD) are ignored.
+    pub min_storefront_usd: f64,
+    pub comets: Vec<CometConfig>,
+}
+
+/// Morpho Blue adapter.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MorphoConfig {
+    pub enabled: bool,
+    pub morpho: Address,
+    /// Asset -> USD oracle (8 decimals) for loan tokens; the Aave oracle covers the usual ones.
+    pub usd_oracle: Address,
+    pub from_block: u64,
+    pub scan_step: u64,
+}
+
+/// Fluid vaults adapter (resolver-driven: no account index).
+#[derive(Debug, Clone, Deserialize)]
+pub struct FluidConfig {
+    pub enabled: bool,
+    pub vault_resolver: Address,
+    /// Asset -> USD oracle (8 decimals); the Aave oracle covers the usual vault tokens.
+    pub usd_oracle: Address,
+    /// T1 (ERC20/ETH collateral, ERC20 debt) vaults to watch. Each must be allowlisted on the executor.
+    pub vaults: Vec<Address>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChainConfig {
+    pub name: String,
+    pub chain_id: u64,
+    pub balancer_vault: Address,
+    /// Extra endpoint that receives raw txs directly (Arbitrum sequencer).
+    pub sequencer_rpc: Option<String>,
+    pub min_pool_liquidity_usd: f64,
+    pub gas_limit_estimate: u64,
+    pub tokens: HashMap<String, Address>,
+    /// Tokens we may flash-borrow (must be held by the Balancer vault).
+    pub loan_tokens: Vec<String>,
+    /// Token used as the USD reference (e.g. USDC).
+    pub usd_token: String,
+    /// Token used as the native/gas reference (e.g. WETH).
+    pub native_token: String,
+    pub pairs: Vec<[String; 2]>,
+    pub dexes: Vec<DexConfig>,
+    pub risk: RiskConfig,
+    pub auto_discovery: Option<AutoDiscovery>,
+    /// Arbitrum sequencer feed (free, unmetered real-time tx stream).
+    pub sequencer_feed: Option<String>,
+    pub liquidation: Option<LiquidationConfig>,
+    pub aave: Option<AaveConfig>,
+    pub compound_v3: Option<CompoundV3Config>,
+    pub morpho: Option<MorphoConfig>,
+    pub fluid: Option<FluidConfig>,
+}
+
+impl ChainConfig {
+    pub fn load(path: &Path) -> Result<Self> {
+        let raw =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let cfg: ChainConfig =
+            toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+        for [a, b] in &cfg.pairs {
+            cfg.token(a)?;
+            cfg.token(b)?;
+        }
+        for t in cfg
+            .loan_tokens
+            .iter()
+            .chain([&cfg.usd_token, &cfg.native_token])
+        {
+            cfg.token(t)?;
+        }
+        if let Some(ad) = &cfg.auto_discovery {
+            for t in &ad.pair_with {
+                cfg.token(t)?;
+            }
+        }
+        Ok(cfg)
+    }
+
+    pub fn token(&self, symbol: &str) -> Result<Address> {
+        self.tokens
+            .get(symbol)
+            .copied()
+            .ok_or_else(|| anyhow!("unknown token symbol {symbol}"))
+    }
+
+    /// Configured pairs as addresses.
+    pub fn pair_addresses(&self) -> Result<Vec<(Address, Address)>> {
+        self.pairs
+            .iter()
+            .map(|[a, b]| Ok((self.token(a)?, self.token(b)?)))
+            .collect()
+    }
+
+    pub fn symbol(&self, addr: Address) -> String {
+        self.tokens
+            .iter()
+            .find(|(_, a)| **a == addr)
+            .map(|(s, _)| s.clone())
+            .unwrap_or_else(|| addr.to_string())
+    }
+}
+
+/// Secrets and endpoints, read from env (loaded from a git-ignored `.env`).
+#[derive(Clone)]
+pub struct Secrets {
+    pub http_url: String,
+    pub ws_url: String,
+    pub private_key: Option<String>,
+    pub profit_receiver: Option<Address>,
+    pub executor: Option<Address>,
+    /// Additional endpoints (`<PREFIX>_HTTP_URL_2..9`, `<PREFIX>_WS_URL_2..9`), e.g. a second
+    /// Alchemy app: paid reads rotate across all HTTP URLs, WS fails over in order.
+    pub extra_http_urls: Vec<String>,
+    pub extra_ws_urls: Vec<String>,
+}
+
+impl Secrets {
+    /// Primary HTTP URL followed by the extras.
+    pub fn http_urls(&self) -> Vec<String> {
+        std::iter::once(self.http_url.clone())
+            .chain(self.extra_http_urls.iter().cloned())
+            .collect()
+    }
+
+    /// Primary WS URL followed by the extras.
+    pub fn ws_urls(&self) -> Vec<String> {
+        std::iter::once(self.ws_url.clone())
+            .chain(self.extra_ws_urls.iter().cloned())
+            .collect()
+    }
+}
+
+impl std::fmt::Debug for Secrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Secrets")
+            .field(
+                "private_key",
+                &self.private_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("profit_receiver", &self.profit_receiver)
+            .field("executor", &self.executor)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Secrets {
+    pub fn from_env(prefix: &str) -> Result<Self> {
+        let var = |k: &str| std::env::var(format!("{prefix}_{k}")).or_else(|_| std::env::var(k));
+        let addr = |k: &str| -> Result<Option<Address>> {
+            match std::env::var(k) {
+                Ok(v) if !v.trim().is_empty() => Ok(Some(
+                    v.trim()
+                        .parse()
+                        .with_context(|| format!("{k} is not an address"))?,
+                )),
+                _ => Ok(None),
+            }
+        };
+        Ok(Self {
+            http_url: var("HTTP_URL").with_context(|| format!("{prefix}_HTTP_URL not set"))?,
+            ws_url: var("WS_URL").with_context(|| format!("{prefix}_WS_URL not set"))?,
+            private_key: std::env::var("PRIVATE_KEY")
+                .ok()
+                .filter(|k| !k.trim().is_empty()),
+            profit_receiver: addr("PROFIT_RECEIVER")?,
+            executor: addr("EXECUTOR_ADDRESS")?,
+            extra_http_urls: numbered(prefix, "HTTP_URL"),
+            extra_ws_urls: numbered(prefix, "WS_URL"),
+        })
+    }
+}
+
+fn default_max_bonus_usd() -> f64 {
+    50_000.0
+}
+
+/// `<PREFIX>_<KEY>_2` .. `_9`, in order, skipping unset/empty ones.
+fn numbered(prefix: &str, key: &str) -> Vec<String> {
+    (2..=9)
+        .filter_map(|i| std::env::var(format!("{prefix}_{key}_{i}")).ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo_config() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/arbitrum.toml")
+    }
+
+    #[test]
+    fn shipped_arbitrum_config_is_valid() {
+        let c = ChainConfig::load(&repo_config()).unwrap();
+        assert_eq!(c.chain_id, 42161);
+        assert!(!c.pairs.is_empty() && !c.dexes.is_empty());
+        assert!(c.token("WETH").is_ok());
+        assert_eq!(c.symbol(c.token("USDC").unwrap()), "USDC");
+        assert!(c.liquidation.as_ref().is_some_and(|l| l.enabled));
+        assert!(
+            c.aave.is_some() && c.compound_v3.is_some() && c.morpho.is_some() && c.fluid.is_some()
+        );
+        assert_eq!(c.pair_addresses().unwrap().len(), c.pairs.len());
+    }
+
+    #[test]
+    fn unknown_token_in_pairs_is_rejected() {
+        let raw = std::fs::read_to_string(repo_config()).unwrap();
+        let bad = raw.replacen("[\"WETH\", \"USDC\"]", "[\"WETH\", \"NOPE\"]", 1);
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("bad.toml");
+        std::fs::write(&p, bad).unwrap();
+        let err = ChainConfig::load(&p).unwrap_err().to_string();
+        assert!(
+            err.contains("NOPE"),
+            "error should name the bad symbol: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_symbol_falls_back_to_address() {
+        let c = ChainConfig::load(&repo_config()).unwrap();
+        let a = Address::with_last_byte(0x42);
+        assert_eq!(c.symbol(a), a.to_string());
+    }
+
+    #[test]
+    fn secrets_debug_never_prints_the_private_key() {
+        let s = Secrets {
+            http_url: "http://x".into(),
+            ws_url: "ws://x".into(),
+            private_key: Some("0xdeadbeef".into()),
+            profit_receiver: None,
+            executor: None,
+            extra_http_urls: vec!["http://y".into()],
+            extra_ws_urls: vec![],
+        };
+        let shown = format!("{s:?}");
+        assert!(!shown.contains("deadbeef"));
+        assert!(shown.contains("redacted"));
+        assert_eq!(
+            s.http_urls(),
+            vec!["http://x".to_string(), "http://y".to_string()]
+        );
+        assert_eq!(s.ws_urls(), vec!["ws://x".to_string()]);
+    }
+}

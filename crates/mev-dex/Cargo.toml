@@ -1,0 +1,13 @@
+[package]
+name = "mev-dex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+alloy = { workspace = true }
+mev-types = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

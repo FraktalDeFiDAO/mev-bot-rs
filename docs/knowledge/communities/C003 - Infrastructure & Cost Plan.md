@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "3"
-graphify-node-count: 9
-graphify-internal-edges: 8
+graphify-node-count: 32
+graphify-internal-edges: 66
 tags:
   - graphify/community
 ---
@@ -13,21 +13,45 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `docs/planning/INFRASTRUCTURE.md` — 9 nodes
+- `crates/mev-sequencer/src/lib.rs` — 19 nodes
+- `graph` — 11 nodes
+- `crates/mev-sequencer/src/bin/mev-feed-probe.rs` — 2 nodes
 
-## Nodes (9)
+## Nodes (32)
 
-- **Infrastructure & Cost Plan** — `docs/planning/INFRASTRUCTURE.md:L1`
-- **Stage 1 (now → profitable): ~$0–10/month** — `docs/planning/INFRASTRUCTURE.md:L25`
-- **Bot host (VPS)** — `docs/planning/INFRASTRUCTURE.md:L27`
-- **Data sources (all free)** — `docs/planning/INFRASTRUCTURE.md:L38`
-- **Key finding: we can't afford our own L2 node yet, and that's OK** — `docs/planning/INFRASTRUCTURE.md:L6`
-- **Monthly cost summary** — `docs/planning/INFRASTRUCTURE.md:L137`
-- **Sources** — `docs/planning/INFRASTRUCTURE.md:L145`
-- **Stage 2: paid RPC (~$50/month) — trigger: free quotas are the bottleneck AND 30-day profit ≥ $150** — `docs/planning/INFRASTRUCTURE.md:L57`
-- **Where the sequencers are** — `docs/planning/INFRASTRUCTURE.md:L17`
+- **lib.rs** — `crates/mev-sequencer/src/lib.rs:L1`
+- **SequencedTx** — `crates/mev-sequencer/src/lib.rs:L37`
+- **decode_l2_message()** — `crates/mev-sequencer/src/lib.rs:L108`
+- **parse_broadcast()** — `crates/mev-sequencer/src/lib.rs:L87`
+- **signed_msg()** — `crates/mev-sequencer/src/lib.rs:L220`
+- **signed_tx()** — `crates/mev-sequencer/src/lib.rs:L204`
+- **stream_once()** — `crates/mev-sequencer/src/lib.rs:L155`
+- **decodes_nested_batches()** — `crates/mev-sequencer/src/lib.rs:L245`
+- **run()** — `crates/mev-sequencer/src/lib.rs:L136`
+- **truncated_batch_is_skipped_not_panicking()** — `crates/mev-sequencer/src/lib.rs:L256`
+- **TxEnvelope** — `graph`
+- **Vec** — `graph`
+- **batch()** — `crates/mev-sequencer/src/lib.rs:L226`
+- **decodes_signed_tx()** — `crates/mev-sequencer/src/lib.rs:L236`
+- **L1IncomingMessage** — `crates/mev-sequencer/src/lib.rs:L75`
+- **parses_broadcast_json()** — `crates/mev-sequencer/src/lib.rs:L265`
+- **Broadcast** — `crates/mev-sequencer/src/lib.rs:L56`
+- **FeedMessage** — `crates/mev-sequencer/src/lib.rs:L63`
+- **MessageWithMeta** — `crates/mev-sequencer/src/lib.rs:L69`
+- **.selector()** — `crates/mev-sequencer/src/lib.rs:L50`
+- **Header** — `crates/mev-sequencer/src/lib.rs:L82`
+- **main()** — `crates/mev-sequencer/src/bin/mev-feed-probe.rs:L11`
+- **mev-feed-probe.rs** — `crates/mev-sequencer/src/bin/mev-feed-probe.rs:L1`
+- **Option** — `graph`
+- **Result** — `graph`
+- **String** — `graph`
+- **UnboundedSender** — `graph`
+- **Address** — `graph`
+- **B256** — `graph`
+- **Bytes** — `graph`
+- **Instant** — `graph`
+- **Result** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C001 - README.md|README.md]] — 1 cross-community edges
-- [[docs/knowledge/communities/C005 - Stage 3- own node near the sequencer — trigger- 30-day profit ≥ 3× node cost AND|Stage 3: own node near the sequencer — trigger: 30-day profit ≥ 3× node cost AND shadow logs show latency is losing us trades]] — 1 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 4 cross-community edges

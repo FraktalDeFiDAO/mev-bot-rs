@@ -1,0 +1,64 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+alloy = { version = "2.5", features = ["essentials", "provider-ws", "pubsub", "rpc-types", "sol-types", "network", "consensus", "json-rpc"] }
+tokio = { version = "1.53", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "1.1"
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+futures = "0.3"
+dotenvy = "0.15"
+clap = { version = "4.6", features = ["derive", "env"] }
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+proptest = "1.11"
+tower = "0.5"
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+base64 = "0.23"
+
+mev-types = { path = "crates/mev-types" }
+mev-config = { path = "crates/mev-config" }
+mev-bindings = { path = "crates/mev-bindings" }
+mev-rpc = { path = "crates/mev-rpc" }
+mev-ingest = { path = "crates/mev-ingest" }
+mev-dex = { path = "crates/mev-dex" }
+mev-discovery = { path = "crates/mev-discovery" }
+mev-lending = { path = "crates/mev-lending" }
+mev-lending-index = { path = "crates/mev-lending-index" }
+mev-lending-spark = { path = "crates/mev-lending-spark" }
+mev-lending-radiant = { path = "crates/mev-lending-radiant" }
+mev-lending-gearbox = { path = "crates/mev-lending-gearbox" }
+mev-lending-dolomite = { path = "crates/mev-lending-dolomite" }
+mev-lending-morpho = { path = "crates/mev-lending-morpho" }
+mev-lending-fluid = { path = "crates/mev-lending-fluid" }
+mev-lending-compound-v3 = { path = "crates/mev-lending-compound-v3" }
+mev-lending-silo = { path = "crates/mev-lending-silo" }
+mev-lending-aave-v3 = { path = "crates/mev-lending-aave-v3" }
+mev-oracle = { path = "crates/mev-oracle" }
+mev-state = { path = "crates/mev-state" }
+mev-sim = { path = "crates/mev-sim" }
+mev-search = { path = "crates/mev-search" }
+mev-liquidate = { path = "crates/mev-liquidate" }
+mev-risk = { path = "crates/mev-risk" }
+mev-exec = { path = "crates/mev-exec" }
+mev-metrics = { path = "crates/mev-metrics" }
+mev-analytics = { path = "crates/mev-analytics" }
+mev-engine = { path = "crates/mev-engine" }
+mev-sequencer = { path = "crates/mev-sequencer" }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"

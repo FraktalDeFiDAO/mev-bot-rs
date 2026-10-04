@@ -1,0 +1,15 @@
+[package]
+name = "mev-lending-spark"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+mev-lending = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

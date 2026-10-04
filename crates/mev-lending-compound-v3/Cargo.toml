@@ -1,0 +1,24 @@
+[package]
+name = "mev-lending-compound-v3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+mev-config = { workspace = true }
+mev-lending = { workspace = true }
+mev-lending-index = { workspace = true }
+mev-oracle = { workspace = true }
+mev-rpc = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+mev-config = { workspace = true }
+mev-rpc = { workspace = true }
+tokio = { workspace = true }
+proptest = { workspace = true }

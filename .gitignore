@@ -24,3 +24,6 @@ graphify-out/cache/*
 .claude-flow/
 .obsidian/
 .DS_Store
+
+# Bot runtime output
+data/

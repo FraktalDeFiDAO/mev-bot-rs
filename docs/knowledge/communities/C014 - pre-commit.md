@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "14"
-graphify-node-count: 2
-graphify-internal-edges: 1
+graphify-node-count: 3
+graphify-internal-edges: 2
 tags:
   - graphify/community
 ---
@@ -13,11 +13,12 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `scripts/githooks/pre-commit` — 2 nodes
+- `scripts/githooks/pre-commit` — 3 nodes
 
-## Nodes (2)
+## Nodes (3)
 
 - **pre-commit** — `scripts/githooks/pre-commit:L1`
+- **PATH** — `scripts/githooks/pre-commit:L4`
 - **pre-commit script** — `scripts/githooks/pre-commit:L1`
 
 ## Related communities
