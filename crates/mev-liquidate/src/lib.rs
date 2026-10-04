@@ -20,16 +20,21 @@ use tracing::{debug, info, warn};
 
 /// Index more often while history is being back-filled.
 const BACKFILL_EVERY: Duration = Duration::from_secs(5);
-/// Burst re-poll cadence after a price-feed tx (the block with the update lands ~0.5–1 s later).
-const BURST_EVERY: Duration = Duration::from_millis(250);
-/// How long a burst lasts.
-const BURST_FOR: Duration = Duration::from_millis(1_800);
+/// After a price-feed tx, re-poll at these offsets: the block containing the update lands
+/// ~0.5-1 s after the feed. Three polls instead of every 250 ms for 1.8 s (7 polls) — the
+/// bursts were the largest paid-RPC consumer in live logs (~60 calls/min).
+const BURST_OFFSETS: [Duration; 3] = [
+    Duration::from_millis(400),
+    Duration::from_millis(900),
+    Duration::from_millis(1_600),
+];
+const BURST_TICK: Duration = Duration::from_millis(100);
 /// Don't re-plan the same account more often than this.
 /// Re-plan cooldown per account: starts here and doubles each time the same account is still
 /// liquidatable (a real opportunity gets liquidated and disappears; one that persists is
 /// unworkable — bad debt, no route, too large — and each re-plan costs paid RPC calls).
 const REPLAN_COOLDOWN: Duration = Duration::from_secs(3);
-const REPLAN_COOLDOWN_MAX: Duration = Duration::from_secs(600);
+const REPLAN_COOLDOWN_MAX: Duration = Duration::from_secs(1_800);
 
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
@@ -61,7 +66,8 @@ struct Slot {
     adapter: Box<dyn LiquidationAdapter>,
     at_risk: HashMap<AccountRef, Health>,
     backfilled: bool,
-    burst_until: Option<Instant>,
+    /// Active burst: when it started and the next offset index to poll.
+    burst: Option<(Instant, usize)>,
     /// After an index error, don't retry before this (exponential backoff; rate limits).
     index_retry_at: Option<Instant>,
     index_backoff: Duration,
@@ -95,7 +101,7 @@ impl Runner {
                 adapter,
                 at_risk: HashMap::new(),
                 backfilled: false,
-                burst_until: None,
+                burst: None,
                 index_retry_at: None,
                 index_backoff: INDEX_BACKOFF_MIN,
             });
@@ -255,7 +261,7 @@ impl Runner {
     fn on_feed_tx(&mut self, st: &SequencedTx, tx: &mpsc::UnboundedSender<RunnerEvent>) {
         let hits: Vec<usize> = self.feeds.matches_tx(st.to, &st.input).to_vec();
         for i in hits {
-            self.slots[i].burst_until = Some(Instant::now() + BURST_FOR);
+            self.slots[i].burst = Some((Instant::now(), 0));
             debug!(protocol = self.slots[i].adapter.id(), tx = %st.hash, "price-feed update in sequencer feed");
             let _ = tx.send(RunnerEvent::FeedTrigger {
                 adapter: self.slots[i].adapter.id(),
@@ -277,7 +283,7 @@ impl Runner {
         let mut index_tick = tokio::time::interval(BACKFILL_EVERY);
         let mut sweep = tokio::time::interval(sweep_every);
         let mut fallback = tokio::time::interval(Duration::from_secs(self.cfg.fallback_poll_secs));
-        let mut burst = tokio::time::interval(BURST_EVERY);
+        let mut burst = tokio::time::interval(BURST_TICK);
         let mut backfilled = false;
         loop {
             tokio::select! {
@@ -299,11 +305,12 @@ impl Runner {
                 _ = burst.tick() => {
                     let now = Instant::now();
                     for i in 0..self.slots.len() {
-                        match self.slots[i].burst_until {
-                            Some(u) if now <= u => if !self.poll(i, &tx).await { return; },
-                            Some(_) => self.slots[i].burst_until = None,
-                            None => {}
+                        let Some((start, next)) = self.slots[i].burst else { continue };
+                        if now.duration_since(start) < BURST_OFFSETS[next] {
+                            continue;
                         }
+                        self.slots[i].burst = (next + 1 < BURST_OFFSETS.len()).then_some((start, next + 1));
+                        if !self.poll(i, &tx).await { return; }
                     }
                 }
             }
@@ -535,7 +542,7 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let st = sequenced(Some(Address::with_last_byte(0xfe)));
         r.on_feed_tx(&st, &tx);
-        assert!(r.slots[0].burst_until.is_some());
+        assert!(r.slots[0].burst.is_some());
         assert!(matches!(
             rx.try_recv(),
             Ok(RunnerEvent::FeedTrigger {
@@ -545,25 +552,19 @@ mod tests {
         ));
 
         // Chainlink reports arrive via per-operator forwarders: forward(aggregator, data).
-        r.slots[0].burst_until = None;
+        r.slots[0].burst = None;
         let mut input = vec![0x6f, 0xad, 0xcf, 0x72];
         input.extend([0u8; 12]);
         input.extend(Address::with_last_byte(0xfe).as_slice());
         let mut fwd = sequenced(Some(Address::with_last_byte(0x77)));
         fwd.input = input.into();
         r.on_feed_tx(&fwd, &tx);
-        assert!(
-            r.slots[0].burst_until.is_some(),
-            "forwarded report must trigger"
-        );
+        assert!(r.slots[0].burst.is_some(), "forwarded report must trigger");
 
         let other = sequenced(Some(Address::with_last_byte(0x01)));
-        r.slots[0].burst_until = None;
+        r.slots[0].burst = None;
         r.on_feed_tx(&other, &tx);
-        assert!(
-            r.slots[0].burst_until.is_none(),
-            "unrelated tx must not trigger"
-        );
+        assert!(r.slots[0].burst.is_none(), "unrelated tx must not trigger");
     }
 
     fn sequenced(to: Option<Address>) -> SequencedTx {

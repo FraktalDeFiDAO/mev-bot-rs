@@ -156,7 +156,13 @@ impl Sender {
             );
         }
         for e in results.into_iter().filter_map(|r| r.err()) {
-            warn!(error = %e, "a broadcast endpoint rejected the tx (others accepted)");
+            let msg = e.to_string().to_lowercase();
+            if msg.contains("nonce too low") || msg.contains("already known") {
+                // Another endpoint got it there first (seen live with the sequencer): benign.
+                tracing::debug!(error = %e, "broadcast endpoint already had the tx");
+            } else {
+                warn!(error = %e, "a broadcast endpoint rejected the tx (others accepted)");
+            }
         }
         Ok(hash)
     }

@@ -267,7 +267,7 @@ impl Engine {
                         let Some(log) = maybe else { warn!("log stream ended; resubscribing"); break };
                         if let Some(pool) = self.store.apply_log(&log) {
                             self.metrics.update(|c| c.updates += 1);
-                            self.on_pool_update(pool, &tx_done).await;
+                            self.on_pool_update(pool, Instant::now(), &tx_done).await;
                         }
                     }
                     Some(done) = rx_done.recv() => self.on_tx_done(done),
@@ -455,7 +455,12 @@ impl Engine {
         );
     }
 
-    async fn on_pool_update(&mut self, pool: Address, tx_done: &mpsc::UnboundedSender<TxDone>) {
+    async fn on_pool_update(
+        &mut self,
+        pool: Address,
+        seen: Instant,
+        tx_done: &mpsc::UnboundedSender<TxDone>,
+    ) {
         let price = |t: Address| self.price(t);
         let params = SearchParams {
             max_loan: &self.max_loan,
@@ -490,7 +495,7 @@ impl Engine {
         self.last_sim.insert(key, Instant::now());
         self.metrics.update(|c| c.simulated += 1);
 
-        let outcome = match sim.simulate(&opp, U256::ZERO).await {
+        let outcome = match sim.simulate_fast(&opp, U256::ZERO).await {
             Ok(o) => o,
             Err(e) => {
                 warn!(error = %e, "simulation error");
@@ -541,7 +546,9 @@ impl Engine {
         } else {
             U256::ZERO
         };
-        let gas_limit = gas + gas / 4;
+        // `gas` is a calibrated estimate (no estimate_gas round-trip); leave headroom for heavier
+        // hops (Algebra pools use ~2x a Uniswap V3 hop).
+        let gas_limit = gas * 5 / 2;
         self.risk.mark_sent();
         self.metrics.update(|c| c.sent += 1);
         let tx_done = tx_done.clone();
@@ -549,7 +556,12 @@ impl Engine {
         tokio::spawn(async move {
             let done = match sender.send(&opp, min_profit, gas_limit).await {
                 Ok(hash) => {
-                    metrics.event("sent", json!({ "hash": hash, "net_usd": net_usd }));
+                    let latency_ms = seen.elapsed().as_millis() as u64;
+                    metrics.event(
+                        "sent",
+                        json!({ "hash": hash, "net_usd": net_usd, "latency_ms": latency_ms }),
+                    );
+                    info!(%hash, latency_ms, "arb sent (pool event -> broadcast)");
                     info!(%hash, "sent");
                     match sender.wait(hash, Duration::from_secs(30)).await {
                         Ok(landed) => TxDone::Landed {
