@@ -24,7 +24,8 @@ pub struct Sender {
     wallet: EthereumWallet,
     pub address: Address,
     reader: DynProvider,
-    broadcast: Vec<DynProvider>,
+    /// (label, endpoint): the reader is "rpc"; extras are labelled by host.
+    broadcast: Vec<(String, DynProvider)>,
     executor: Address,
     chain_id: u64,
     nonce: AtomicU64,
@@ -41,13 +42,15 @@ pub struct Landed {
 }
 
 /// A broadcast transaction and its timing.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Sent {
     pub hash: TxHash,
     /// When it was signed (just before broadcasting).
     pub signed: std::time::Instant,
     /// When the first endpoint accepted it (the sequencer usually; the time that matters).
     pub first_accept: Option<std::time::Instant>,
+    /// Per endpoint: (label, ms from signing to its answer, accepted).
+    pub endpoints: Vec<(String, u64, bool)>,
 }
 
 impl Sender {
@@ -61,9 +64,11 @@ impl Sender {
     ) -> Result<Self> {
         let signer: PrivateKeySigner = private_key.trim().parse().context("invalid PRIVATE_KEY")?;
         let address = signer.address();
-        let mut broadcast = vec![reader.clone()];
+        let mut broadcast = vec![("rpc".to_string(), reader.clone())];
         for url in extra_broadcast {
-            broadcast.push(ProviderBuilder::new().connect_http(url.parse()?).erased());
+            let parsed: alloy::transports::http::reqwest::Url = url.parse()?;
+            let label = parsed.host_str().unwrap_or("endpoint").to_string();
+            broadcast.push((label, ProviderBuilder::new().connect_http(parsed).erased()));
         }
         let nonce = reader.get_transaction_count(address).pending().await?;
         Ok(Self {
@@ -184,7 +189,7 @@ impl Sender {
         let hash = *envelope.tx_hash();
         let signed = std::time::Instant::now();
 
-        let sends = self.broadcast.iter().map(|p| {
+        let sends = self.broadcast.iter().map(|(_, p)| {
             let raw = raw.clone();
             async move {
                 let r = p.send_raw_transaction(&raw).await.map(|_| ());
@@ -198,6 +203,20 @@ impl Sender {
             .filter(|(r, _)| r.is_ok())
             .map(|(_, t)| *t)
             .min();
+        let endpoints: Vec<(String, u64, bool)> = self
+            .broadcast
+            .iter()
+            .zip(&timed)
+            .map(|((label, _), (r, t))| {
+                // "already known"/"nonce too low" from a later endpoint means an earlier one won.
+                let ok = r.is_ok() || r.as_ref().is_err_and(|e| is_already_known(&e.to_string()));
+                (
+                    label.clone(),
+                    t.duration_since(signed).as_millis() as u64,
+                    ok,
+                )
+            })
+            .collect();
         let results: Vec<_> = timed.into_iter().map(|(r, _)| r).collect();
         if results.iter().all(|r| r.is_err()) {
             // Nothing accepted it — give the nonce back.
@@ -220,6 +239,7 @@ impl Sender {
             hash,
             signed,
             first_accept,
+            endpoints,
         })
     }
 
@@ -248,6 +268,11 @@ impl Sender {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
+}
+
+fn is_already_known(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("already known") || m.contains("nonce too low")
 }
 
 /// Node rejections meaning our nonce is out of sync with the chain.

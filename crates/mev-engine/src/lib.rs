@@ -72,6 +72,7 @@ pub struct Engine {
     presim_rx: Option<PresimRx>,
     /// Recent feed arrivals by tx hash (race telemetry clock).
     feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>>,
+    presim_stats: Arc<mev_presim::PresimStats>,
     /// Request meters per provider ("fast" = paid), drained into the minute summary.
     meters: Vec<(&'static str, Arc<RpcMeter>)>,
     /// (fetched at, wei); refreshed in the background so hot paths never wait on it.
@@ -236,6 +237,7 @@ impl Engine {
             }
             None => (None, None),
         };
+        let presim_stats = Arc::new(mev_presim::PresimStats::default());
         let presim_rx = match (presim_cfg, presim_feed) {
             (Some(pc), Some(feed)) => {
                 let p = metered_rotating(pc.rpc_urls.clone(), "presim", &mut meters)?;
@@ -246,6 +248,7 @@ impl Engine {
                     pc.max_in_flight,
                     Duration::from_millis(pc.timeout_ms),
                     tx,
+                    presim_stats.clone(),
                 ));
                 info!(
                     rpcs = pc.rpc_urls.len(),
@@ -285,6 +288,7 @@ impl Engine {
             liq,
             presim_rx,
             feed_log,
+            presim_stats,
             meters,
             gas_price: Default::default(),
             gas_refreshing: Default::default(),
@@ -502,6 +506,9 @@ impl Engine {
 
     fn log_summary(&self) {
         self.metrics.heartbeat();
+        if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
+            info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
+        }
         // RPC usage since the last summary (≈ per minute): the data-efficiency scoreboard.
         let mut usage = serde_json::Map::new();
         for (name, m) in &self.meters {
@@ -670,13 +677,18 @@ impl Engine {
                 }
             };
             let hash = sent.hash;
+            let endpoints: Vec<String> = sent
+                .endpoints
+                .iter()
+                .map(|(l, ms, ok)| format!("{l}={ms}ms{}", if *ok { "" } else { "(rejected)" }))
+                .collect();
             // Trigger seen -> first endpoint accepted (the latency that decides races).
             let latency_ms = race::ms(trigger.seen, sent.first_accept.unwrap_or(sent.signed));
             metrics.event(
                 "sent",
-                json!({ "hash": hash, "net_usd": net_usd, "latency_ms": latency_ms, "source": trigger.source }),
+                json!({ "hash": hash, "net_usd": net_usd, "latency_ms": latency_ms, "source": trigger.source, "endpoints": endpoints }),
             );
-            info!(%hash, latency_ms, source = trigger.source, "arb sent (trigger -> accepted)");
+            info!(%hash, latency_ms, source = trigger.source, endpoints = endpoints.join(" "), "arb sent (trigger -> accepted)");
             let landed = match sender.wait(hash, Duration::from_secs(30)).await {
                 Ok(l) => l,
                 Err(e) => {

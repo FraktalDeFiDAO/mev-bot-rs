@@ -102,6 +102,7 @@ pub async fn report(
         "est_profit_usd": est_profit_usd,
         "source": trigger.source,
         "trigger": trigger.tx,
+        "endpoints": sent.endpoints.iter().map(|(l, ms, ok)| json!({ "endpoint": l, "ms": ms, "ok": ok })).collect::<Vec<_>>(),
         "trigger_in_feed": trigger.tx.and_then(|h| arrival(&h)).is_some(),
         "block": landed.block,
         "our_index": our_idx,
