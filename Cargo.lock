@@ -179,6 +179,7 @@ dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "borsh",
+ "k256",
  "serde",
  "thiserror",
 ]
@@ -2961,6 +2962,7 @@ dependencies = [
  "mev-lending-spark",
  "mev-liquidate",
  "mev-metrics",
+ "mev-presim",
  "mev-risk",
  "mev-rpc",
  "mev-search",
@@ -3190,6 +3192,20 @@ dependencies = [
  "mev-bindings",
  "mev-rpc",
  "tracing",
+]
+
+[[package]]
+name = "mev-presim"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "futures",
+ "mev-bindings",
+ "mev-sequencer",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

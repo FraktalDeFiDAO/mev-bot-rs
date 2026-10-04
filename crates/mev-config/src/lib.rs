@@ -130,6 +130,29 @@ pub struct MorphoConfig {
     pub scan_step: u64,
 }
 
+/// Feed-driven arbitrage: simulate sequencer-feed transactions (eth_simulateV1) to learn which
+/// pools they move before their block exists.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PresimConfig {
+    pub enabled: bool,
+    /// Tried in order, falling through on errors/rate limits (PublicNode ~37 ms p50 from the server).
+    pub rpc_urls: Vec<String>,
+    /// Simulations in flight; feed txs arriving while full are skipped (their block logs still count).
+    #[serde(default = "default_presim_in_flight")]
+    pub max_in_flight: usize,
+    /// Give up on a simulation after this long: its result would arrive after the block.
+    #[serde(default = "default_presim_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_presim_in_flight() -> usize {
+    16
+}
+
+fn default_presim_timeout_ms() -> u64 {
+    250
+}
+
 /// Fluid vaults adapter (resolver-driven: no account index).
 #[derive(Debug, Clone, Deserialize)]
 pub struct FluidConfig {
@@ -168,6 +191,8 @@ pub struct ChainConfig {
     pub compound_v3: Option<CompoundV3Config>,
     pub morpho: Option<MorphoConfig>,
     pub fluid: Option<FluidConfig>,
+    #[serde(default)]
+    pub presim: Option<PresimConfig>,
 }
 
 impl ChainConfig {

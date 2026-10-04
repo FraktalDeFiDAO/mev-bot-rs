@@ -1,0 +1,17 @@
+[package]
+name = "mev-presim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Simulate sequencer-feed transactions before they are in a block (eth_simulateV1) to learn which pools they move"
+
+[dependencies]
+alloy = { workspace = true, features = ["k256"] }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+mev-bindings = { workspace = true }
+mev-sequencer = { workspace = true }
