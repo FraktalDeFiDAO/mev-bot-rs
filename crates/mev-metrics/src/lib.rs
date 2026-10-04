@@ -50,7 +50,9 @@ impl Metrics {
     /// Append one event. Never fails the caller — logging errors are reported via tracing.
     pub fn event(&self, kind: &str, data: Value) {
         let now = Utc::now();
-        let line = json!({ "ts": now.to_rfc3339(), "kind": kind, "data": data });
+        let line = json!({ "ts": now.to_rfc3339(), "kind": kind, "data": data }).to_string();
+        // Error strings can embed RPC URLs with API keys.
+        let line = mev_types::redact_secrets(&line);
         let mut guard = self.file.lock().unwrap();
         let day = now.format("%Y-%m-%d").to_string();
         if guard.0 != day {
@@ -92,6 +94,22 @@ fn open(dir: &std::path::Path, day: &str) -> Result<BufWriter<File>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_files_never_contain_rpc_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = Metrics::new(dir.path().to_path_buf()).unwrap();
+        m.event(
+            "liq_sim_revert",
+            json!({ "reason": format!("error sending request for url (https://arb-mainnet.g.alchemy.com/v2/{})", ["SECRETKEY", "0123456789abc"].concat()) }),
+        );
+        let text: String = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| std::fs::read_to_string(e.unwrap().path()).ok())
+            .collect();
+        assert!(!text.contains("SECRETKEY"), "{text}");
+        assert!(text.contains("alchemy.com/v2/***"));
+    }
 
     #[test]
     fn writes_jsonl_events_counters_and_heartbeat() {

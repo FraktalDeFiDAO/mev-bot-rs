@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
+        .with_writer(|| Redacting(std::io::stdout()))
         .init();
     let args = Args::parse();
     let cfg = ChainConfig::load(&args.config)?;
@@ -49,4 +50,21 @@ async fn main() -> Result<()> {
     })
     .await;
     engine.run().await
+}
+
+/// Log writer that masks API keys in URLs (RPC errors print the full endpoint URL). The fmt layer
+/// writes each event in one call, so redacting per write sees whole lines.
+struct Redacting<W>(W);
+
+impl<W: std::io::Write> std::io::Write for Redacting<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let text = String::from_utf8_lossy(buf);
+        self.0
+            .write_all(mev_types::redact_secrets(&text).as_bytes())?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
 }

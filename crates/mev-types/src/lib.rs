@@ -78,6 +78,51 @@ pub struct Opportunity {
     pub sell_pool: Address,
 }
 
+/// Mask API keys inside URLs (e.g. `https://arb-mainnet.g.alchemy.com/v2/<key>`,
+/// `.../chainstack.com/<key>`) before text reaches logs or event files: any URL path segment
+/// or query value of 16+ key-like characters becomes `***`. Hosts and short paths stay readable.
+pub fn redact_secrets(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains("://") {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let is_key_char = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("://") {
+        let (before, after) = rest.split_at(i + 3);
+        out.push_str(before);
+        let end = after
+            .find(|c: char| c.is_whitespace() || "\"')<>,".contains(c))
+            .unwrap_or(after.len());
+        let (url, tail) = after.split_at(end);
+        // Host stays; every later segment (split on / ? & =) that looks like a key is masked.
+        let mut seg = String::new();
+        let mut in_host = true;
+        for c in url.chars() {
+            if "/?&=#".contains(c) {
+                push_segment(&mut out, &seg, in_host, is_key_char);
+                seg.clear();
+                in_host = false;
+                out.push(c);
+            } else {
+                seg.push(c);
+            }
+        }
+        push_segment(&mut out, &seg, in_host, is_key_char);
+        rest = tail;
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
+fn push_segment(out: &mut String, seg: &str, in_host: bool, is_key_char: impl Fn(char) -> bool) {
+    if !in_host && seg.len() >= 16 && seg.chars().all(is_key_char) {
+        out.push_str("***");
+    } else {
+        out.push_str(seg);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +154,38 @@ mod tests {
         assert_eq!(p.other(a), b);
         assert_eq!(p.other(b), a);
         assert!(p.has(a) && p.has(b) && !p.has(c));
+    }
+
+    #[test]
+    fn redacts_api_keys_in_urls_only() {
+        // Fake key, assembled at runtime so the pre-commit secret scan doesn't see a literal.
+        let key = ["AbCdEf01", "23456789", "xyzKEY"].concat();
+        let msg = format!(
+            "error sending request for url (https://arb-mainnet.g.alchemy.com/v2/{key}): timeout"
+        );
+        assert_eq!(
+            redact_secrets(&msg),
+            "error sending request for url (https://arb-mainnet.g.alchemy.com/v2/***): timeout"
+        );
+        let ws =
+            "wss://arbitrum-mainnet.core.chainstack.com/0123456789abcdef0123456789abcdef closed";
+        assert_eq!(
+            redact_secrets(ws),
+            "wss://arbitrum-mainnet.core.chainstack.com/*** closed"
+        );
+        let q = "https://x.example/rpc?apikey=ABCDEFGHIJKLMNOPQRST&chain=1";
+        assert_eq!(
+            redact_secrets(q),
+            "https://x.example/rpc?apikey=***&chain=1"
+        );
+        // Public endpoints, short paths, hex outside URLs, and plain text are untouched.
+        for keep in [
+            "url=\"https://arb1.arbitrum.io/rpc\"",
+            "wss://arb1.arbitrum.io/feed",
+            "hash=0x17aef2272ea27e84b386f1cd130f41081f61e516c88b1ccc4840d3963ed2773a",
+            "no urls here",
+        ] {
+            assert_eq!(redact_secrets(keep), keep);
+        }
     }
 }
