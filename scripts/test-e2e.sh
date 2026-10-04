@@ -5,7 +5,7 @@
 #   2. deploy ArbExecutor to the fork with anvil's well-known dev key
 #   3. start mev-bot in LIVE mode against the fork (no sequencer broadcast, no feed, no liquidation)
 #   4. create a real price gap: dump WETH into Sushi WETH/USDC on the fork
-#   5. assert the bot saw it, simulated it, sent a tx, it landed successfully, and profit arrived
+#   5. assert the bot saw it, priced it (simulated, or the local model in live mode), sent a tx, it landed successfully, and profit arrived
 #
 # Needs: foundry (anvil/cast/forge), a release build, and a public Arbitrum RPC for fork state.
 set -euo pipefail
@@ -89,11 +89,11 @@ cast send "$SWAP_ROUTER02" 'exactInputSingle((address,address,uint24,address,uin
 echo "[5/5] wait for the bot to trade"
 for _ in $(seq 90); do grep -q '"landed"' "$WORK/data/arbitrum/events-"*.jsonl 2>/dev/null && break; sleep 1; done
 EV=$(cat "$WORK/data/arbitrum/events-"*.jsonl 2>/dev/null || true)
-echo "$EV" | grep -q '"sim_ok"' || fail "no profitable simulation recorded"
+echo "$EV" | grep -qE '"(sim_ok|model_ok)"' || fail "no profitable opportunity recorded (simulated or modelled)"
 echo "$EV" | grep -q '"sent"' || fail "bot did not send a transaction"
 echo "$EV" | grep '"landed"' | grep -q '"success":true' || fail "tx did not land successfully"
 AFTER_USDC=$(bal "$USDC"); AFTER_WETH=$(bal "$WETH")
 GAIN=$(python3 -c "print(f'USDC +{($AFTER_USDC-$BEFORE_USDC)/1e6:.4f}, WETH +{($AFTER_WETH-$BEFORE_WETH)/1e18:.6f}')")
 python3 -c "import sys; sys.exit(0 if $AFTER_USDC>$BEFORE_USDC or $AFTER_WETH>$BEFORE_WETH else 1)" || fail "receiver got no profit ($GAIN)"
 grep -q "stale nonce; resyncing" "$WORK/bot.log" && echo "      (stale-nonce recovery exercised: setup txs used the bot's wallet)"
-echo "E2E PASS: bot detected the gap, simulated, sent, landed; receiver $GAIN"
+echo "E2E PASS: bot detected the gap, priced it, sent, landed; receiver $GAIN"

@@ -69,8 +69,9 @@ pub struct Engine {
     liq: Option<LiqCtx>,
     /// Request meters per provider ("fast" = paid), drained into the minute summary.
     meters: Vec<(&'static str, Arc<RpcMeter>)>,
-    /// Cached L2 gas price (wei) and when it was read: one RPC call per 10 s, not per simulation.
-    gas_price: Option<(Instant, f64)>,
+    /// (fetched at, wei); refreshed in the background so hot paths never wait on it.
+    gas_price: Arc<std::sync::Mutex<Option<(Instant, f64)>>>,
+    gas_refreshing: Arc<std::sync::atomic::AtomicBool>,
     /// Tokens we looked up swap routes for on demand (and when): at most one lookup per hour.
     route_lookups: HashMap<Address, Instant>,
 }
@@ -227,7 +228,8 @@ impl Engine {
             mode,
             liq,
             meters,
-            gas_price: None,
+            gas_price: Default::default(),
+            gas_refreshing: Default::default(),
             route_lookups: HashMap::new(),
         })
     }
@@ -396,20 +398,30 @@ impl Engine {
     }
 
     /// L2 gas price, cached for 10 s (simulations come in bursts; each fetch is a paid call).
+    /// Gas price (wei). Returns the cached value at once; when it is older than 10 s a background
+    /// refresh starts. Only the very first call waits for the RPC.
     async fn gas_price(&mut self) -> f64 {
-        if let Some((at, wei)) = self.gas_price
-            && at.elapsed() < Duration::from_secs(10)
-        {
+        use std::sync::atomic::Ordering;
+        let cached = *self.gas_price.lock().unwrap();
+        let Some((at, wei)) = cached else {
+            let wei = fetch_gas_price(&self.rpc.http).await;
+            *self.gas_price.lock().unwrap() = Some((Instant::now(), wei));
             return wei;
+        };
+        if at.elapsed() >= Duration::from_secs(10)
+            && !self.gas_refreshing.swap(true, Ordering::SeqCst)
+        {
+            let (http, cache, busy) = (
+                self.rpc.http.clone(),
+                self.gas_price.clone(),
+                self.gas_refreshing.clone(),
+            );
+            tokio::spawn(async move {
+                let wei = fetch_gas_price(&http).await;
+                *cache.lock().unwrap() = Some((Instant::now(), wei));
+                busy.store(false, Ordering::SeqCst);
+            });
         }
-        let wei = self
-            .rpc
-            .http
-            .get_gas_price()
-            .await
-            .map(|g| g as f64)
-            .unwrap_or(10_000_000.0);
-        self.gas_price = Some((Instant::now(), wei));
         wei
     }
 
@@ -490,7 +502,7 @@ impl Engine {
             return;
         };
 
-        // Don't re-simulate the same route more than twice a second.
+        // Don't re-try the same route more than twice a second.
         let key = (opp.buy_pool, opp.sell_pool);
         if self
             .last_sim
@@ -500,30 +512,39 @@ impl Engine {
             return;
         }
         self.last_sim.insert(key, Instant::now());
-        self.metrics.update(|c| c.simulated += 1);
 
-        let outcome = match sim.simulate_fast(&opp, U256::ZERO).await {
-            Ok(o) => o,
-            Err(e) => {
-                warn!(error = %e, "simulation error");
-                return;
+        // Live without pre-simulation: trust the local model and save the eth_call round trip
+        // (the race is decided in ~100s of ms). Shadow always simulates to keep measuring it.
+        let presimulate = self.mode != Mode::Live || self.cfg.risk.arb_presimulate;
+        let (profit_usd, gas) = if presimulate {
+            self.metrics.update(|c| c.simulated += 1);
+            let outcome = match sim.simulate_fast(&opp, U256::ZERO).await {
+                Ok(o) => o,
+                Err(e) => {
+                    warn!(error = %e, "simulation error");
+                    return;
+                }
+            };
+            match outcome {
+                SimOutcome::Profitable { profit, gas } => (f64::from(profit) * loan_px, gas),
+                SimOutcome::Reverted(r) => {
+                    self.metrics
+                        .event("sim_revert", json!({ "opp": base, "reason": r }));
+                    return;
+                }
             }
-        };
-        let (profit, gas) = match outcome {
-            SimOutcome::Profitable { profit, gas } => (profit, gas),
-            SimOutcome::Reverted(r) => {
-                self.metrics
-                    .event("sim_revert", json!({ "opp": base, "reason": r }));
-                return;
-            }
+        } else {
+            (
+                opp.est_profit_usd,
+                mev_sim::arb_gas_estimate(opp.hops.len()),
+            )
         };
         let gas_price = self.gas_price().await;
         let gas_usd = gas as f64 * gas_price * native_px;
-        let profit_usd = f64::from(profit) * loan_px;
         let net_usd = profit_usd - gas_usd;
         self.metrics.update(|c| c.sim_profitable += 1);
         self.metrics.event(
-            "sim_ok",
+            if presimulate { "sim_ok" } else { "model_ok" },
             json!({ "opp": base, "profit_usd": profit_usd, "gas": gas, "gas_usd": gas_usd, "net_usd": net_usd }),
         );
         info!(
@@ -531,7 +552,7 @@ impl Engine {
             profit_usd = format!("{profit_usd:.4}"),
             gas_usd = format!("{gas_usd:.4}"),
             net_usd = format!("{net_usd:.4}"),
-            "simulated opportunity"
+            "arb opportunity"
         );
 
         if self.mode != Mode::Live {
@@ -1033,4 +1054,11 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+async fn fetch_gas_price(http: &alloy::providers::DynProvider) -> f64 {
+    http.get_gas_price()
+        .await
+        .map(|g| g as f64)
+        .unwrap_or(10_000_000.0)
 }
