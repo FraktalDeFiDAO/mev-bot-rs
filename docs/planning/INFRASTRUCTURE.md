@@ -160,3 +160,18 @@ Notes:
 - [RpcFast dedicated Arbitrum](https://rpcfast.com/dedicated-arbitrum-nodes)
 - [Base Flashblocks app integration](https://docs.base.org/base-chain/flashblocks/app-integration)
 - [L2 node location & latency](https://chainscorelabs.com/blog/layer-2-wars-arbitrum-optimism-base-and-beyond/l2-node-infrastructure-and-operation/why-your-l2-nodes-geographic-location-is-a-competitive-advantage)
+
+## Endpoint capability matrix (measured 2026-10-03/04)
+
+Keys live only in `.env` (`ARBITRUM_HTTP_URL`, `_2`.. `_9`, same for `WS`). Roles follow capabilities:
+
+| Endpoint | eth_call | Wide getLogs | Archive | WS | Role |
+|---|---|---|---|---|---|
+| Alchemy (free, key 1 & 2) | ✅ | ❌ 10 blocks | ✅ | ✅ | Paid reads (rotated), broadcast, WS + failover, E2E fork source |
+| Chainstack (free) | ✅ | ❌ ~100 blocks (10k → 403) | ❌ (-32002) | ✅ | Paid reads (rotated), broadcast, WS failover. Not in sweeps: ~3M RU/month quota vs ~4.7M/month sweep load |
+| arb1.arbitrum.io (public) | ✅ | ✅ complete 2M-block ranges | ✅ | — | History scans (rate-limits this IP; backoff), sweep rotation, fork tests |
+| PublicNode (public) | ✅ | ⚠️ silently truncates | ❌ | ✅ | Sweep rotation (rate-limits: -32005) |
+| dRPC (public) | ✅ | ❌ 10k range, truncates | — | — | Sweep rotation |
+| BlastAPI (public) | ✅ | ❌ 10 blocks / truncates | — | — | Sweep rotation |
+| MeowRPC (public) | ❌ "eth_call not supported" | — | — | — | Unused |
+| Arbitrum sequencer feed | — | — | — | ✅ feed | Real-time txs (~0.9 s ahead), free, unmetered |
