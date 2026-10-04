@@ -2862,6 +2862,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "chrono",
  "dotenvy",
  "mev-bindings",
  "mev-config",
@@ -2871,6 +2872,7 @@ dependencies = [
  "mev-rpc",
  "mev-state",
  "mev-types",
+ "serde_json",
  "tokio",
 ]
 
