@@ -144,9 +144,9 @@ type = "algebra"
 factory = "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"
 
 # Feed-driven arbitrage: simulate sequencer-feed txs (eth_simulateV1) to see the pools they move
-# a block early. Measured from the server: PublicNode p50 37 ms / p90 57 ms, dRPC p50 66 ms.
+# a block early. From AWS us-east-2 (warm): arb1 13 ms, PublicNode 25 ms, dRPC 120-240 ms.
 [presim]
 enabled = true
-rpc_urls = ["https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.drpc.org"]
+rpc_urls = ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.drpc.org"]
 max_in_flight = 16
 timeout_ms = 250
