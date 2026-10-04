@@ -65,8 +65,8 @@ Develop locally, the server only pulls:
 feature branch -> PR -> merge on GitHub -> git checkout main && git pull -> scripts/deploy.sh live --yes
 ```
 
-- The bot runs on `administrator@194.163.145.241:~/src/mev-bot-v3` (DECISIONS #38). Never run it
-  locally at the same time: one wallet, one bot.
+- The bot runs on AWS us-east-2, `mev-ohio:~/src/mev-bot` (DECISIONS #44); the image is built locally
+  and streamed (`BUILD=local`). Never run a second live bot anywhere: one wallet, one bot.
 - `scripts/deploy.sh shadow | live --yes` deploys `origin/main` only: clean tree, gate passes, the
   server fetches with a **read-only deploy key** (`~/.ssh/mev-bot-deploy`, host alias
   `github-mev-bot`) and checks out that exact commit. Every deploy is tagged `deploy-<UTC>`.

@@ -3,7 +3,6 @@
 #
 #   scripts/deploy.sh shadow          simulate only (no transactions)
 #   scripts/deploy.sh live --yes      REAL FUNDS: refuses without --yes
-#   SERVER=mev-ohio REMOTE_DIR=/home/ubuntu/src/mev-bot BUILD=local scripts/deploy.sh live --yes
 #
 # Flow: develop locally -> PR -> merge to main on GitHub -> `git pull` main here -> deploy.
 # Steps: checks (on main, clean tree, equal to origin/main), gate (scripts/check.sh in the dev
@@ -14,11 +13,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SERVER=${SERVER:-administrator@194.163.145.241}
-REMOTE_DIR=${REMOTE_DIR:-/home/administrator/src/mev-bot-v3}
-# BUILD=local: build the image here and stream it to the server (for hosts too small to compile,
-# e.g. the 2 GB AWS t3.small). BUILD=server (default): the server builds it.
-BUILD=${BUILD:-server}
+# Live host: AWS us-east-2 t3.small next to the Arbitrum sequencer (DECISIONS #44). SSH alias
+# `mev-ohio` (~/.ssh/config). The old Contabo host is stopped and kept only as a rollback.
+SERVER=${SERVER:-mev-ohio}
+REMOTE_DIR=${REMOTE_DIR:-/home/ubuntu/src/mev-bot}
+# BUILD=local (default): build the image here and stream it to the server; the 2 GB host can't
+# compile the workspace. BUILD=server: the server builds it (bigger hosts).
+BUILD=${BUILD:-local}
 
 mode="" yes=0
 for a in "$@"; do
