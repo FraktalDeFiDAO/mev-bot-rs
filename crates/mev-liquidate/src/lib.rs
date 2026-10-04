@@ -68,6 +68,8 @@ struct Slot {
     backfilled: bool,
     /// Active burst: when it started and the next offset index to poll.
     burst: Option<(Instant, usize)>,
+    /// Feed contracts updated since the burst started: only accounts they affect are re-polled.
+    burst_feeds: Vec<Address>,
     /// After an index error, don't retry before this (exponential backoff; rate limits).
     index_retry_at: Option<Instant>,
     index_backoff: Duration,
@@ -102,6 +104,7 @@ impl Runner {
                 at_risk: HashMap::new(),
                 backfilled: false,
                 burst: None,
+                burst_feeds: Vec::new(),
                 index_retry_at: None,
                 index_backoff: INDEX_BACKOFF_MIN,
             });
@@ -217,9 +220,21 @@ impl Runner {
     }
 
     /// Re-check one adapter's at-risk accounts on the fast RPC; plan the liquidatable ones.
-    /// Returns false when the event receiver is gone.
-    async fn poll(&mut self, i: usize, tx: &mpsc::UnboundedSender<RunnerEvent>) -> bool {
-        let accounts: Vec<AccountRef> = self.slots[i].at_risk.keys().copied().collect();
+    /// With `feeds`, only accounts one of those price feeds can affect. Returns false when the
+    /// event receiver is gone.
+    async fn poll(
+        &mut self,
+        i: usize,
+        feeds: Option<&[Address]>,
+        tx: &mpsc::UnboundedSender<RunnerEvent>,
+    ) -> bool {
+        let slot = &self.slots[i];
+        let accounts: Vec<AccountRef> = slot
+            .at_risk
+            .keys()
+            .filter(|a| feeds.is_none_or(|fs| fs.iter().any(|f| slot.adapter.affected(*f, a))))
+            .copied()
+            .collect();
         if accounts.is_empty() {
             return true;
         }
@@ -260,8 +275,18 @@ impl Runner {
     /// Mark adapters watching the feed contract `to` for a burst of re-polls.
     fn on_feed_tx(&mut self, st: &SequencedTx, tx: &mpsc::UnboundedSender<RunnerEvent>) {
         let hits: Vec<usize> = self.feeds.matches_tx(st.to, &st.input).to_vec();
+        let Some(feed) = self.feeds.matched_contract(st.to, &st.input) else {
+            return;
+        };
         for i in hits {
-            self.slots[i].burst = Some((Instant::now(), 0));
+            let slot = &mut self.slots[i];
+            if slot.burst.is_none() {
+                slot.burst_feeds.clear();
+            }
+            if !slot.burst_feeds.contains(&feed) {
+                slot.burst_feeds.push(feed);
+            }
+            slot.burst = Some((Instant::now(), 0));
             debug!(protocol = self.slots[i].adapter.id(), tx = %st.hash, "price-feed update in sequencer feed");
             let _ = tx.send(RunnerEvent::FeedTrigger {
                 adapter: self.slots[i].adapter.id(),
@@ -298,7 +323,7 @@ impl Runner {
                 _ = sweep.tick() => self.sweep_all().await,
                 _ = fallback.tick() => {
                     for i in 0..self.slots.len() {
-                        if !self.poll(i, &tx).await { return; }
+                        if !self.poll(i, None, &tx).await { return; }
                     }
                 }
                 Some(st) = recv_opt(&mut feed) => self.on_feed_tx(&st, &tx),
@@ -310,7 +335,8 @@ impl Runner {
                             continue;
                         }
                         self.slots[i].burst = (next + 1 < BURST_OFFSETS.len()).then_some((start, next + 1));
-                        if !self.poll(i, &tx).await { return; }
+                        let feeds = self.slots[i].burst_feeds.clone();
+                        if !self.poll(i, Some(&feeds), &tx).await { return; }
                     }
                 }
             }
@@ -392,6 +418,9 @@ mod tests {
         }
         fn price_feeds(&self) -> Vec<Address> {
             vec![self.feed]
+        }
+        fn affected(&self, feed: Address, _a: &AccountRef) -> bool {
+            feed == self.feed
         }
         fn targets(&self) -> Vec<Address> {
             vec![]
@@ -482,6 +511,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn burst_polls_only_accounts_the_updated_feed_affects() {
+        let (hf, a) = fake(1.02, AdapterStatus::Live);
+        let mut r = Runner::new(cfg(), vec![a]);
+        r.sweep(0).await;
+        *hf.lock().unwrap() = 0.97;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let other = Address::with_last_byte(0x01);
+        assert!(r.poll(0, Some(&[other]), &tx).await);
+        assert!(rx.try_recv().is_err(), "unrelated feed must not re-poll");
+        let watched = Address::with_last_byte(0xfe);
+        assert!(r.poll(0, Some(&[other, watched]), &tx).await);
+        assert!(matches!(rx.try_recv(), Ok(RunnerEvent::Plan(_))));
+    }
+
+    #[tokio::test]
     async fn sweep_then_poll_plans_liquidatable_account_once() {
         let (hf, a) = fake(1.02, AdapterStatus::Live); // at risk but healthy
         let mut r = Runner::new(cfg(), vec![a]);
@@ -494,9 +538,9 @@ mod tests {
 
         *hf.lock().unwrap() = 0.97; // price drops
         let (tx, mut rx) = mpsc::unbounded_channel();
-        assert!(r.poll(0, &tx).await);
+        assert!(r.poll(0, None, &tx).await);
         assert!(matches!(rx.try_recv(), Ok(RunnerEvent::Plan(_))));
-        assert!(r.poll(0, &tx).await);
+        assert!(r.poll(0, None, &tx).await);
         assert!(
             rx.try_recv().is_err(),
             "cooldown prevents immediate re-plan"
@@ -511,12 +555,12 @@ mod tests {
                 Duration::from_secs(40),
             ),
         );
-        assert!(r.poll(0, &tx).await);
+        assert!(r.poll(0, None, &tx).await);
         assert!(matches!(rx.try_recv(), Ok(RunnerEvent::Plan(_))));
         assert_eq!(r.last_plan[&acct].1, Duration::from_secs(80));
         // ...and the backoff resets once the account is healthy again.
         *hf.lock().unwrap() = 1.02;
-        assert!(r.poll(0, &tx).await);
+        assert!(r.poll(0, None, &tx).await);
         assert!(!r.last_plan.contains_key(&acct));
     }
 
@@ -560,6 +604,7 @@ mod tests {
         fwd.input = input.into();
         r.on_feed_tx(&fwd, &tx);
         assert!(r.slots[0].burst.is_some(), "forwarded report must trigger");
+        assert_eq!(r.slots[0].burst_feeds, vec![Address::with_last_byte(0xfe)]);
 
         let other = sequenced(Some(Address::with_last_byte(0x01)));
         r.slots[0].burst = None;

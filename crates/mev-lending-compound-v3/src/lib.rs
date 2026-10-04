@@ -15,7 +15,11 @@
 
 pub mod math;
 
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Duration,
+};
 
 use alloy::{
     primitives::{Address, U256},
@@ -99,7 +103,8 @@ pub struct CompoundV3Adapter {
     rpc: AdapterRpc,
     comets: Vec<Comet>,
     index: EventIndex,
-    feeds: Vec<Address>,
+    /// Aggregator -> Comets whose collateral it prices.
+    feeds: HashMap<Address, HashSet<Address>>,
 }
 
 impl CompoundV3Adapter {
@@ -133,10 +138,14 @@ impl CompoundV3Adapter {
             .iter()
             .flat_map(|c| c.assets.iter().map(|a| a.feed))
             .collect();
-        let feeds = mev_oracle::resolve_aggregators(&rpc.fast, &sources)
-            .await?
-            .into_keys()
-            .collect::<Vec<_>>();
+        let aggregators = mev_oracle::resolve_aggregators(&rpc.fast, &sources).await?;
+        let feeds = mev_lending::feed_index(&aggregators, |src| {
+            comets
+                .iter()
+                .filter(|c| c.assets.iter().any(|a| a.feed == src))
+                .map(|c| c.address)
+                .collect()
+        });
         let index = EventIndex::open(IndexConfig {
             addresses: comets.iter().map(|c| c.address).collect(),
             topics: vec![IComet::Withdraw::SIGNATURE_HASH],
@@ -522,7 +531,13 @@ impl LiquidationAdapter for CompoundV3Adapter {
     }
 
     fn price_feeds(&self) -> Vec<Address> {
-        self.feeds.clone()
+        self.feeds.keys().copied().collect()
+    }
+
+    fn affected(&self, feed: Address, account: &AccountRef) -> bool {
+        self.feeds
+            .get(&feed)
+            .is_none_or(|comets| comets.contains(&account.market))
     }
 
     fn targets(&self) -> Vec<Address> {

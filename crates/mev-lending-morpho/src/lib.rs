@@ -79,7 +79,8 @@ pub struct MorphoAdapter {
     index: EventIndex,
     params: Mutex<HashMap<B256, Params>>,
     decimals: Mutex<HashMap<Address, u8>>,
-    feeds: Vec<Address>,
+    /// Aggregator -> short ids of markets whose oracle reads it.
+    feeds: HashMap<Address, HashSet<u64>>,
 }
 
 /// Short id stored in `AccountRef::sub_id`.
@@ -105,21 +106,26 @@ impl MorphoAdapter {
             index,
             params: Mutex::new(HashMap::new()),
             decimals: Mutex::new(HashMap::new()),
-            feeds: vec![],
+            feeds: HashMap::new(),
         };
         let ids: Vec<B256> = me.market_ids();
         me.load_params(&ids).await?;
-        let oracles: Vec<Address> = me
+        let market_oracles: Vec<(u64, Address)> = me
             .params
             .lock()
             .unwrap()
-            .values()
-            .map(|p| p.oracle)
+            .iter()
+            .map(|(id, p)| (short_id(id), p.oracle))
             .collect();
-        let feeds = mev_oracle::resolve_aggregators(&me.rpc.fast, &oracles)
-            .await?
-            .into_keys()
-            .collect();
+        let oracles: Vec<Address> = market_oracles.iter().map(|(_, o)| *o).collect();
+        let aggregators = mev_oracle::resolve_aggregators(&me.rpc.fast, &oracles).await?;
+        let feeds = mev_lending::feed_index(&aggregators, |oracle| {
+            market_oracles
+                .iter()
+                .filter(|(_, o)| *o == oracle)
+                .map(|(id, _)| *id)
+                .collect()
+        });
         info!(
             protocol = ID,
             markets = ids.len(),
@@ -430,7 +436,13 @@ impl LiquidationAdapter for MorphoAdapter {
     }
 
     fn price_feeds(&self) -> Vec<Address> {
-        self.feeds.clone()
+        self.feeds.keys().copied().collect()
+    }
+
+    fn affected(&self, feed: Address, account: &AccountRef) -> bool {
+        self.feeds
+            .get(&feed)
+            .is_none_or(|markets| markets.contains(&account.sub_id))
     }
 
     fn targets(&self) -> Vec<Address> {

@@ -8,7 +8,7 @@
 
 pub mod math;
 
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex, time::Duration};
 
 use alloy::{
     primitives::{Address, U256},
@@ -26,7 +26,7 @@ use mev_lending::{
 };
 use mev_lending_index::{EventIndex, IndexConfig, market_key, topic_address};
 use mev_rpc::{call, decode, multicall};
-use tracing::info;
+use tracing::{info, warn};
 
 alloy::sol! {
     function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken);
@@ -37,6 +37,15 @@ pub const ID: ProtocolId = "aave-v3";
 const ACCOUNT_DATA_CHUNK: usize = 50;
 /// Flash this much more than the user's debt: Aave rounds variable debt up; excess is returned.
 const FLASH_BUFFER: f64 = 1.002;
+/// Sweeps fetch reserve bitmaps for accounts below this health factor (the runner's at-risk set).
+const EXPOSURE_HF: f64 = 1.10;
+/// Reserve ids can exceed the live reserve count after reserves are dropped.
+const MAX_RESERVE_ID_SLACK: usize = 16;
+
+/// `UserConfigurationMap` bits (borrowing + collateral) for reserve `id`.
+pub fn reserve_bits(id: u16) -> U256 {
+    U256::from(3) << (2 * id as usize)
+}
 
 pub struct AaveV3Adapter {
     cfg: AaveConfig,
@@ -44,7 +53,10 @@ pub struct AaveV3Adapter {
     index: EventIndex,
     reserves: Vec<Address>,
     decimals: HashMap<Address, u8>,
-    feeds: Vec<Address>,
+    /// Aggregator -> `UserConfigurationMap` bits of the reserves it prices.
+    feed_masks: HashMap<Address, U256>,
+    /// User -> `UserConfigurationMap`, refreshed by sweeps for at-risk users.
+    user_masks: Mutex<HashMap<Address, U256>>,
 }
 
 impl AaveV3Adapter {
@@ -79,20 +91,52 @@ impl AaveV3Adapter {
             .iter()
             .map(|a| call(cfg.oracle, IAaveOracle::getSourceOfAssetCall { asset: *a }))
             .collect();
-        let sources: Vec<Address> = multicall(&rpc.fast, &src_calls, 200)
+        let asset_sources: Vec<(Address, Address)> = multicall(&rpc.fast, &src_calls, 200)
             .await?
             .iter()
-            .filter_map(decode::<IAaveOracle::getSourceOfAssetCall>)
-            .filter(|a| !a.is_zero())
+            .zip(&reserves)
+            .filter_map(|(r, a)| decode::<IAaveOracle::getSourceOfAssetCall>(r).map(|s| (*a, s)))
+            .filter(|(_, s)| !s.is_zero())
             .collect();
-        let feeds: Vec<Address> = mev_oracle::resolve_aggregators(&rpc.fast, &sources)
+        let id_calls: Vec<_> = (0..reserves.len() + MAX_RESERVE_ID_SLACK)
+            .map(|id| {
+                call(
+                    cfg.pool,
+                    IAavePool::getReserveAddressByIdCall { id: id as u16 },
+                )
+            })
+            .collect();
+        let ids: HashMap<Address, u16> = multicall(&rpc.fast, &id_calls, 200)
             .await?
-            .into_keys()
+            .iter()
+            .enumerate()
+            .filter_map(|(id, r)| {
+                decode::<IAavePool::getReserveAddressByIdCall>(r).map(|a| (a, id as u16))
+            })
+            .filter(|(a, _)| !a.is_zero())
             .collect();
+        let sources: Vec<Address> = asset_sources.iter().map(|(_, s)| *s).collect();
+        let aggregators = mev_oracle::resolve_aggregators(&rpc.fast, &sources).await?;
+        let feed_masks: HashMap<Address, U256> = mev_lending::feed_index(&aggregators, |src| {
+            asset_sources
+                .iter()
+                .filter(|(_, s)| *s == src)
+                .filter_map(|(a, _)| ids.get(a).copied())
+                .collect()
+        })
+        .into_iter()
+        .map(|(agg, ids)| {
+            (
+                agg,
+                ids.into_iter()
+                    .fold(U256::ZERO, |m, id| m | reserve_bits(id)),
+            )
+        })
+        .collect();
         info!(
             protocol = ID,
             reserves = reserves.len(),
-            price_feeds = feeds.len(),
+            price_feeds = feed_masks.len(),
             borrowers_cached = index.len(),
             "adapter ready"
         );
@@ -102,8 +146,42 @@ impl AaveV3Adapter {
             index,
             reserves,
             decimals,
-            feeds,
+            feed_masks,
+            user_masks: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Which reserves at-risk users touch, so feed updates re-poll only exposed users. Runs on
+    /// the sweep RPC; on failure the old (or no) bitmap stays and `affected` stays conservative.
+    async fn refresh_user_masks(&self, hs: &[Health]) {
+        let users: Vec<Address> = hs
+            .iter()
+            .filter(|h| h.debt_usd > 0.0 && h.health_factor < EXPOSURE_HF)
+            .map(|h| h.account.account)
+            .collect();
+        if users.is_empty() {
+            return;
+        }
+        let calls: Vec<_> = users
+            .iter()
+            .map(|u| {
+                call(
+                    self.cfg.pool,
+                    IAavePool::getUserConfigurationCall { user: *u },
+                )
+            })
+            .collect();
+        match multicall(&self.rpc.sweep, &calls, 200).await {
+            Ok(res) => {
+                let mut masks = self.user_masks.lock().unwrap();
+                for (u, r) in users.iter().zip(res.iter()) {
+                    if let Some(m) = decode::<IAavePool::getUserConfigurationCall>(r) {
+                        masks.insert(*u, m);
+                    }
+                }
+            }
+            Err(e) => warn!(protocol = ID, error = %format!("{e:#}"), "user reserve bitmaps"),
+        }
     }
 
     fn account(&self, user: Address) -> AccountRef {
@@ -234,7 +312,7 @@ impl LiquidationAdapter for AaveV3Adapter {
             })
             .collect();
         let res = multicall(p, &calls, ACCOUNT_DATA_CHUNK).await?;
-        Ok(accounts
+        let hs: Vec<Health> = accounts
             .iter()
             .zip(res.iter())
             .filter_map(|(a, r)| {
@@ -245,7 +323,11 @@ impl LiquidationAdapter for AaveV3Adapter {
                     health_factor: f64::from(d.healthFactor.min(U256::from(u128::MAX))) / 1e18,
                 })
             })
-            .collect())
+            .collect();
+        if !fast {
+            self.refresh_user_masks(&hs).await;
+        }
+        Ok(hs)
     }
 
     async fn plan(&self, h: &Health, _executor: Address) -> Result<Option<Plan>> {
@@ -287,7 +369,17 @@ impl LiquidationAdapter for AaveV3Adapter {
     }
 
     fn price_feeds(&self) -> Vec<Address> {
-        self.feeds.clone()
+        self.feed_masks.keys().copied().collect()
+    }
+
+    fn affected(&self, feed: Address, account: &AccountRef) -> bool {
+        let Some(feed_mask) = self.feed_masks.get(&feed) else {
+            return true;
+        };
+        match self.user_masks.lock().unwrap().get(&account.account) {
+            Some(user) => !(*user & *feed_mask).is_zero(),
+            None => true,
+        }
     }
 
     fn targets(&self) -> Vec<Address> {
@@ -358,5 +450,21 @@ mod migration_tests {
         let before = std::fs::read(&path).unwrap();
         migrate_v1_cache(&path, pool);
         assert_eq!(before, std::fs::read(&path).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod exposure_tests {
+    use super::*;
+
+    #[test]
+    fn reserve_bits_cover_borrow_and_collateral_flags() {
+        assert_eq!(reserve_bits(0), U256::from(0b11));
+        assert_eq!(reserve_bits(2), U256::from(0b11_0000));
+        // A user borrowing reserve 3 and posting reserve 0 as collateral.
+        let user = (U256::from(1u8) << 6usize) | (U256::from(1u8) << 1usize);
+        assert!(!(user & reserve_bits(3)).is_zero());
+        assert!(!(user & reserve_bits(0)).is_zero());
+        assert!((user & reserve_bits(1)).is_zero());
     }
 }

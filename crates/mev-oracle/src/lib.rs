@@ -122,6 +122,14 @@ impl<T: Clone> FeedWatcher<T> {
         self.matches(effective_target(to, input))
     }
 
+    /// The watched contract a transaction updates (directly or through a forwarder).
+    pub fn matched_contract(&self, to: Option<Address>, input: &[u8]) -> Option<Address> {
+        [to, effective_target(to, input)]
+            .into_iter()
+            .flatten()
+            .find(|a| self.by_contract.contains_key(a))
+    }
+
     pub fn len(&self) -> usize {
         self.by_contract.len()
     }
@@ -169,6 +177,12 @@ mod tests {
             w.matches_tx(Some(forwarder), &forward_call(Address::with_last_byte(1)))
                 .is_empty()
         );
+        assert_eq!(
+            w.matched_contract(Some(forwarder), &forward_call(agg)),
+            Some(agg)
+        );
+        assert_eq!(w.matched_contract(Some(agg), &[]), Some(agg));
+        assert_eq!(w.matched_contract(Some(forwarder), &[]), None);
         // Direct transmit to the aggregator still matches.
         assert_eq!(
             w.matches_tx(Some(agg), &[0xb1, 0xdc, 0x65, 0xa4]),

@@ -71,6 +71,9 @@ sol! {
     interface IAavePool {
         function getUserAccountData(address user) external view returns (uint256 totalCollateralBase, uint256 totalDebtBase, uint256 availableBorrowsBase, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor);
         function getReservesList() external view returns (address[] memory);
+        /// `UserConfigurationMap`: bit 2·id = borrowing reserve `id`, bit 2·id+1 = its collateral.
+        function getUserConfiguration(address user) external view returns (uint256);
+        function getReserveAddressById(uint16 id) external view returns (address);
         event Borrow(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint8 interestRateMode, uint256 borrowRate, uint16 indexed referralCode);
     }
 

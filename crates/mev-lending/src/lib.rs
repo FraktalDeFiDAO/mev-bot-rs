@@ -93,6 +93,18 @@ pub struct AdapterRpc {
     pub sweep: alloy::providers::DynProvider,
 }
 
+/// Invert `aggregator -> price sources` (from `mev_oracle::resolve_aggregators`) into
+/// `aggregator -> keys`, where `keys_of(source)` names what each source prices (assets, markets).
+pub fn feed_index<K: Eq + std::hash::Hash + Copy>(
+    aggregators: &std::collections::HashMap<Address, Vec<Address>>,
+    keys_of: impl Fn(Address) -> Vec<K>,
+) -> std::collections::HashMap<Address, std::collections::HashSet<K>> {
+    aggregators
+        .iter()
+        .map(|(agg, sources)| (*agg, sources.iter().flat_map(|s| keys_of(*s)).collect()))
+        .collect()
+}
+
 #[async_trait]
 pub trait LiquidationAdapter: Send + Sync {
     fn id(&self) -> ProtocolId;
@@ -116,9 +128,42 @@ pub trait LiquidationAdapter: Send + Sync {
     /// sequencer feed for transactions to these and re-checks at-risk accounts immediately.
     fn price_feeds(&self) -> Vec<Address>;
 
+    /// Whether an update of `feed` (one of `price_feeds`) can move `account`'s health. Lets the
+    /// runner re-poll only exposed accounts after a feed update. Must answer `true` when unsure.
+    fn affected(&self, _feed: Address, _account: &AccountRef) -> bool {
+        true
+    }
+
     /// Contracts the executor must allowlist (call targets and approval spenders).
     fn targets(&self) -> Vec<Address>;
 
     /// Tokens that can be debt or collateral here (so swap routes for them get discovered).
     fn assets(&self) -> Vec<Address>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feed_index_maps_aggregators_to_what_their_sources_price() {
+        let (agg_eth, agg_btc) = (Address::with_last_byte(0xe0), Address::with_last_byte(0xb0));
+        let (src_eth, src_steth, src_btc) = (
+            Address::with_last_byte(1),
+            Address::with_last_byte(2),
+            Address::with_last_byte(3),
+        );
+        let aggs = std::collections::HashMap::from([
+            (agg_eth, vec![src_eth, src_steth]),
+            (agg_btc, vec![src_btc]),
+        ]);
+        // Source -> markets it prices; the stETH source prices two markets.
+        let idx = feed_index(&aggs, |s| match s {
+            s if s == src_eth => vec![10u64],
+            s if s == src_steth => vec![11, 12],
+            _ => vec![20],
+        });
+        assert_eq!(idx[&agg_eth], [10, 11, 12].into_iter().collect());
+        assert_eq!(idx[&agg_btc], [20].into_iter().collect());
+    }
 }
