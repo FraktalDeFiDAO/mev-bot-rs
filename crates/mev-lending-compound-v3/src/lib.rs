@@ -249,6 +249,36 @@ impl CompoundV3Adapter {
         Ok((for_sale, amounts))
     }
 
+    /// Positions of `users` that currently owe something. Two phases: one cheap
+    /// `borrowBalanceOf` per account, then the per-asset collateral reads only for debtors
+    /// (most indexed `Withdraw` sources are lenders, so this cuts sweep calls ~10x).
+    async fn debtor_positions(
+        &self,
+        p: &DynProvider,
+        c: &Comet,
+        users: &[Address],
+    ) -> Result<Vec<(Address, math::Position)>> {
+        let calls: Vec<_> = users
+            .iter()
+            .map(|u| call(c.address, IComet::borrowBalanceOfCall { account: *u }))
+            .collect();
+        let res = multicall(p, &calls, 500).await?;
+        let debtors: Vec<Address> = users
+            .iter()
+            .zip(res.iter())
+            .filter(|(_, r)| decode::<IComet::borrowBalanceOfCall>(r).is_some_and(|b| !b.is_zero()))
+            .map(|(u, _)| *u)
+            .collect();
+        if debtors.is_empty() {
+            return Ok(vec![]);
+        }
+        Ok(debtors
+            .iter()
+            .zip(self.positions(p, c, &debtors).await?)
+            .filter_map(|(u, pos)| pos.map(|pos| (*u, pos)))
+            .collect())
+    }
+
     /// Borrow balance and per-asset collateral for borrowers of one Comet.
     async fn positions(
         &self,
@@ -374,8 +404,8 @@ impl LiquidationAdapter for CompoundV3Adapter {
                 .map(|a| a.account)
                 .collect();
             if !users.is_empty() {
-                for (u, pos) in users.iter().zip(self.positions(p, c, &users).await?) {
-                    let Some(pos) = pos else { continue };
+                for (u, pos) in self.debtor_positions(p, c, &users).await? {
+                    let u = &u;
                     if pos.borrow <= 0.0 {
                         continue;
                     }

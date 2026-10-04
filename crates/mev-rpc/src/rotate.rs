@@ -20,6 +20,9 @@ use alloy::{
 };
 use tower::Service;
 
+/// Per-endpoint attempt timeout before falling through to the next endpoint.
+const ATTEMPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// JSON-RPC codes / messages meaning "slow down" rather than a real call failure.
 pub fn is_rate_limit_payload(code: i64, message: &str) -> bool {
     let m = message.to_lowercase();
@@ -85,9 +88,13 @@ impl Service<RequestPacket> for RotatingTransport {
             let mut last: Option<Result<ResponsePacket, TransportError>> = None;
             for i in 0..n {
                 let mut t = transports[(start + i) % n].clone();
-                match t.call(req.clone()).await {
-                    Ok(resp) if !try_next(&resp) => return Ok(resp),
-                    other => last = Some(other),
+                // A hung endpoint must not stall the caller (reqwest has no default timeout).
+                match tokio::time::timeout(ATTEMPT_TIMEOUT, t.call(req.clone())).await {
+                    Ok(Ok(resp)) if !try_next(&resp) => return Ok(resp),
+                    Ok(other) => last = Some(other),
+                    Err(_) => {
+                        last = Some(Err(TransportErrorKind::custom_str("endpoint timed out")))
+                    }
                 }
             }
             last.unwrap_or_else(|| Err(TransportErrorKind::custom_str("no transports")))

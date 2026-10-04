@@ -54,5 +54,4 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C055 - lib.rs (C055)|lib.rs (C055)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C056 - .plan|.plan]] — 2 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 4 cross-community edges

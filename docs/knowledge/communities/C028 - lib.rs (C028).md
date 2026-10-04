@@ -43,6 +43,5 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C053 - AccountRef|AccountRef]] — 1 cross-community edges
-- [[docs/knowledge/communities/C055 - lib.rs (C055)|lib.rs (C055)]] — 1 cross-community edges

@@ -50,11 +50,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
+- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 2 cross-community edges
-- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C053 - AccountRef|AccountRef]] — 2 cross-community edges
-- [[docs/knowledge/communities/C054 - Plan|Plan]] — 2 cross-community edges
+- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C037 - PoolInfo|PoolInfo]] — 1 cross-community edges
-- [[docs/knowledge/communities/C055 - lib.rs (C055)|lib.rs (C055)]] — 1 cross-community edges

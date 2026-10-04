@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "51"
-graphify-node-count: 19
-graphify-internal-edges: 29
+graphify-node-count: 25
+graphify-internal-edges: 33
 tags:
   - graphify/community
 ---
@@ -13,34 +13,37 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-lending-dolomite/src/lib.rs` — 13 nodes
-- `graph` — 6 nodes
+- `graph` — 14 nodes
+- `crates/mev-rpc/src/rotate.rs` — 11 nodes
 
-## Nodes (19)
+## Nodes (25)
 
-- **Adapter** — `crates/mev-lending-dolomite/src/lib.rs:L26`
-- **.plan()** — `crates/mev-lending-dolomite/src/lib.rs:L58`
-- **.health()** — `crates/mev-lending-dolomite/src/lib.rs:L54`
-- **Address** — `graph`
-- **Vec** — `graph`
-- **.accounts()** — `crates/mev-lending-dolomite/src/lib.rs:L50`
-- **.assets()** — `crates/mev-lending-dolomite/src/lib.rs:L70`
-- **.new()** — `crates/mev-lending-dolomite/src/lib.rs:L29`
-- **.price_feeds()** — `crates/mev-lending-dolomite/src/lib.rs:L62`
-- **.targets()** — `crates/mev-lending-dolomite/src/lib.rs:L66`
-- **lib.rs** — `crates/mev-lending-dolomite/src/lib.rs:L1`
+- **RotatingTransport** — `crates/mev-rpc/src/rotate.rs:L45`
+- **rotate.rs** — `crates/mev-rpc/src/rotate.rs:L1`
+- **.http()** — `crates/mev-rpc/src/rotate.rs:L62`
+- **.new()** — `crates/mev-rpc/src/rotate.rs:L51`
+- **.poll_ready()** — `crates/mev-rpc/src/rotate.rs:L76`
+- **.call()** — `crates/mev-rpc/src/rotate.rs:L80`
+- **try_next()** — `crates/mev-rpc/src/rotate.rs:L38`
+- **BoxTransport** — `graph`
+- **is_execution_error()** — `crates/mev-rpc/src/rotate.rs:L33`
+- **RequestPacket** — `graph`
 - **Result** — `graph`
-- **.id()** — `crates/mev-lending-dolomite/src/lib.rs:L36`
-- **.index()** — `crates/mev-lending-dolomite/src/lib.rs:L46`
-- **.status()** — `crates/mev-lending-dolomite/src/lib.rs:L40`
-- **is_not_live_and_never_plans()** — `crates/mev-lending-dolomite/src/lib.rs:L80`
-- **Option** — `graph`
-- **ProtocolId** — `graph`
 - **Self** — `graph`
+- **Service** — `graph`
+- **Vec** — `graph`
+- **Arc** — `graph`
+- **AtomicUsize** — `graph`
+- **Context** — `graph`
+- **Error** — `graph`
+- **Future** — `graph`
+- **is_rate_limit_payload()** — `crates/mev-rpc/src/rotate.rs:L24`
+- **only_execution_errors_stop_the_rotation()** — `crates/mev-rpc/src/rotate.rs:L118`
+- **Poll** — `graph`
+- **recognizes_rate_limit_payloads()** — `crates/mev-rpc/src/rotate.rs:L103`
+- **ResponsePacket** — `graph`
+- **String** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 2 cross-community edges
-- [[docs/knowledge/communities/C053 - AccountRef|AccountRef]] — 2 cross-community edges
-- [[docs/knowledge/communities/C054 - Plan|Plan]] — 2 cross-community edges
-- [[docs/knowledge/communities/C055 - lib.rs (C055)|lib.rs (C055)]] — 1 cross-community edges
+- No selected community has a direct edge to this one.
