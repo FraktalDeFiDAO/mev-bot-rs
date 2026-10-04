@@ -7,7 +7,7 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
 **Updated:** 2026-10-04
 **Branch:** `feat/liquidations` (stacked on #6 → #5). User merges PRs.
 **Executor:** `0xc0B4BA513359979793B9aaa8C74b526aD644AF8D` (Arbitrum) — 8 targets allowlisted.
-**Running:** podman `mev-bot-arbitrum` in LIVE mode on the latest image (restarted by user request).
+**Running:** LIVE on `administrator@194.163.145.241:~/src/mev-bot-v3` (Contabo FR, shared host, podman-compose 1.0.6). Local bot stopped — never run both (same wallet). Deploy: rsync repo (no target/, no .env) → `scripts/run.sh live` there; user copies `.env` themselves.
 
 ## Done and verified
 
