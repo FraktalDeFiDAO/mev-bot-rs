@@ -30,11 +30,13 @@ pub use mev_sim::SimOutcome;
 use mev_sim::Simulator;
 use mev_state::PoolStore;
 use mev_types::Opportunity;
+use race::Trigger;
 use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 /// Share of the flash lender's balance we're willing to borrow.
+mod race;
 /// Gas a backrun liquidation is priced at (flash loan + protocol call + swap), and its limit.
 /// Unsimulated, so the limit is generous; unused gas isn't charged.
 const BACKRUN_GAS: u64 = 900_000;
@@ -68,6 +70,8 @@ pub struct Engine {
     mode: Mode,
     liq: Option<LiqCtx>,
     presim_rx: Option<PresimRx>,
+    /// Recent feed arrivals by tx hash (race telemetry clock).
+    feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>>,
     /// Request meters per provider ("fast" = paid), drained into the minute summary.
     meters: Vec<(&'static str, Arc<RpcMeter>)>,
     /// (fetched at, wei); refreshed in the background so hot paths never wait on it.
@@ -208,6 +212,7 @@ impl Engine {
             .presim
             .clone()
             .filter(|p| p.enabled && !p.rpc_urls.is_empty());
+        let feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>> = Default::default();
         let (liq_feed, presim_feed) = match cfg.sequencer_feed.clone() {
             Some(url) => {
                 let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<mev_sequencer::SequencedTx>();
@@ -215,8 +220,10 @@ impl Engine {
                 let (liq_tx, liq_rx) = mpsc::unbounded_channel();
                 let (pre_tx, pre_rx) = mpsc::unbounded_channel();
                 let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
+                let log = feed_log.clone();
                 tokio::spawn(async move {
                     while let Some(st) = raw_rx.recv().await {
+                        log.lock().unwrap().record(&st);
                         if want_pre {
                             let _ = pre_tx.send(st.clone());
                         }
@@ -277,6 +284,7 @@ impl Engine {
             mode,
             liq,
             presim_rx,
+            feed_log,
             meters,
             gas_price: Default::default(),
             gas_refreshing: Default::default(),
@@ -327,7 +335,8 @@ impl Engine {
                         let Some(log) = maybe else { warn!("log stream ended; resubscribing"); break };
                         if let Some(pool) = self.store.apply_log(&log) {
                             self.metrics.update(|c| c.updates += 1);
-                            self.on_pool_update(pool, Instant::now(), &tx_done).await;
+                            let trigger = Trigger { tx: log.transaction_hash, source: "block", seen: Instant::now() };
+                            self.on_pool_update(pool, trigger, &tx_done).await;
                         }
                     }
                     Some(pre) = recv_opt(&mut presim_rx) => {
@@ -335,7 +344,8 @@ impl Engine {
                         for log in &pre.logs {
                             if let Some(pool) = self.store.apply_log(log) {
                                 self.metrics.update(|c| c.presim_updates += 1);
-                                self.on_pool_update(pool, pre.received, &tx_done).await;
+                                let trigger = Trigger { tx: Some(pre.tx), source: "presim", seen: pre.received };
+                                self.on_pool_update(pool, trigger, &tx_done).await;
                             }
                         }
                     }
@@ -538,7 +548,7 @@ impl Engine {
     async fn on_pool_update(
         &mut self,
         pool: Address,
-        seen: Instant,
+        trigger: Trigger,
         tx_done: &mpsc::UnboundedSender<TxDone>,
     ) {
         let price = |t: Address| self.price(t);
@@ -642,38 +652,68 @@ impl Engine {
         self.metrics.update(|c| c.sent += 1);
         let tx_done = tx_done.clone();
         let metrics = self.metrics.clone();
+        let (http, feed_log) = (self.rpc.http.clone(), self.feed_log.clone());
+        let pools: Vec<Address> = opp.hops.iter().map(|h| h.pool).collect();
+        let decided = Instant::now();
         tokio::spawn(async move {
-            let done = match sender
+            let sent = match sender
                 .send(&opp, min_profit, gas_limit, Some(gas_price as u128))
                 .await
             {
-                Ok(hash) => {
-                    let latency_ms = seen.elapsed().as_millis() as u64;
-                    metrics.event(
-                        "sent",
-                        json!({ "hash": hash, "net_usd": net_usd, "latency_ms": latency_ms }),
-                    );
-                    info!(%hash, latency_ms, "arb sent (pool event -> broadcast)");
-                    info!(%hash, "sent");
-                    match sender.wait(hash, Duration::from_secs(30)).await {
-                        Ok(landed) => TxDone::Landed {
-                            hash,
-                            kind: "arb",
-                            est_profit_usd: opp.est_profit_usd,
-                            landed,
-                        },
-                        Err(e) => TxDone::Failed {
-                            hash: Some(hash),
-                            error: e.to_string(),
-                        },
-                    }
+                Ok(sent) => sent,
+                Err(e) => {
+                    let _ = tx_done.send(TxDone::Failed {
+                        hash: None,
+                        error: e.to_string(),
+                    });
+                    return;
                 }
-                Err(e) => TxDone::Failed {
-                    hash: None,
-                    error: e.to_string(),
-                },
             };
-            let _ = tx_done.send(done);
+            let hash = sent.hash;
+            // Trigger seen -> first endpoint accepted (the latency that decides races).
+            let latency_ms = race::ms(trigger.seen, sent.first_accept.unwrap_or(sent.signed));
+            metrics.event(
+                "sent",
+                json!({ "hash": hash, "net_usd": net_usd, "latency_ms": latency_ms, "source": trigger.source }),
+            );
+            info!(%hash, latency_ms, source = trigger.source, "arb sent (trigger -> accepted)");
+            let landed = match sender.wait(hash, Duration::from_secs(30)).await {
+                Ok(l) => l,
+                Err(e) => {
+                    let _ = tx_done.send(TxDone::Failed {
+                        hash: Some(hash),
+                        error: e.to_string(),
+                    });
+                    return;
+                }
+            };
+            let _ = tx_done.send(TxDone::Landed {
+                hash,
+                kind: "arb",
+                est_profit_usd: opp.est_profit_usd,
+                landed: landed.clone(),
+            });
+            // Off the hot path: who beat us, and by how much.
+            let rep = race::report(
+                &http,
+                &feed_log,
+                trigger,
+                decided,
+                sent,
+                &landed,
+                &pools,
+                opp.est_profit_usd,
+            )
+            .await;
+            info!(
+                %hash,
+                won = landed.success,
+                behind_winner_ms = ?rep["behind_winner_ms"].as_i64(),
+                winner_index = ?rep["winner_index"].as_u64(),
+                our_index = ?rep["our_index"].as_u64(),
+                "race"
+            );
+            metrics.event("race", rep);
         });
     }
 
@@ -791,7 +831,7 @@ impl Engine {
                     gas_price as u128,
                 )
                 .await;
-            let done = match sent {
+            let done = match sent.map(|s| s.hash) {
                 Ok(hash) => {
                     metrics.event(
                         "sent",

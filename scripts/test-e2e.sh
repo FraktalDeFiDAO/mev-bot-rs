@@ -95,5 +95,9 @@ echo "$EV" | grep '"landed"' | grep -q '"success":true' || fail "tx did not land
 AFTER_USDC=$(bal "$USDC"); AFTER_WETH=$(bal "$WETH")
 GAIN=$(python3 -c "print(f'USDC +{($AFTER_USDC-$BEFORE_USDC)/1e6:.4f}, WETH +{($AFTER_WETH-$BEFORE_WETH)/1e18:.6f}')")
 python3 -c "import sys; sys.exit(0 if $AFTER_USDC>$BEFORE_USDC or $AFTER_WETH>$BEFORE_WETH else 1)" || fail "receiver got no profit ($GAIN)"
+for _ in $(seq 30); do grep -q '"kind":"race"' "$WORK/data/arbitrum/events-"*.jsonl 2>/dev/null && break; sleep 1; done
+RACE=$(grep -h '"kind":"race"' "$WORK/data/arbitrum/events-"*.jsonl 2>/dev/null | head -1)
+echo "$RACE" | grep -q '"our_index":[0-9]' || fail "no race telemetry for the landed trade"
+echo "      race: $(echo "$RACE" | grep -oE '"(source|our_index|winner_index|ms)":(\{[^}]*\}|"[a-z]+"|[0-9]+|null)' | tr '\n' ' ')"
 grep -q "stale nonce; resyncing" "$WORK/bot.log" && echo "      (stale-nonce recovery exercised: setup txs used the bot's wallet)"
 echo "E2E PASS: bot detected the gap, priced it, sent, landed; receiver $GAIN"

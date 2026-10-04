@@ -36,6 +36,18 @@ pub struct Landed {
     pub gas_used: u64,
     pub effective_gas_price: u128,
     pub block: Option<u64>,
+    /// Position in the block (race telemetry: who was ahead of us).
+    pub tx_index: Option<u64>,
+}
+
+/// A broadcast transaction and its timing.
+#[derive(Debug, Clone, Copy)]
+pub struct Sent {
+    pub hash: TxHash,
+    /// When it was signed (just before broadcasting).
+    pub signed: std::time::Instant,
+    /// When the first endpoint accepted it (the sequencer usually; the time that matters).
+    pub first_accept: Option<std::time::Instant>,
 }
 
 impl Sender {
@@ -77,7 +89,7 @@ impl Sender {
         min_profit: U256,
         gas_limit: u64,
         gas_price: Option<u128>,
-    ) -> Result<TxHash> {
+    ) -> Result<Sent> {
         let calldata = ArbExecutor::executeCall {
             token: opp.loan_token,
             amount: opp.amount_in,
@@ -98,6 +110,7 @@ impl Sender {
     ) -> Result<TxHash> {
         self.send_calldata(liquidate_calldata(plan, hops, min_profit), gas_limit, None)
             .await
+            .map(|s| s.hash)
     }
 
     /// Latency-critical liquidation (backrun): uses the caller's cached `gas_price` (wei)
@@ -109,7 +122,7 @@ impl Sender {
         min_profit: U256,
         gas_limit: u64,
         gas_price: u128,
-    ) -> Result<TxHash> {
+    ) -> Result<Sent> {
         self.send_calldata(
             liquidate_calldata(plan, hops, min_profit),
             gas_limit,
@@ -124,7 +137,7 @@ impl Sender {
         calldata: Vec<u8>,
         gas_limit: u64,
         gas_price: Option<u128>,
-    ) -> Result<TxHash> {
+    ) -> Result<Sent> {
         let base_fee = match gas_price {
             Some(g) => g,
             None => self.reader.get_gas_price().await?,
@@ -155,7 +168,7 @@ impl Sender {
         calldata: &[u8],
         gas_limit: u64,
         base_fee: u128,
-    ) -> Result<TxHash> {
+    ) -> Result<Sent> {
         let nonce = self.nonce.fetch_add(1, Ordering::SeqCst);
         let tx = TransactionRequest::default()
             .with_from(self.address)
@@ -169,13 +182,23 @@ impl Sender {
         let envelope = tx.build(&self.wallet).await.context("signing failed")?;
         let raw = envelope.encoded_2718();
         let hash = *envelope.tx_hash();
+        let signed = std::time::Instant::now();
 
         let sends = self.broadcast.iter().map(|p| {
             let raw = raw.clone();
-            async move { p.send_raw_transaction(&raw).await.map(|_| ()) }
+            async move {
+                let r = p.send_raw_transaction(&raw).await.map(|_| ());
+                (r, std::time::Instant::now())
+            }
         });
         // All endpoints at once: the sequencer endpoint must not wait behind the RPC.
-        let results = futures::future::join_all(sends).await;
+        let timed = futures::future::join_all(sends).await;
+        let first_accept = timed
+            .iter()
+            .filter(|(r, _)| r.is_ok())
+            .map(|(_, t)| *t)
+            .min();
+        let results: Vec<_> = timed.into_iter().map(|(r, _)| r).collect();
         if results.iter().all(|r| r.is_err()) {
             // Nothing accepted it — give the nonce back.
             self.nonce.fetch_sub(1, Ordering::SeqCst);
@@ -193,7 +216,11 @@ impl Sender {
                 warn!(error = %e, "a broadcast endpoint rejected the tx (others accepted)");
             }
         }
-        Ok(hash)
+        Ok(Sent {
+            hash,
+            signed,
+            first_accept,
+        })
     }
 
     pub async fn wait(&self, hash: TxHash, timeout: Duration) -> Result<Landed> {
@@ -205,6 +232,7 @@ impl Sender {
                     gas_used: r.gas_used,
                     effective_gas_price: r.effective_gas_price,
                     block: r.block_number,
+                    tx_index: r.transaction_index,
                 });
             }
             if start.elapsed() > timeout {
