@@ -4,7 +4,7 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
 
 ---
 
-**Updated:** 2026-10-03 (evening)
+**Updated:** 2026-10-04
 **Branch:** `feat/liquidations` (stacked on #6 → #5). User merges PRs.
 **Executor:** `0xc0B4BA513359979793B9aaa8C74b526aD644AF8D` (Arbitrum) — 8 targets allowlisted.
 **Running:** podman `mev-bot-arbitrum` in LIVE mode on the latest image (restarted by user request).
@@ -20,6 +20,8 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
   integration tests, E2E arbitrage (+0.0103 WETH) and E2E Aave liquidation (+881 USDC) on anvil.
   See `docs/planning/TESTING.md`. Gate: `scripts/check.sh`.
 - RPC metering: paid endpoint 3–5 calls/min steady state (DECISIONS #30).
+- Feed bursts re-poll only exposed accounts (`LiquidationAdapter::affected`, DECISIONS #37).
+- Host disk was full (bot stopped 2026-10-04 04:17 UTC, exit 0). Freed host `target/` (26 GB) + old mev-bot images; ~13 GB free.
 
 ## Next
 
