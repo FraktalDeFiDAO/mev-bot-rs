@@ -131,6 +131,44 @@ pub fn decode_l2_message(bytes: &[u8], depth: usize, out: &mut Vec<TxEnvelope>) 
     }
 }
 
+/// When each recent feed transaction arrived, by hash: the reference clock for race telemetry
+/// (the feed shows every transaction in sequencer order, ours and competitors' alike).
+#[derive(Debug, Default)]
+pub struct FeedLog {
+    seen: std::collections::HashMap<B256, (Instant, u64)>,
+    order: std::collections::VecDeque<(Instant, B256)>,
+}
+
+impl FeedLog {
+    /// How long arrivals are kept (attempts land and are analysed well within this).
+    pub const KEEP: Duration = Duration::from_secs(120);
+
+    pub fn record(&mut self, st: &SequencedTx) {
+        self.seen.insert(st.hash, (st.received, st.seq));
+        self.order.push_back((st.received, st.hash));
+        while let Some((t, h)) = self.order.front().copied() {
+            if t.elapsed() <= Self::KEEP {
+                break;
+            }
+            self.order.pop_front();
+            self.seen.remove(&h);
+        }
+    }
+
+    /// Arrival time and sequence number of `hash`, if seen in the last `KEEP`.
+    pub fn get(&self, hash: &B256) -> Option<(Instant, u64)> {
+        self.seen.get(hash).copied()
+    }
+
+    pub fn len(&self) -> usize {
+        self.seen.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.seen.is_empty()
+    }
+}
+
 /// The feed sends several frames a second; this long without one means the connection is dead
 /// even if the socket is still open (seen live: a reconnect that never delivered a frame).
 pub const FEED_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -219,6 +257,18 @@ mod tests {
         signers::local::PrivateKeySigner,
     };
 
+    fn sample_tx(seq: u64) -> SequencedTx {
+        let t = signed_tx(seq);
+        SequencedTx {
+            seq,
+            received: Instant::now(),
+            hash: *t.tx_hash(),
+            to: t.to(),
+            input: t.input().clone(),
+            tx: t,
+        }
+    }
+
     fn signed_tx(nonce: u64) -> TxEnvelope {
         let signer = PrivateKeySigner::random();
         let mut tx = TxEip1559 {
@@ -277,6 +327,22 @@ mod tests {
         let mut out = vec![];
         decode_l2_message(&bad, 0, &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn feed_log_remembers_arrivals_and_forgets_old_ones() {
+        let mut log = FeedLog::default();
+        let mut st = sample_tx(1);
+        log.record(&st);
+        assert_eq!(log.get(&st.hash).map(|(_, seq)| seq), Some(1));
+        // An arrival older than KEEP is pruned when the next one is recorded.
+        st.received = Instant::now() - FeedLog::KEEP - Duration::from_secs(1);
+        let old = st.hash;
+        let mut log = FeedLog::default();
+        log.record(&st);
+        log.record(&sample_tx(2));
+        assert!(log.get(&old).is_none());
+        assert_eq!(log.len(), 1);
     }
 
     /// A server that accepts the WebSocket, then only pings: the reader must give up, not hang.
