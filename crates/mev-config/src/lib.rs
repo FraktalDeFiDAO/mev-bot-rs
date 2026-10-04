@@ -40,6 +40,11 @@ pub struct RiskConfig {
     /// oracles (e.g. bad-debt markets pricing dead collateral) and skipped.
     #[serde(default = "default_max_bonus_usd")]
     pub max_bonus_usd: f64,
+    /// Live arbitrage: simulate (one eth_call round trip) before sending. Off by default: send
+    /// as soon as the local pool model shows profit; the executor's `minProfit` (>= gas) reverts
+    /// trades that turn out unprofitable, so a stale model costs gas, not capital.
+    #[serde(default)]
+    pub arb_presimulate: bool,
 }
 
 /// Find long-tail pairs from recent swap activity instead of only the fixed `pairs` list.
