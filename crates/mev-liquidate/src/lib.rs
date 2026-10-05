@@ -19,8 +19,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 /// Index more often while history is being back-filled.
-/// Delay before re-sweeping an adapter whose sweep failed (instead of a full `sweep_secs`).
-const SWEEP_RETRY: Duration = Duration::from_secs(30);
+/// Delay before the single retry of an adapter whose sweep failed (instead of a full `sweep_secs`).
+const SWEEP_RETRY: Duration = Duration::from_secs(60);
 const BACKFILL_EVERY: Duration = Duration::from_secs(5);
 /// After a price-feed tx, re-poll at these offsets: the block containing the update lands
 /// ~0.5-1 s after the feed. Three polls instead of every 250 ms for 1.8 s (7 polls) — the
@@ -247,7 +247,7 @@ impl Runner {
                 true
             }
             Err(e) => {
-                warn!(protocol = id, error = %format!("{e:#}"), "sweep failed; retrying in 30 s");
+                warn!(protocol = id, error = %format!("{e:#}"), "sweep failed");
                 false
             }
         }
@@ -387,9 +387,10 @@ impl Runner {
                     retry_at = Instant::now() + SWEEP_RETRY;
                 }
                 _ = tokio::time::sleep_until(retry_at.into()), if !retry.is_empty() => {
+                    // One retry only: a venue still failing waits for the regular sweep, so retries
+                    // never keep a rate-limited endpoint saturated (a 30 s loop did, 2026-10-05).
                     let again = std::mem::take(&mut retry);
-                    retry = self.sweep_all(Some(&again)).await;
-                    retry_at = Instant::now() + SWEEP_RETRY;
+                    self.sweep_all(Some(&again)).await;
                 }
                 _ = fallback.tick() => {
                     for i in 0..self.slots.len() {
