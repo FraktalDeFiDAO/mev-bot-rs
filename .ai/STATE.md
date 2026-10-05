@@ -30,3 +30,5 @@ RPC budget lesson: the host IP shares free limits with the live bot. Probes must
 2. `deploy-executor.sh` needs a real terminal (its prompt gets EOF under `!`/no TTY).
 3. Phase 11/12: liquidation exits via the best route (≤2 hops today) incl. flash swaps.
 4. Phase 17: historical replay; Phase 18: profiling. Morpho/Fluid prediction (shadow books).
+5. Audit (docs/planning/AUDIT_2026-10-05.md, DECISIONS #49–#55): first confirm whether Arbitrum PGA is live
+   (replaces Timeboost); then priority-fee bid, win-rate gating, off-loop awaits, shorter in-flight wait.
