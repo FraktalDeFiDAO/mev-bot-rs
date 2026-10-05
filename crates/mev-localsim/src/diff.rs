@@ -87,6 +87,11 @@ pub fn changes(block: &[TxDiff]) -> Vec<Change> {
     out
 }
 
+/// Hashes of the transactions in a block's diff (which pending txs it confirmed).
+pub fn tx_hashes(block: &[TxDiff]) -> std::collections::HashSet<B256> {
+    block.iter().filter_map(|t| t.tx_hash).collect()
+}
+
 /// Fetch block `n`'s per-transaction state diffs.
 pub async fn fetch_block_diff(p: &DynProvider, n: u64) -> anyhow::Result<Vec<TxDiff>> {
     let params = serde_json::json!([

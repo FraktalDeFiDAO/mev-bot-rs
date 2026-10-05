@@ -8,6 +8,7 @@
 //! `eth_simulateV1` by `mev-localsim-probe` before anything trades on it.
 
 pub mod diff;
+pub mod worker;
 
 use std::{
     collections::HashMap,
@@ -113,6 +114,7 @@ impl StateCache {
 /// Read-only view of the cache for one execution; records what was missing or stale.
 struct SnapshotDb<'a> {
     cache: &'a StateCache,
+    overlay: Option<&'a Overlay>,
     missing: Vec<Key>,
     stale: Vec<Key>,
 }
@@ -121,6 +123,11 @@ impl Database for SnapshotDb<'_> {
     type Error = Infallible;
 
     fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, Infallible> {
+        if let Some(o) = self.overlay
+            && let Some(acc) = o.accounts.get(&address)
+        {
+            return Ok(acc.clone());
+        }
         match self.cache.accounts.get(&address) {
             Some(e) => {
                 if self.cache.stale(e.block) {
@@ -139,6 +146,9 @@ impl Database for SnapshotDb<'_> {
     }
 
     fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Infallible> {
+        if let Some(c) = self.overlay.and_then(|o| o.codes.get(&code_hash)) {
+            return Ok(c.clone());
+        }
         Ok(self
             .cache
             .codes
@@ -148,6 +158,14 @@ impl Database for SnapshotDb<'_> {
     }
 
     fn storage(&mut self, address: Address, index: U256) -> Result<U256, Infallible> {
+        if let Some(o) = self.overlay {
+            if let Some(v) = o.storage.get(&(address, index)) {
+                return Ok(*v);
+            }
+            if o.destroyed.contains(&address) {
+                return Ok(U256::ZERO);
+            }
+        }
         match self.cache.storage.get(&(address, index)) {
             Some(e) => {
                 if self.cache.stale(e.block) {
@@ -186,12 +204,23 @@ pub struct Outcome {
     pub elapsed: Duration,
 }
 
-/// Execute `tx` (as its signer) on the cached state at block `head + 1`, `timestamp`.
+/// Execute `tx` (as its signer) on the cached state at block `applied + 1`, `timestamp`.
 pub fn simulate(cache: &StateCache, tx: &TxEnvelope, timestamp: u64) -> anyhow::Result<Outcome> {
+    execute(cache, None, tx, timestamp).map(|(o, _)| o)
+}
+
+/// Execute `tx` on base state plus `overlay` (pending txs); also returns the state it touched.
+pub fn execute(
+    cache: &StateCache,
+    overlay: Option<&Overlay>,
+    tx: &TxEnvelope,
+    timestamp: u64,
+) -> anyhow::Result<(Outcome, revm::state::EvmState)> {
     let start = Instant::now();
     let from = tx.recover_signer()?;
     let db = SnapshotDb {
         cache,
+        overlay,
         missing: Vec::new(),
         stale: Vec::new(),
     };
@@ -206,7 +235,7 @@ pub fn simulate(cache: &StateCache, tx: &TxEnvelope, timestamp: u64) -> anyhow::
             c.disable_block_gas_limit = true;
         })
         .modify_block_chained(|b| {
-            b.number = U256::from(cache.head + 1);
+            b.number = U256::from(cache.applied.max(cache.head) + 1);
             b.timestamp = U256::from(timestamp);
             b.basefee = 0;
             b.gas_limit = u64::MAX / 2;
@@ -225,32 +254,139 @@ pub fn simulate(cache: &StateCache, tx: &TxEnvelope, timestamp: u64) -> anyhow::
         .gas_price(0)
         .chain_id(tx.chain_id())
         .build_fill();
-    let result = evm.transact_one(env);
-    if std::env::var("LOCALSIM_DEBUG").is_ok() {
-        eprintln!("localsim result: {result:?}");
-    }
+    let result = evm.transact(env);
     let db = &mut evm.ctx.journaled_state.database;
     let (missing, stale) = (
         std::mem::take(&mut db.missing),
         std::mem::take(&mut db.stale),
     );
-    let (success, logs) = match result {
-        Ok(ExecutionResult::Success { logs, .. }) => (
-            true,
-            logs.into_iter()
-                .map(|l| (l.address, l.data.topics().to_vec(), l.data.data))
-                .collect(),
-        ),
-        _ => (false, Vec::new()),
+    let (success, logs, state) = match result {
+        Ok(r) => match r.result {
+            ExecutionResult::Success { logs, .. } => (
+                true,
+                logs.into_iter()
+                    .map(|l| (l.address, l.data.topics().to_vec(), l.data.data))
+                    .collect(),
+                r.state,
+            ),
+            _ => (false, Vec::new(), r.state),
+        },
+        Err(_) => (false, Vec::new(), Default::default()),
     };
-    Ok(Outcome {
-        complete: missing.is_empty(),
-        success,
-        logs,
-        missing: dedup(missing),
-        stale: dedup(stale),
-        elapsed: start.elapsed(),
-    })
+    Ok((
+        Outcome {
+            complete: missing.is_empty(),
+            success,
+            logs,
+            missing: dedup(missing),
+            stale: dedup(stale),
+            elapsed: start.elapsed(),
+        },
+        state,
+    ))
+}
+
+/// Writes of locally executed pending (sequenced, not yet in an applied block) transactions, on
+/// top of the base. Reads check it first.
+#[derive(Debug, Default, Clone)]
+pub struct Overlay {
+    /// `None` = destroyed.
+    accounts: HashMap<Address, Option<AccountInfo>>,
+    storage: HashMap<(Address, U256), U256>,
+    codes: HashMap<B256, Bytecode>,
+    destroyed: std::collections::HashSet<Address>,
+}
+
+impl Overlay {
+    /// Fold a transaction's written state in.
+    pub fn commit(&mut self, state: &revm::state::EvmState) {
+        for (addr, acc) in state {
+            if !acc.is_touched() {
+                continue;
+            }
+            if acc.is_selfdestructed() {
+                self.accounts.insert(*addr, None);
+                self.destroyed.insert(*addr);
+                self.storage.retain(|(a, _), _| a != addr);
+                continue;
+            }
+            let mut info = acc.info.clone();
+            if let Some(code) = &info.code {
+                self.codes.insert(info.code_hash, code.clone());
+            }
+            info.code = None; // resolved through code_by_hash
+            self.accounts.insert(*addr, Some(info));
+            for (k, slot) in &acc.storage {
+                if slot.is_changed() {
+                    self.storage.insert((*addr, *k), slot.present_value);
+                }
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.accounts.is_empty() && self.storage.is_empty()
+    }
+}
+
+/// Sequenced transactions not yet covered by an applied block, executed in order into an overlay:
+/// cache + overlay tracks the sequencer's live state instead of the last block.
+#[derive(Debug, Default)]
+pub struct Pending {
+    txs: std::collections::VecDeque<(B256, TxEnvelope, u64)>,
+    pub overlay: Overlay,
+    /// Pending txs whose effects are missing from the overlay (incomplete locally).
+    pub gaps: usize,
+}
+
+/// More pending txs than this means blocks aren't being applied; the oldest are dropped.
+const MAX_PENDING: usize = 512;
+
+impl Pending {
+    /// Execute a newly sequenced tx on base + overlay and commit its writes if it ran from complete
+    /// state. Returns the outcome (its logs are the post-state prediction).
+    pub fn push(
+        &mut self,
+        cache: &StateCache,
+        hash: B256,
+        tx: TxEnvelope,
+        timestamp: u64,
+    ) -> anyhow::Result<Outcome> {
+        let (out, state) = execute(cache, Some(&self.overlay), &tx, timestamp)?;
+        if out.complete {
+            self.overlay.commit(&state);
+        } else {
+            self.gaps += 1;
+        }
+        self.txs.push_back((hash, tx, timestamp));
+        while self.txs.len() > MAX_PENDING {
+            self.txs.pop_front();
+        }
+        Ok(out)
+    }
+
+    /// A block was applied to the base: drop the txs it contained and rebuild the overlay from
+    /// the rest, re-executed in order on the new base.
+    pub fn on_block(&mut self, cache: &StateCache, confirmed: &std::collections::HashSet<B256>) {
+        self.txs.retain(|(h, _, _)| !confirmed.contains(h));
+        self.overlay = Overlay::default();
+        self.gaps = 0;
+        let txs: Vec<_> = self.txs.iter().cloned().collect();
+        for (_, tx, ts) in &txs {
+            match execute(cache, Some(&self.overlay), tx, *ts) {
+                Ok((out, state)) if out.complete => self.overlay.commit(&state),
+                _ => self.gaps += 1,
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.txs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.txs.is_empty()
+    }
 }
 
 fn dedup(mut v: Vec<Key>) -> Vec<Key> {
@@ -259,34 +395,39 @@ fn dedup(mut v: Vec<Key>) -> Vec<Key> {
     v
 }
 
-/// Fetch `keys` as of `block` (so they are consistent with a cache applied up to it).
+/// Fetch `keys` as of `block` (so they are consistent with a cache applied up to it). Keys
+/// that fail are left out.
 pub async fn fill(p: &DynProvider, keys: &[Key], block: u64) -> Vec<(Key, Fetched)> {
-    let futs = keys.iter().map(|k| async move {
-        let r: anyhow::Result<Fetched> = async {
-            Ok(match *k {
-                Key::Account(a) => {
-                    let at: alloy::eips::BlockId = block.into();
-                    let (bal, nonce, code) = tokio::try_join!(
-                        p.get_balance(a).block_id(at).into_future(),
-                        p.get_transaction_count(a).block_id(at).into_future(),
-                        p.get_code_at(a).block_id(at).into_future(),
-                    )?;
-                    Fetched::Account(bal, nonce, code)
-                }
-                Key::Slot(a, s) => {
-                    Fetched::Slot(p.get_storage_at(a, s).block_id(block.into()).await?)
-                }
-            })
-        }
-        .await;
-        r.ok().map(|f| (*k, f))
-    });
-    futures::future::join_all(futs)
-        .await
-        .into_iter()
-        .flatten()
+    use futures::StreamExt;
+    // Bounded fan-out: a burst of reads gets free endpoints to rate-limit the whole IP.
+    futures::stream::iter(keys.to_vec())
+        .map(|k| {
+            let p = p.clone();
+            async move { fetch_one(&p, k, block).await.ok().map(|f| (k, f)) }
+        })
+        .buffer_unordered(FILL_CONCURRENCY)
+        .filter_map(|r| async move { r })
         .collect()
+        .await
 }
+
+async fn fetch_one(p: &DynProvider, k: Key, block: u64) -> anyhow::Result<Fetched> {
+    let at: alloy::eips::BlockId = block.into();
+    Ok(match k {
+        Key::Account(a) => {
+            let (bal, nonce, code) = tokio::try_join!(
+                p.get_balance(a).block_id(at).into_future(),
+                p.get_transaction_count(a).block_id(at).into_future(),
+                p.get_code_at(a).block_id(at).into_future(),
+            )?;
+            Fetched::Account(bal, nonce, code)
+        }
+        Key::Slot(a, s) => Fetched::Slot(p.get_storage_at(a, s).block_id(at).await?),
+    })
+}
+
+/// Concurrent state reads per fill batch.
+const FILL_CONCURRENCY: usize = 16;
 
 /// A fetched value for a `Key`.
 #[derive(Debug, Clone)]
@@ -377,6 +518,16 @@ impl StateCache {
             e.block = block;
         }
         applied
+    }
+
+    /// A block's diff couldn't be fetched: everything cached may now be wrong. Start over (cold)
+    /// as of block `n` rather than simulate on silently inconsistent state.
+    pub fn reset(&mut self, n: u64) {
+        self.accounts.clear();
+        self.storage.clear();
+        self.recent.clear();
+        self.applied = n;
+        self.head = self.head.max(n);
     }
 
     /// Diff-fed mode: apply block `n` (blocks must be applied in order) and remember its changes.
@@ -480,6 +631,7 @@ mod tests {
         );
         let mut db = SnapshotDb {
             cache: &cache,
+            overlay: None,
             missing: vec![],
             stale: vec![],
         };
@@ -488,6 +640,7 @@ mod tests {
         cache.apply_block(13, vec![diff::Change::Destroyed(pool)]);
         let mut db = SnapshotDb {
             cache: &cache,
+            overlay: None,
             missing: vec![],
             stale: vec![],
         };
@@ -496,6 +649,60 @@ mod tests {
             db.missing,
             vec![Key::Slot(pool, slot)],
             "destroyed state must be refetched"
+        );
+    }
+
+    /// slot0 += 1; LOG1(topic = new value). Bytes:
+    /// PUSH1 0 SLOAD PUSH1 1 ADD DUP1 PUSH1 0 SSTORE PUSH1 0 PUSH1 0 LOG1 STOP
+    const COUNTER: [u8; 16] = [
+        0x60, 0x00, 0x54, 0x60, 0x01, 0x01, 0x80, 0x60, 0x00, 0x55, 0x60, 0x00, 0x60, 0x00, 0xa1,
+        0x00,
+    ];
+
+    #[test]
+    fn pending_txs_chain_through_the_overlay_and_rebuild_on_block() {
+        let counter = Address::repeat_byte(0x33);
+        let (t1, t2) = (signed(counter, vec![]), signed(counter, vec![]));
+        let mut cache = StateCache::new(u64::MAX);
+        cache.applied = 50;
+        cache.insert_account(counter, U256::ZERO, 0, COUNTER.to_vec().into(), 50);
+        cache.insert_slot(counter, U256::ZERO, U256::ZERO, 50);
+        for t in [&t1, &t2] {
+            let from = t.recover_signer().unwrap();
+            cache.insert_account(from, U256::ZERO, 0, Bytes::new(), 50);
+        }
+        let topic = |o: &Outcome| o.logs[0].1[0];
+
+        let mut p = Pending::default();
+        let o1 = p.push(&cache, B256::with_last_byte(1), t1, 0).unwrap();
+        let o2 = p.push(&cache, B256::with_last_byte(2), t2, 0).unwrap();
+        assert_eq!(topic(&o1), B256::with_last_byte(1));
+        assert_eq!(
+            topic(&o2),
+            B256::with_last_byte(2),
+            "second tx sees the first's write"
+        );
+        // The base is untouched by pending execution.
+        assert_eq!(
+            simulate(&cache, &signed(counter, vec![]), 0).unwrap().logs[0].1[0],
+            B256::with_last_byte(1)
+        );
+
+        // Block 51 contains tx 1 (slot0 = 1): overlay rebuilt from tx 2 on the new base.
+        cache.apply_block(
+            51,
+            vec![diff::Change::Slot(counter, U256::ZERO, U256::from(1))],
+        );
+        p.on_block(&cache, &[B256::with_last_byte(1)].into_iter().collect());
+        assert_eq!(p.len(), 1);
+        assert_eq!(p.gaps, 0);
+        let after = execute(&cache, Some(&p.overlay), &signed(counter, vec![]), 0)
+            .unwrap()
+            .0;
+        assert_eq!(
+            topic(&after),
+            B256::with_last_byte(3),
+            "base 1 + pending tx 2 + this one"
         );
     }
 }

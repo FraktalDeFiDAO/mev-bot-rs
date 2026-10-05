@@ -3107,6 +3107,7 @@ dependencies = [
  "mev-lending-silo",
  "mev-lending-spark",
  "mev-liquidate",
+ "mev-localsim",
  "mev-metrics",
  "mev-presim",
  "mev-risk",
@@ -3329,6 +3330,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -73,6 +73,7 @@ pub struct Engine {
     /// Recent feed arrivals by tx hash (race telemetry clock).
     feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>>,
     presim_stats: Arc<mev_presim::PresimStats>,
+    localsim_stats: Arc<mev_localsim::worker::LocalStats>,
     /// Pools + tokens a feed tx must mention to be pre-simulated (refreshed on resync).
     presim_watch: mev_presim::Watchlist,
     /// Request meters per provider ("fast" = paid), drained into the minute summary.
@@ -242,12 +243,47 @@ impl Engine {
         let presim_stats = Arc::new(mev_presim::PresimStats::default());
         let presim_watch: mev_presim::Watchlist = Default::default();
         *presim_watch.write().unwrap() = watchlist(&store);
+        let localsim_stats = Arc::new(mev_localsim::worker::LocalStats::default());
         let presim_rx = match (presim_cfg, presim_feed) {
             (Some(pc), Some(feed)) => {
                 let p = metered_rotating(pc.rpc_urls.clone(), "presim", &mut meters)?;
                 let (tx, rx) = mpsc::unbounded_channel();
+                // Local mode: the worker simulates the feed in-process and passes only candidates
+                // it can't run yet to the RPC pre-simulator.
+                let rpc_feed = if pc.local && !pc.diff_rpc_urls.is_empty() {
+                    let (fb_tx, fb_rx) = mpsc::unbounded_channel();
+                    let endpoints = mev_localsim::worker::Endpoints {
+                        diff: metered_rotating(
+                            pc.diff_rpc_urls.clone(),
+                            "localsim-diff",
+                            &mut meters,
+                        )?,
+                        fill: metered_rotating(
+                            if pc.fill_rpc_urls.is_empty() {
+                                pc.diff_rpc_urls.clone()
+                            } else {
+                                pc.fill_rpc_urls.clone()
+                            },
+                            "localsim-fill",
+                            &mut meters,
+                        )?,
+                        head: p.clone(),
+                    };
+                    tokio::spawn(mev_localsim::worker::run(
+                        feed,
+                        endpoints,
+                        presim_watch.clone(),
+                        tx.clone(),
+                        fb_tx,
+                        localsim_stats.clone(),
+                    ));
+                    info!("local feed simulation on (revm, diff-fed state)");
+                    fb_rx
+                } else {
+                    feed
+                };
                 tokio::spawn(mev_presim::run(
-                    feed,
+                    rpc_feed,
                     p,
                     pc.max_in_flight,
                     Duration::from_millis(pc.timeout_ms),
@@ -294,6 +330,7 @@ impl Engine {
             presim_rx,
             feed_log,
             presim_stats,
+            localsim_stats,
             presim_watch,
             meters,
             gas_price: Default::default(),
@@ -515,6 +552,9 @@ impl Engine {
         self.metrics.heartbeat();
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
             info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
+            if self.cfg.presim.as_ref().is_some_and(|p| p.local) {
+                info!(stats = %self.localsim_stats.take_summary(), "localsim (last minute)");
+            }
         }
         // RPC usage since the last summary (≈ per minute): the data-efficiency scoreboard.
         let mut usage = serde_json::Map::new();
