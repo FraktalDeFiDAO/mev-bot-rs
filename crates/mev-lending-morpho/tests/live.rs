@@ -3,10 +3,10 @@
 use std::path::Path;
 
 use alloy::{
-    primitives::{Address, b256},
+    primitives::{Address, U256, b256},
     providers::Provider,
     rpc::types::Filter,
-    sol_types::SolEvent,
+    sol_types::{SolCall, SolEvent},
 };
 use mev_lending::{AdapterRpc, LiquidationAdapter};
 use mev_lending_morpho::{IMorpho, MorphoAdapter};
@@ -65,4 +65,73 @@ async fn reads_a_real_wbtc_usdc_borrower() {
         }
     }
     assert!(a.assets().len() >= 2, "market params loaded (WBTC, USDC)");
+}
+
+/// Backrun prediction on real positions: sweep the bot's cached Morpho borrowers (fills the
+/// snapshot), then for every predictable aggregator predict at today's answer (calibration: nothing
+/// newly crosses) and at ±40 % (base feeds push collateral down on −40 %, quote feeds on +40 %).
+#[tokio::test]
+#[ignore = "network"]
+async fn predicts_liquidations_from_a_price_report_on_real_positions() {
+    let cache =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/arbitrum/morpho_borrowers.json");
+    if !cache.exists() {
+        eprintln!("skipping: no {}", cache.display());
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let idx = dir.path().join("morpho_borrowers.json");
+    std::fs::copy(&cache, &idx).unwrap();
+    let c = mev_config::ChainConfig::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/arbitrum.toml"),
+    )
+    .unwrap()
+    .morpho
+    .unwrap();
+    let a = MorphoAdapter::new(c, rpc(), idx).await.unwrap();
+    let accounts = a.accounts();
+    a.health(&accounts, false).await.unwrap();
+    eprintln!(
+        "snapshot (feeds, markets, at-risk, answers): {:?}",
+        a.snapshot_summary()
+    );
+    let exec = Address::repeat_byte(0xee);
+    let (mut same, mut moved, mut unpriced, mut readable, mut exposed) = (0, 0, 0, 0, 0);
+    let watched: std::collections::HashSet<Address> = a.price_feeds().into_iter().collect();
+    let predictable = a.predictable_feeds();
+    eprintln!(
+        "predictable {} of which watched {}",
+        predictable.len(),
+        predictable.iter().filter(|f| watched.contains(*f)).count()
+    );
+    for feed in predictable {
+        // The sweep's baseline (read once, by direct eth_call); none = never predicted.
+        let Some(now) = a.last_answer(feed) else {
+            continue;
+        };
+        readable += 1;
+        exposed += a.exposed_positions(feed);
+        same += a.predict(feed, now, exec).len();
+        for shock in [0.6, 1.4] {
+            let plans = a.predict(feed, now * shock, exec);
+            for p in &plans {
+                // bonus_usd is 0 when the USD oracle doesn't price the loan token, and can be
+                // slightly negative for dust (rounded-up repayment); the engine skips both.
+                assert!(p.flash_amount > U256::ZERO);
+                unpriced += usize::from(p.bonus_usd <= 0.0);
+                let call = IMorpho::liquidateCall::abi_decode(&p.calls[0].data).unwrap();
+                assert_eq!(call.borrower, p.account.account);
+            }
+            moved += plans.len();
+            a.predict(feed, now, exec); // restore today's state for the next shock / feed
+        }
+    }
+    eprintln!(
+        "{} accounts; readable feeds {readable}, exposed positions {exposed}; predicted at today's prices {same}, at ±40 % {moved} ({unpriced} worthless/unpriced)",
+        accounts.len()
+    );
+    assert_eq!(
+        same, 0,
+        "calibration: nothing newly crosses at today's prices"
+    );
 }
