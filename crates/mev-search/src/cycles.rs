@@ -9,7 +9,7 @@ use alloy::primitives::U256;
 use mev_state::PoolStore;
 use mev_types::{Address, Opportunity};
 
-use crate::{SearchParams, best_size, exact_path, hop};
+use crate::{SearchParams, hop, size_route};
 
 /// One directed cycle: (pool, token_in, token_out) per leg, starting and ending at `loan`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,13 +130,17 @@ impl CycleIndex {
                 continue;
             }
             let cap = max_loan.min(pools[0].reserve_of(c.loan) * 0.5);
-            let (amount, profit) = best_size(cap, |a| {
-                let mut x = a;
-                for (p, (_, tin, _)) in pools.iter().zip(&c.legs) {
-                    x = p.amount_out(*tin, x);
-                }
-                x - a
-            });
+            let path = [
+                (pools[0], c.legs[0].1),
+                (pools[1], c.legs[1].1),
+                (pools[2], c.legs[2].1),
+            ];
+            let min_raw = if usd > 0.0 {
+                params.min_est_profit_usd / usd
+            } else {
+                0.0
+            };
+            let (amount, profit, exact) = size_route(&path, cap, min_raw);
             let profit_usd = profit * usd;
             if profit_usd < params.min_est_profit_usd || amount < 1.0 {
                 continue;
@@ -153,14 +157,7 @@ impl CycleIndex {
                 est_profit_usd: profit_usd,
                 buy_pool: c.legs[0].0,
                 sell_pool: c.legs[2].0,
-                exact: exact_path(
-                    &[
-                        (pools[0], c.legs[0].1),
-                        (pools[1], c.legs[1].1),
-                        (pools[2], c.legs[2].1),
-                    ],
-                    amount,
-                ),
+                exact,
             });
         }
         out.sort_by(|a, b| b.est_profit_usd.total_cmp(&a.est_profit_usd));

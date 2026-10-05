@@ -49,8 +49,13 @@ pub fn two_pool_arbs(
                     continue;
                 }
                 let cap = max_loan.min(buy.reserve_of(loan) * 0.5);
-                let (amount, profit) =
-                    best_size(cap, |a| sell.amount_out(other, buy.amount_out(loan, a)) - a);
+                let path = [(*buy, loan), (*sell, other)];
+                let min_raw = if usd > 0.0 {
+                    params.min_est_profit_usd / usd
+                } else {
+                    0.0
+                };
+                let (amount, profit, exact) = size_route(&path, cap, min_raw);
                 let profit_usd = profit * usd;
                 if profit_usd < params.min_est_profit_usd || amount < 1.0 {
                     continue;
@@ -63,7 +68,7 @@ pub fn two_pool_arbs(
                     est_profit_usd: profit_usd,
                     buy_pool: buy.info.address,
                     sell_pool: sell.info.address,
-                    exact: exact_path(&[(buy, loan), (sell, other)], amount),
+                    exact,
                 });
             }
         }
@@ -123,6 +128,50 @@ pub(crate) fn exact_path(path: &[(&Pool, Address)], amount: f64) -> bool {
     true
 }
 
+/// Largest input in `[0, cap]` for which `path` stays exact (monotone: amounts only grow along
+/// the route, so the exact region is `[0, a_max]`). Binary search.
+pub(crate) fn exact_cap(path: &[(&Pool, Address)], cap: f64) -> f64 {
+    if exact_path(path, cap) {
+        return cap;
+    }
+    let (mut lo, mut hi) = (0.0f64, cap);
+    for _ in 0..48 {
+        let mid = 0.5 * (lo + hi);
+        if exact_path(path, mid) {
+            lo = mid
+        } else {
+            hi = mid
+        }
+    }
+    lo
+}
+
+/// Size a route: the profit-maximising input up to `cap`, constrained to the region where the
+/// model is exact when that still clears `min_profit` (raw loan units). Returns
+/// (amount, profit, exact). Exact routes send at once (with a bid); inexact ones are verified
+/// first, and on crossed ticks they usually fail that check (DECISIONS #48, #60).
+pub(crate) fn size_route(path: &[(&Pool, Address)], cap: f64, min_profit: f64) -> (f64, f64, bool) {
+    let f = |a: f64| {
+        let mut x = a;
+        for (p, tin) in path {
+            x = p.amount_out(*tin, x);
+        }
+        x - a
+    };
+    let (amount, profit) = best_size(cap, f);
+    if exact_path(path, amount) {
+        return (amount, profit, true);
+    }
+    let a_max = exact_cap(path, cap);
+    if a_max >= 1.0 {
+        let (ea, ep) = best_size(a_max, f);
+        if ep >= min_profit && ea >= 1.0 {
+            return (ea, ep, true);
+        }
+    }
+    (amount, profit, false)
+}
+
 pub(crate) fn hop(pool: &Pool, token_in: Address, token_out: Address) -> Hop {
     Hop {
         kind: pool.info.kind.hop_kind(),
@@ -151,6 +200,38 @@ pub(crate) fn best_size(cap: f64, f: impl Fn(f64) -> f64) -> (f64, f64) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn size_route_prefers_the_exact_region_when_it_still_clears_the_floor() {
+        use mev_dex::{Pool, PoolState};
+        use mev_types::{PoolInfo, PoolKind};
+        let (a, b) = (Address::with_last_byte(1), Address::with_last_byte(2));
+        let v3 = |addr: u8, sqrt: f64, liq: f64| {
+            Pool::new(
+                PoolInfo {
+                    address: Address::with_last_byte(addr),
+                    dex: "t".into(),
+                    kind: PoolKind::UniV3 { fee: 100 }, // spacing 1: tiny exact buckets
+                    token0: a,
+                    token1: b,
+                },
+                PoolState::V3 {
+                    sqrt_price: sqrt,
+                    liquidity: liq,
+                },
+            )
+        };
+        // a cheap in the first pool, dear in the second: sell a->b in p1? Use price gap 1 %.
+        let p1 = v3(10, 1.0f64.sqrt(), 1e15);
+        let p2 = v3(11, 1.01f64.sqrt(), 1e15);
+        // Route: borrow b, buy a on p1 (b->a), sell a on p2 (a->b).
+        let path = [(&p1, b), (&p2, a)];
+        let (amt_full, _, exact_full) = size_route(&path, 1e15, f64::INFINITY);
+        assert!(!exact_full, "the unconstrained optimum crosses ticks");
+        let (amt, profit, exact) = size_route(&path, 1e15, 0.0);
+        assert!(exact && profit > 0.0 && amt < amt_full);
+        assert!(exact_path(&path, amt));
+    }
     use super::*;
     use alloy::primitives::address;
     use mev_dex::PoolState;
