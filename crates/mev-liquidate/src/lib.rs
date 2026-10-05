@@ -19,6 +19,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 /// Index more often while history is being back-filled.
+/// Delay before re-sweeping an adapter whose sweep failed (instead of a full `sweep_secs`).
+const SWEEP_RETRY: Duration = Duration::from_secs(30);
 const BACKFILL_EVERY: Duration = Duration::from_secs(5);
 /// After a price-feed tx, re-poll at these offsets: the block containing the update lands
 /// ~0.5-1 s after the feed. Three polls instead of every 250 ms for 1.8 s (7 polls) — the
@@ -191,17 +193,29 @@ impl Runner {
         all_done
     }
 
-    /// Health-sweep every adapter concurrently (one slow venue must not delay the others).
-    async fn sweep_all(&mut self) {
-        let jobs = self.slots.iter().map(|s| async move {
-            let accounts = s.adapter.accounts();
-            let res = s.adapter.health(&accounts, false).await;
-            (accounts.len(), res)
+    /// Health-sweep the adapters `which` (all when `None`) concurrently (one slow venue must not
+    /// delay the others). Returns the ones that failed.
+    async fn sweep_all(&mut self, which: Option<&[usize]>) -> Vec<usize> {
+        let picked: Vec<usize> = match which {
+            Some(w) => w.to_vec(),
+            None => (0..self.slots.len()).collect(),
+        };
+        let jobs = picked.iter().map(|&i| {
+            let s = &self.slots[i];
+            async move {
+                let accounts = s.adapter.accounts();
+                let res = s.adapter.health(&accounts, false).await;
+                (i, accounts.len(), res)
+            }
         });
         let results = futures::future::join_all(jobs).await;
-        for (i, (n, res)) in results.into_iter().enumerate() {
-            self.apply_sweep(i, n, res);
+        let mut failed = Vec::new();
+        for (i, n, res) in results {
+            if !self.apply_sweep(i, n, res) {
+                failed.push(i);
+            }
         }
+        failed
     }
 
     #[cfg(test)]
@@ -211,7 +225,8 @@ impl Runner {
         self.apply_sweep(i, accounts.len(), res);
     }
 
-    fn apply_sweep(&mut self, i: usize, accounts: usize, res: anyhow::Result<Vec<Health>>) {
+    /// Store a sweep's at-risk accounts; false if it failed.
+    fn apply_sweep(&mut self, i: usize, accounts: usize, res: anyhow::Result<Vec<Health>>) -> bool {
         let id = self.slots[i].adapter.id();
         match res {
             Ok(hs) => {
@@ -229,8 +244,12 @@ impl Runner {
                     "sweep"
                 );
                 self.slots[i].at_risk = at_risk;
+                true
             }
-            Err(e) => warn!(protocol = id, error = %format!("{e:#}"), "sweep failed"),
+            Err(e) => {
+                warn!(protocol = id, error = %format!("{e:#}"), "sweep failed; retrying in 30 s");
+                false
+            }
         }
     }
 
@@ -349,6 +368,9 @@ impl Runner {
         let mut sweep = tokio::time::interval(sweep_every);
         let mut fallback = tokio::time::interval(Duration::from_secs(self.cfg.fallback_poll_secs));
         let mut burst = tokio::time::interval(BURST_TICK);
+        // Adapters whose last sweep failed (rate limits at start-up): retried on their own.
+        let mut retry: Vec<usize> = Vec::new();
+        let mut retry_at = Instant::now();
         let mut backfilled = false;
         loop {
             tokio::select! {
@@ -360,7 +382,15 @@ impl Runner {
                         index_tick.reset();
                     }
                 }
-                _ = sweep.tick() => self.sweep_all().await,
+                _ = sweep.tick() => {
+                    retry = self.sweep_all(None).await;
+                    retry_at = Instant::now() + SWEEP_RETRY;
+                }
+                _ = tokio::time::sleep_until(retry_at.into()), if !retry.is_empty() => {
+                    let again = std::mem::take(&mut retry);
+                    retry = self.sweep_all(Some(&again)).await;
+                    retry_at = Instant::now() + SWEEP_RETRY;
+                }
                 _ = fallback.tick() => {
                     for i in 0..self.slots.len() {
                         if !self.poll(i, None, &tx).await { return; }
