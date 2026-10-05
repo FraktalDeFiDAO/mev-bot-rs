@@ -1,0 +1,27 @@
+[Unit]
+Description=Arbitrum One Nitro full node
+Documentation=https://docs.arbitrum.io/run-arbitrum-node/run-full-node
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+RequiresMountsFor=/data/arbitrum
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/arbitrum/nitro.env
+ExecStartPre=-/usr/bin/docker rm --force arbitrum-nitro
+ExecStart=/usr/local/sbin/arbitrum-nitro-run
+ExecStop=/usr/bin/docker stop --time 1800 arbitrum-nitro
+ExecStopPost=-/usr/bin/docker rm --force arbitrum-nitro
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=infinity
+TimeoutStopSec=31min
+KillMode=mixed
+LimitNOFILE=1048576
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target
