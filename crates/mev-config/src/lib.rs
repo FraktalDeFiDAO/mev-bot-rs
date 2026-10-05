@@ -191,6 +191,10 @@ pub struct ChainConfig {
     /// without a lender (no fee, no lender-balance cap). Only set after deploying that executor.
     #[serde(default)]
     pub executor_flash_swaps: bool,
+    /// The deployed executor has `liquidateViaAave`: liquidations whose loan exceeds the Balancer
+    /// cap borrow from the Aave pool (`[aave] pool`) instead (5 bps premium, deep liquidity).
+    #[serde(default)]
+    pub executor_aave_flash: bool,
     pub tokens: HashMap<String, Address>,
     /// Tokens we may flash-borrow (must be held by the Balancer vault).
     pub loan_tokens: Vec<String>,

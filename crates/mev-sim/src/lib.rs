@@ -7,7 +7,7 @@ use alloy::{
     sol_types::SolCall,
 };
 use anyhow::Result;
-use mev_bindings::{ArbExecutor, to_sol_call, to_sol_hop};
+use mev_bindings::ArbExecutor;
 use mev_lending::Plan;
 use mev_types::{Hop, Opportunity};
 
@@ -93,24 +93,18 @@ impl Simulator {
         plan: &Plan,
         hops: &[Hop],
         min_profit: U256,
+        aave_pool: Option<Address>,
     ) -> Result<SimOutcome> {
-        let exec = ArbExecutor::new(self.executor, &self.provider);
-        let builder = exec
-            .liquidate(
-                plan.debt_asset,
-                plan.collateral_asset,
-                plan.flash_amount,
-                min_profit,
-                plan.calls.iter().map(to_sol_call).collect(),
-                hops.iter().map(to_sol_hop).collect(),
-            )
-            .from(self.owner);
-        match builder.call().await {
-            Ok(profit) => match builder.estimate_gas().await {
+        let req = TransactionRequest::default()
+            .from(self.owner)
+            .to(self.executor)
+            .input(mev_bindings::liquidation_calldata(plan, hops, min_profit, aave_pool).into());
+        match self.call_arb(&req).await {
+            Ok(profit) => match self.provider.estimate_gas(req).await {
                 Ok(gas) => Ok(SimOutcome::Profitable { profit, gas }),
                 Err(e) => Ok(SimOutcome::Reverted(format!("estimate_gas: {e}"))),
             },
-            Err(e) => Ok(SimOutcome::Reverted(short(&e.to_string()))),
+            Err(e) => Ok(SimOutcome::Reverted(e)),
         }
     }
 }

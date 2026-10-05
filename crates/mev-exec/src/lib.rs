@@ -12,10 +12,8 @@ use alloy::{
     providers::{DynProvider, Provider, ProviderBuilder},
     rpc::types::TransactionRequest,
     signers::local::PrivateKeySigner,
-    sol_types::SolCall,
 };
 use anyhow::{Context, Result, bail};
-use mev_bindings::{ArbExecutor, to_sol_call, to_sol_hop};
 use mev_lending::Plan;
 use mev_types::{Hop, Opportunity};
 use tracing::warn;
@@ -109,8 +107,10 @@ impl Sender {
         hops: &[Hop],
         min_profit: U256,
         gas_limit: u64,
+        aave_pool: Option<Address>,
     ) -> Result<TxHash> {
-        self.send_calldata(liquidate_calldata(plan, hops, min_profit), gas_limit, None)
+        let data = mev_bindings::liquidation_calldata(plan, hops, min_profit, aave_pool);
+        self.send_calldata(data, gas_limit, None)
             .await
             .map(|s| s.hash)
     }
@@ -124,9 +124,10 @@ impl Sender {
         min_profit: U256,
         gas_limit: u64,
         gas_price: u128,
+        aave_pool: Option<Address>,
     ) -> Result<Sent> {
         self.send_calldata(
-            liquidate_calldata(plan, hops, min_profit),
+            mev_bindings::liquidation_calldata(plan, hops, min_profit, aave_pool),
             gas_limit,
             Some(gas_price),
         )
@@ -286,22 +287,16 @@ pub fn execute_calldata(opp: &Opportunity, min_profit: U256) -> Vec<u8> {
     mev_bindings::arb_calldata(opp, min_profit, false)
 }
 
-/// Executor calldata for a liquidation (pure; unit-tested against the ABI).
+/// Executor calldata for a Balancer-funded liquidation (pure; unit-tested against the ABI).
 pub fn liquidate_calldata(plan: &Plan, hops: &[Hop], min_profit: U256) -> Vec<u8> {
-    ArbExecutor::liquidateCall {
-        debt: plan.debt_asset,
-        collateral: plan.collateral_asset,
-        flashAmount: plan.flash_amount,
-        minProfit: min_profit,
-        calls: plan.calls.iter().map(to_sol_call).collect(),
-        hops: hops.iter().map(to_sol_hop).collect(),
-    }
-    .abi_encode()
+    mev_bindings::liquidation_calldata(plan, hops, min_profit, None)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::sol_types::SolCall;
+    use mev_bindings::ArbExecutor;
     use mev_lending::{AccountRef, ProtocolCall};
 
     fn hop() -> Hop {
@@ -445,5 +440,33 @@ mod tests {
         assert_eq!(d.calls[0].target, Address::with_last_byte(7));
         assert_eq!(d.calls[0].data.to_vec(), vec![0xaa, 0xbb]);
         assert_eq!(d.hops.len(), 1);
+
+        // Aave-funded: same plan through liquidateViaAave, naming the pool.
+        let pool = Address::with_last_byte(9);
+        let a = ArbExecutor::liquidateViaAaveCall::abi_decode(&mev_bindings::liquidation_calldata(
+            &plan,
+            &[hop()],
+            U256::from(3),
+            Some(pool),
+        ))
+        .unwrap();
+        assert_eq!(
+            (
+                a.aavePool,
+                a.debt,
+                a.flashAmount,
+                a.minProfit,
+                a.calls.len(),
+                a.hops.len()
+            ),
+            (
+                pool,
+                plan.debt_asset,
+                plan.flash_amount,
+                U256::from(3),
+                1,
+                1
+            )
+        );
     }
 }

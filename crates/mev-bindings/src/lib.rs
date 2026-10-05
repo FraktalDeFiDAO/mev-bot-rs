@@ -121,6 +121,7 @@ sol! {
         function execute(address token, uint256 amount, uint256 minProfit, Hop[] calldata hops) external returns (uint256 profit);
         function executeFlashSwap(uint256 amount, uint256 minProfit, Hop[] calldata hops) external returns (uint256 profit);
         function liquidate(address debt, address collateral, uint256 flashAmount, uint256 minProfit, ProtocolCall[] calldata calls, Hop[] calldata hops) external returns (uint256 profit);
+        function liquidateViaAave(address aavePool, address debt, address collateral, uint256 flashAmount, uint256 minProfit, ProtocolCall[] calldata calls, Hop[] calldata hops) external returns (uint256 profit);
         function setTarget(address target, bool allowed) external;
         function allowedTarget(address target) external view returns (bool);
         error TargetNotAllowed(address target);
@@ -189,6 +190,41 @@ pub fn arb_calldata(
             hops,
         }
         .abi_encode()
+    }
+}
+
+/// Executor calldata for a liquidation: funded by Balancer (`liquidate`), or by an Aave V3 flash
+/// loan from `aave_pool` (`liquidateViaAave`) when the loan exceeds what Balancer holds. Both
+/// return the profit as `uint256`.
+pub fn liquidation_calldata(
+    plan: &mev_lending::Plan,
+    hops: &[mev_types::Hop],
+    min_profit: alloy::primitives::U256,
+    aave_pool: Option<alloy::primitives::Address>,
+) -> Vec<u8> {
+    use alloy::sol_types::SolCall;
+    let calls = plan.calls.iter().map(to_sol_call).collect();
+    let hops = hops.iter().map(to_sol_hop).collect();
+    match aave_pool {
+        Some(pool) => ArbExecutor::liquidateViaAaveCall {
+            aavePool: pool,
+            debt: plan.debt_asset,
+            collateral: plan.collateral_asset,
+            flashAmount: plan.flash_amount,
+            minProfit: min_profit,
+            calls,
+            hops,
+        }
+        .abi_encode(),
+        None => ArbExecutor::liquidateCall {
+            debt: plan.debt_asset,
+            collateral: plan.collateral_asset,
+            flashAmount: plan.flash_amount,
+            minProfit: min_profit,
+            calls,
+            hops,
+        }
+        .abi_encode(),
     }
 }
 
