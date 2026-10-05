@@ -76,6 +76,10 @@ pub struct Opportunity {
     pub est_profit_usd: f64,
     pub buy_pool: Address,
     pub sell_pool: Address,
+    /// Every V3 hop stays inside its tick-spacing bucket, where the model is exact. Otherwise a
+    /// tick may be crossed and the estimate is verified on-chain (`eth_call`) before sending.
+    #[serde(default)]
+    pub exact: bool,
 }
 
 /// Mask API keys inside URLs (e.g. `https://arb-mainnet.g.alchemy.com/v2/<key>`,

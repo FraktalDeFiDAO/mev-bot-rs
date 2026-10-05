@@ -9,7 +9,7 @@ use alloy::primitives::U256;
 use mev_state::PoolStore;
 use mev_types::{Address, Opportunity};
 
-use crate::{SearchParams, best_size, hop};
+use crate::{SearchParams, best_size, exact_path, hop};
 
 /// One directed cycle: (pool, token_in, token_out) per leg, starting and ending at `loan`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,6 +153,14 @@ impl CycleIndex {
                 est_profit_usd: profit_usd,
                 buy_pool: c.legs[0].0,
                 sell_pool: c.legs[2].0,
+                exact: exact_path(
+                    &[
+                        (pools[0], c.legs[0].1),
+                        (pools[1], c.legs[1].1),
+                        (pools[2], c.legs[2].1),
+                    ],
+                    amount,
+                ),
             });
         }
         out.sort_by(|a, b| b.est_profit_usd.total_cmp(&a.est_profit_usd));
