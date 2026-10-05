@@ -7,9 +7,12 @@ sequencer_rpc = "https://arb1-sequencer.arbitrum.io/rpc"
 sequencer_feed = "wss://arb1.arbitrum.io/feed"
 min_pool_liquidity_usd = 5000.0
 gas_limit_estimate = 1500000
-# Executor 0x5932C0887173B7E9C4258EaCaB2bAc395137CB29 (2026-10-05) has executeFlashSwap: V3-first routes
+# Executors since 0x5932C0887173B7E9C4258EaCaB2bAc395137CB29 (2026-10-05) have executeFlashSwap: V3-first routes
 # borrow from their first pool (no fee, no Balancer cap). DECISIONS #46.
 executor_flash_swaps = true
+# Executor 0xb793f66e4e3D1fFfd7c095E3AC2D863BfBB336A2 (2026-10-05) adds liquidateViaAave: liquidations above
+# the Balancer cap borrow from the Aave pool (5 bps). DECISIONS #51.
+executor_aave_flash = true
 loan_tokens = ["WETH", "USDC", "USDT", "WBTC", "ARB", "DAI", "USDC.e"]
 usd_token = "USDC"
 native_token = "WETH"
