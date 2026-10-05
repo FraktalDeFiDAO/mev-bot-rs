@@ -144,11 +144,9 @@ type = "algebra"
 factory = "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"
 
 # Feed-driven arbitrage: simulate sequencer-feed txs (eth_simulateV1) to see the pools they move
-# a block early. From AWS us-east-2 (warm): PublicNode p50 27 ms, dRPC 120-240 ms. arb1 is faster
-# (14 ms) but rate-limits ~80% of simulate calls under feed load, and every 429 costs a round trip
-# before falling through, so it is not used here (measured 2026-10-05: mean 70 ms with it first).
-[presim]
-enabled = true
-rpc_urls = ["https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.drpc.org"]
+# a block early. Endpoint order measured on the us-east-2 host (2026-10-05): arb1 first gives mean
+# 70 ms (it rate-limits but absorbs load); without it PublicNode rate-limits more and calls fall
+# through to dRPC: mean 98-116 ms and 2-8x the timeouts.
+rpc_urls = ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com", "https://arbitrum.drpc.org"]
 max_in_flight = 16
 timeout_ms = 250
