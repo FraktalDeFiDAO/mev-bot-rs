@@ -103,6 +103,8 @@ pub struct Engine {
     cooldown: HashMap<(Address, Address), Instant>,
     /// PGA priority-fee bidding: policy, recently observed winning tips, tip spend caps.
     bid_policy: BidPolicy,
+    /// Fast Feed counters when the paid feed is enabled and keyed.
+    fast_feed_stats: Option<Arc<mev_ingest::fast_feed::FastFeedStats>>,
     tips: TipBook,
     tip_budget: TipBudget,
     mode: Mode,
@@ -273,16 +275,37 @@ impl Engine {
             .clone()
             .filter(|p| p.enabled && !p.rpc_urls.is_empty());
         let feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>> = Default::default();
+        let fast_feed_stats = (cfg.pga.fast_feed.enabled && secrets.fast_feed_key.is_some())
+            .then(|| Arc::new(mev_ingest::fast_feed::FastFeedStats::default()));
+        if cfg.pga.fast_feed.enabled && secrets.fast_feed_key.is_none() {
+            warn!(
+                "pga.fast_feed enabled but ARBITRUM_FAST_FEED_KEY is not set: using the public feed only"
+            );
+        }
         let (liq_feed, presim_feed) = match cfg.sequencer_feed.clone() {
             Some(url) => {
                 let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<mev_sequencer::SequencedTx>();
+                // Optional paid Fast Feed: same txs, earlier (inside the PGA round). Merged into
+                // the same stream; the fan-out below drops whichever copy arrives second.
+                if let Some(stats) = &fast_feed_stats {
+                    spawn_fast_feed(
+                        cfg.pga.fast_feed.url.clone(),
+                        secrets.fast_feed_key.clone().unwrap_or_default(),
+                        raw_tx.clone(),
+                        stats.clone(),
+                    );
+                }
                 tokio::spawn(mev_sequencer::run(url, raw_tx));
                 let (liq_tx, liq_rx) = mpsc::unbounded_channel();
                 let (pre_tx, pre_rx) = mpsc::unbounded_channel();
                 let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
                 let log = feed_log.clone();
                 tokio::spawn(async move {
+                    let mut seen = RecentHashes::new(FEED_DEDUP);
                     while let Some(st) = raw_rx.recv().await {
+                        if !seen.insert(st.hash) {
+                            continue; // already delivered by the other feed
+                        }
                         log.lock().unwrap().record(&st);
                         if want_pre {
                             let _ = pre_tx.send(st.clone());
@@ -394,6 +417,7 @@ impl Engine {
             last_sim: HashMap::new(),
             cooldown: HashMap::new(),
             bid_policy: pga_policy,
+            fast_feed_stats,
             tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
             tip_budget: pga_budget,
             mode,
@@ -712,6 +736,30 @@ impl Engine {
 
     fn log_summary(&self) {
         self.metrics.heartbeat();
+        if let Some(ff) = &self.fast_feed_stats {
+            use std::sync::atomic::Ordering::Relaxed;
+            let msgs = ff.msgs.swap(0, Relaxed);
+            let (gaps, missing) = (ff.gaps.swap(0, Relaxed), ff.missing.swap(0, Relaxed));
+            let lag = ff
+                .lag_ms_total
+                .swap(0, Relaxed)
+                .checked_div(msgs)
+                .unwrap_or(0);
+            let reconnects = ff.reconnects.load(Relaxed);
+            self.metrics.update(|c| {
+                c.fast_feed_msgs += msgs;
+                c.fast_feed_gaps += gaps;
+                c.fast_feed_reconnects = reconnects;
+            });
+            info!(
+                msgs,
+                gaps,
+                missing,
+                reconnects,
+                mean_lag_ms = lag,
+                "fast feed (last minute)"
+            );
+        }
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
             info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
             if self.cfg.presim.as_ref().is_some_and(|p| p.local) {
@@ -1489,4 +1537,85 @@ async fn fetch_gas_price(http: &alloy::providers::DynProvider) -> f64 {
         .await
         .map(|g| g as f64)
         .unwrap_or(10_000_000.0)
+}
+
+/// Hashes seen recently, bounded (oldest evicted): drops a tx delivered by both feeds.
+struct RecentHashes {
+    set: std::collections::HashSet<TxHash>,
+    order: std::collections::VecDeque<TxHash>,
+    cap: usize,
+}
+
+impl RecentHashes {
+    fn new(cap: usize) -> Self {
+        Self {
+            set: Default::default(),
+            order: Default::default(),
+            cap,
+        }
+    }
+
+    /// True if `h` is new.
+    fn insert(&mut self, h: TxHash) -> bool {
+        if !self.set.insert(h) {
+            return false;
+        }
+        self.order.push_back(h);
+        if self.order.len() > self.cap
+            && let Some(old) = self.order.pop_front()
+        {
+            self.set.remove(&old);
+        }
+        true
+    }
+}
+
+/// Recent tx hashes remembered for de-duplicating the two feeds (~a minute of Arbitrum traffic).
+const FEED_DEDUP: usize = 20_000;
+
+/// Run the Fast Feed client and forward its txs as `SequencedTx` (block-derived `seq`).
+fn spawn_fast_feed(
+    url: String,
+    key: String,
+    out: mpsc::UnboundedSender<mev_sequencer::SequencedTx>,
+    stats: Arc<mev_ingest::fast_feed::FastFeedStats>,
+) {
+    use alloy::consensus::Transaction as _;
+    let (ff_tx, mut ff_rx) = mpsc::unbounded_channel::<mev_ingest::fast_feed::FastFeedTx>();
+    tokio::spawn(mev_ingest::fast_feed::run(url, key, ff_tx, stats));
+    tokio::spawn(async move {
+        while let Some(f) = ff_rx.recv().await {
+            let st = mev_sequencer::SequencedTx {
+                seq: f
+                    .block_number
+                    .saturating_sub(mev_sequencer::ARB_ONE_GENESIS_BLOCK),
+                received: f.received,
+                hash: f.hash,
+                to: f.tx.to(),
+                input: f.tx.input().clone(),
+                tx: f.tx,
+            };
+            if out.send(st).is_err() {
+                return;
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod feed_dedup_tests {
+    use super::*;
+
+    #[test]
+    fn recent_hashes_drop_repeats_and_stay_bounded() {
+        let mut r = RecentHashes::new(2);
+        let (a, b, c) = (
+            TxHash::repeat_byte(1),
+            TxHash::repeat_byte(2),
+            TxHash::repeat_byte(3),
+        );
+        assert!(r.insert(a) && !r.insert(a));
+        assert!(r.insert(b) && r.insert(c));
+        assert!(r.insert(a), "evicted after capacity, so new again");
+    }
 }
