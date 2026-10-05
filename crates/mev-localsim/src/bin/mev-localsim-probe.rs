@@ -28,6 +28,13 @@ struct Stats {
     movers_exact: u64,
     false_movers: u64,
     truth_errors: u64,
+    // Same txs re-simulated after their missing state was fetched; truth pinned to that block.
+    refill_complete: u64,
+    refill_compared: u64,
+    refill_exact: u64,
+    refill_movers: u64,
+    refill_movers_exact: u64,
+    refill_false_movers: u64,
 }
 
 fn provider(url: &str) -> anyhow::Result<DynProvider> {
@@ -168,14 +175,60 @@ async fn main() -> anyhow::Result<()> {
         if !want.is_empty() {
             if let Ok(permit) = fill_slots.clone().try_acquire_owned() {
                 let (p, cache, inflight) = (fill_rpc.clone(), cache.clone(), inflight.clone());
+                let (truth_p, stats, tx) = (truth_rpc.clone(), stats.clone(), st.tx.clone());
                 tokio::spawn(async move {
                     let got = fill(&p, &want, head).await;
-                    drop(permit);
                     cache.lock().unwrap().apply(got, head);
-                    let mut f = inflight.lock().unwrap();
-                    for k in &want {
-                        f.remove(k);
+                    {
+                        let mut f = inflight.lock().unwrap();
+                        for k in &want {
+                            f.remove(k);
+                        }
                     }
+                    // Re-simulate; execution may now go further and reveal more missing state.
+                    for _ in 0..4 {
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or_default();
+                        let (out, at) = {
+                            let c = cache.lock().unwrap();
+                            (simulate(&c, &tx, now), c.applied)
+                        };
+                        let Ok(out) = out else { break };
+                        if !out.complete {
+                            let got = fill(&p, &out.missing, at).await;
+                            cache.lock().unwrap().apply(got, at);
+                            continue;
+                        }
+                        stats.lock().unwrap().refill_complete += 1;
+                        let local = pool_events(&out.logs);
+                        let Ok(truth) = mev_presim::simulate_logs_at(&truth_p, &tx, Some(at)).await
+                        else {
+                            break;
+                        };
+                        let truth: Logs = pool_events(
+                            &truth
+                                .into_iter()
+                                .map(|l| (l.address, l.topics, l.data))
+                                .collect(),
+                        );
+                        let mut s = stats.lock().unwrap();
+                        s.refill_compared += 1;
+                        if truth == local {
+                            s.refill_exact += 1;
+                        }
+                        if !truth.is_empty() {
+                            s.refill_movers += 1;
+                            if truth == local {
+                                s.refill_movers_exact += 1;
+                            }
+                        } else if !local.is_empty() {
+                            s.refill_false_movers += 1;
+                        }
+                        break;
+                    }
+                    drop(permit);
                 });
             } else {
                 let mut f = inflight.lock().unwrap();
@@ -190,8 +243,13 @@ async fn main() -> anyhow::Result<()> {
         {
             let (p, stats) = (truth_rpc.clone(), stats.clone());
             let local = pool_events(&out.logs);
+            // TRUTH_AT=applied: ground truth on the same block the local cache is exact at.
+            let pin = std::env::var("TRUTH_AT")
+                .ok()
+                .filter(|v| v == "applied")
+                .map(|_| head);
             tokio::spawn(async move {
-                let truth = mev_presim::simulate_logs(&p, &st.tx).await;
+                let truth = mev_presim::simulate_logs_at(&p, &st.tx, pin).await;
                 drop(permit);
                 let mut s = stats.lock().unwrap();
                 let Ok(truth) = truth else {
@@ -244,6 +302,16 @@ fn report(stats: &Arc<Mutex<Stats>>, cache: &Arc<Mutex<StateCache>>, t: Duration
         let (a, sl) = c.len();
         (a, sl, c.applied)
     };
+    println!(
+        "[{:>4}s] after-fill (truth @ same block): complete {} compared {} exact {:.0}% | real pool-movers {} predicted exactly {:.0}% | false movers {}",
+        t.as_secs(),
+        s.refill_complete,
+        s.refill_compared,
+        ratio(s.refill_exact, s.refill_compared),
+        s.refill_movers,
+        ratio(s.refill_movers_exact, s.refill_movers),
+        s.refill_false_movers,
+    );
     println!(
         "[{:>4}s] candidates {} | complete {:.0}% (stale-involved {:.0}%) | local us p50 {} p90 {} p99 {} | \
          truth compared {} exact {:.0}% | real pool-movers {} predicted exactly {:.0}% | false movers {} | truth errors {} | cache {} accounts {} slots @ block {}",

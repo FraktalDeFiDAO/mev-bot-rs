@@ -78,6 +78,16 @@ struct SimCall {
 
 /// Run `tx` as its sender on top of the latest block; the logs it emits (empty if it reverts).
 pub async fn simulate_logs(p: &DynProvider, tx: &TxEnvelope) -> Result<Vec<SimLog>> {
+    simulate_logs_at(p, tx, None).await
+}
+
+/// `simulate_logs` on top of block `at` (`None` = latest). Pinning the block lets a local
+/// simulator be compared against the same state it ran on.
+pub async fn simulate_logs_at(
+    p: &DynProvider,
+    tx: &TxEnvelope,
+    at: Option<u64>,
+) -> Result<Vec<SimLog>> {
     let from = tx.recover_signer().context("recover sender")?;
     let call = serde_json::json!({
         "from": from,
@@ -89,7 +99,7 @@ pub async fn simulate_logs(p: &DynProvider, tx: &TxEnvelope) -> Result<Vec<SimLo
     // validation=false: no fee/nonce checks, so a tx priced for the next block still runs.
     let params = serde_json::json!([
         { "blockStateCalls": [{ "calls": [call] }], "validation": false },
-        "latest"
+        at.map_or_else(|| "latest".to_string(), |n| format!("{n:#x}"))
     ]);
     let blocks: Vec<SimBlock> = p
         .raw_request("eth_simulateV1".into(), params)
