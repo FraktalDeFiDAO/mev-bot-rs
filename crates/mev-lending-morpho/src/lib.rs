@@ -25,7 +25,7 @@ use alloy::{
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use mev_bindings::{IAaveOracle, IERC20};
+use mev_bindings::{IAaveOracle, IERC20, IPriceSource};
 use mev_config::MorphoConfig;
 use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
@@ -33,7 +33,7 @@ use mev_lending::{
 };
 use mev_lending_index::{EventIndex, IndexConfig, topic_address};
 use mev_rpc::{call, decode, multicall};
-use tracing::info;
+use tracing::{info, warn};
 
 pub const ID: ProtocolId = "morpho-blue";
 
@@ -81,7 +81,28 @@ pub struct MorphoAdapter {
     decimals: Mutex<HashMap<Address, u8>>,
     /// Aggregator -> short ids of markets whose oracle reads it.
     feeds: HashMap<Address, HashSet<u64>>,
+    /// Aggregator -> (market short id, exponent) for MorphoChainlinkOracleV2 markets: the oracle
+    /// price is base1·base2 / (quote1·quote2), so a base feed moves it by ratio^+1 and a quote feed
+    /// by ratio^-1. Markets with other oracle types are not predicted.
+    feed_signs: HashMap<Address, Vec<(u64, f64)>>,
+    /// Backrun prediction state, refreshed by sweeps and moved by each predicted update.
+    snapshot: Mutex<Snapshot>,
 }
+
+#[derive(Default)]
+struct Snapshot {
+    /// Market short id -> (id, state).
+    markets: HashMap<u64, (B256, MarketState)>,
+    /// At-risk positions: (account, collateral raw, borrowed raw).
+    positions: Vec<(AccountRef, f64, f64)>,
+    /// Aggregator -> last known answer.
+    answers: HashMap<Address, f64>,
+}
+
+/// Sweeps keep positions below this health factor for prediction.
+const SNAPSHOT_HF: f64 = 1.10;
+/// Predicted health below this triggers a backrun (margin against rounding).
+const PREDICT_HF_MAX: f64 = 0.9995;
 
 /// Short id stored in `AccountRef::sub_id`.
 pub fn short_id(id: &B256) -> u64 {
@@ -107,6 +128,8 @@ impl MorphoAdapter {
             params: Mutex::new(HashMap::new()),
             decimals: Mutex::new(HashMap::new()),
             feeds: HashMap::new(),
+            feed_signs: HashMap::new(),
+            snapshot: Mutex::new(Snapshot::default()),
         };
         let ids: Vec<B256> = me.market_ids();
         me.load_params(&ids).await?;
@@ -126,13 +149,19 @@ impl MorphoAdapter {
                 .map(|(id, _)| *id)
                 .collect()
         });
+        let feed_signs = feed_signs(&me.rpc.fast, &market_oracles).await;
         info!(
             protocol = ID,
             markets = ids.len(),
             borrowers_cached = me.index.len(),
+            predictable_feeds = feed_signs.len(),
             "adapter ready"
         );
-        Ok(Self { feeds, ..me })
+        Ok(Self {
+            feeds,
+            feed_signs,
+            ..me
+        })
     }
 
     /// Track a (market, borrower) learned elsewhere (another indexer, a liquidation feed, tests).
@@ -329,7 +358,8 @@ impl LiquidationAdapter for MorphoAdapter {
             })
             .collect();
         let res = multicall(p, &calls, 200).await?;
-        Ok(pairs
+        let mut at_risk: Vec<(AccountRef, f64, f64)> = Vec::new();
+        let out: Vec<Health> = pairs
             .iter()
             .zip(res.iter())
             .filter_map(|((a, id), r)| {
@@ -345,19 +375,34 @@ impl LiquidationAdapter for MorphoAdapter {
                 }
                 let collateral = pos.collateral as f64;
                 let coll_in_loan = collateral * s.price / math::ORACLE_PRICE_SCALE;
+                let health_factor =
+                    math::health_factor(collateral, borrowed, s.price, self.lltv(id));
+                if !fast && health_factor < SNAPSHOT_HF {
+                    at_risk.push((*a, collateral, borrowed));
+                }
                 Some(Health {
                     account: *a,
-                    health_factor: math::health_factor(
-                        collateral,
-                        borrowed,
-                        s.price,
-                        self.lltv(id),
-                    ),
+                    health_factor,
                     debt_usd: loan_usd(borrowed, s),
                     collateral_usd: loan_usd(coll_in_loan, s),
                 })
             })
-            .collect())
+            .collect();
+        if !fast {
+            // Prediction snapshot (sweep RPC; direct eth_calls for access-controlled aggregators).
+            let aggs: Vec<Address> = self.feed_signs.keys().copied().collect();
+            let answers = mev_oracle::latest_answers(p, &aggs).await;
+            let markets = states
+                .into_iter()
+                .map(|(id, st)| (short_id(&id), (id, st)))
+                .collect();
+            *self.snapshot.lock().unwrap() = Snapshot {
+                markets,
+                positions: at_risk,
+                answers,
+            };
+        }
+        Ok(out)
     }
 
     async fn plan(&self, h: &Health, _executor: Address) -> Result<Option<Plan>> {
@@ -399,40 +444,45 @@ impl LiquidationAdapter for MorphoAdapter {
         if math::health_factor(pos.collateral as f64, borrowed, s.price, lltv) >= 1.0 {
             return Ok(None);
         }
-        let Some(size) = math::size(pos.collateral as f64, borrowed, s.price, lltv) else {
-            return Ok(None);
+        Ok(self.build_plan(h.account, &pm, s, pos.collateral as f64, borrowed))
+    }
+
+    fn predict(&self, feed: Address, answer: f64, _executor: Address) -> Vec<Plan> {
+        let Some(links) = self.feed_signs.get(&feed) else {
+            return vec![];
         };
-        // Flash 1% over the computed repayment (rounding / interest accrual); excess is returned.
-        let flash = U256::from((size.repaid * 1.01) as u128 + 1);
-        let data = IMorpho::liquidateCall {
-            marketParams: IMorpho::MarketParams {
-                loanToken: pm.loan,
-                collateralToken: pm.collateral,
-                oracle: pm.oracle,
-                irm: pm.irm,
-                lltv: pm.lltv,
-            },
-            borrower: h.account.account,
-            seizedAssets: U256::from(size.seized as u128),
-            repaidShares: U256::ZERO,
-            data: Default::default(),
+        let mut guard = self.snapshot.lock().unwrap();
+        let snap = &mut *guard;
+        let Some(old) = snap.answers.insert(feed, answer).filter(|o| *o != 0.0) else {
+            return vec![]; // first sighting: nothing to compare against
+        };
+        let ratio = answer / old;
+        if !(ratio.is_finite() && ratio > 0.0) {
+            return vec![];
         }
-        .abi_encode();
-        Ok(Some(Plan {
-            protocol: ID,
-            account: h.account,
-            debt_asset: pm.loan,
-            collateral_asset: pm.collateral,
-            flash_amount: flash,
-            expected_collateral: size.seized,
-            bonus_usd: loan_usd(size.bonus, s),
-            calls: vec![ProtocolCall {
-                target: self.cfg.morpho,
-                data: data.into(),
-                approve_spender: self.cfg.morpho,
-                approve_amount: flash,
-            }],
-        }))
+        let params = self.params.lock().unwrap();
+        let mut plans = Vec::new();
+        for (sid, sign) in links {
+            let Some((id, s)) = snap.markets.get_mut(sid) else {
+                continue;
+            };
+            let Some(pm) = params.get(id).copied() else {
+                continue;
+            };
+            let lltv = f64::from(pm.lltv) / 1e18;
+            let before = s.price;
+            s.price *= ratio.powf(*sign);
+            for (acct, collateral, borrowed) in snap.positions.iter().filter(|p| p.0.sub_id == *sid)
+            {
+                let hf_before = math::health_factor(*collateral, *borrowed, before, lltv);
+                let hf_after = math::health_factor(*collateral, *borrowed, s.price, lltv);
+                if hf_before < PREDICT_HF_MAX || hf_after >= PREDICT_HF_MAX {
+                    continue; // already the regular re-poll's job, or still healthy
+                }
+                plans.extend(self.build_plan(*acct, &pm, s, *collateral, *borrowed));
+            }
+        }
+        plans
     }
 
     fn price_feeds(&self) -> Vec<Address> {
@@ -459,4 +509,170 @@ impl LiquidationAdapter for MorphoAdapter {
             .into_iter()
             .collect()
     }
+}
+
+impl MorphoAdapter {
+    /// The aggregator answer the snapshot last saw (sweep baseline or a predicted update).
+    pub fn last_answer(&self, feed: Address) -> Option<f64> {
+        self.snapshot.lock().unwrap().answers.get(&feed).copied()
+    }
+
+    /// At-risk snapshot positions in markets `feed` moves (diagnostics).
+    pub fn exposed_positions(&self, feed: Address) -> usize {
+        let snap = self.snapshot.lock().unwrap();
+        self.feed_signs.get(&feed).map_or(0, |links| {
+            links
+                .iter()
+                .map(|(sid, _)| snap.positions.iter().filter(|p| p.0.sub_id == *sid).count())
+                .sum()
+        })
+    }
+
+    /// Aggregators whose updates can be predicted (MorphoChainlinkOracleV2 feeds).
+    pub fn predictable_feeds(&self) -> Vec<Address> {
+        self.feed_signs.keys().copied().collect()
+    }
+
+    /// Prediction state: (predictable aggregators, snapshot markets, at-risk positions, answers).
+    pub fn snapshot_summary(&self) -> (usize, usize, usize, usize) {
+        let s = self.snapshot.lock().unwrap();
+        (
+            self.feed_signs.len(),
+            s.markets.len(),
+            s.positions.len(),
+            s.answers.len(),
+        )
+    }
+
+    /// The executor plan liquidating `collateral` / `borrowed` (raw) of `account` at state `s`.
+    fn build_plan(
+        &self,
+        account: AccountRef,
+        pm: &Params,
+        s: &MarketState,
+        collateral: f64,
+        borrowed: f64,
+    ) -> Option<Plan> {
+        let lltv = f64::from(pm.lltv) / 1e18;
+        let size = math::size(collateral, borrowed, s.price, lltv)?;
+        // Flash 1% over the computed repayment (rounding / interest accrual); excess is returned.
+        let flash = U256::from((size.repaid * 1.01) as u128 + 1);
+        let data = IMorpho::liquidateCall {
+            marketParams: IMorpho::MarketParams {
+                loanToken: pm.loan,
+                collateralToken: pm.collateral,
+                oracle: pm.oracle,
+                irm: pm.irm,
+                lltv: pm.lltv,
+            },
+            borrower: account.account,
+            seizedAssets: U256::from(size.seized as u128),
+            repaidShares: U256::ZERO,
+            data: Default::default(),
+        }
+        .abi_encode();
+        Some(Plan {
+            protocol: ID,
+            account,
+            debt_asset: pm.loan,
+            collateral_asset: pm.collateral,
+            flash_amount: flash,
+            expected_collateral: size.seized,
+            bonus_usd: loan_usd(size.bonus, s),
+            calls: vec![ProtocolCall {
+                target: self.cfg.morpho,
+                data: data.into(),
+                approve_spender: self.cfg.morpho,
+                approve_amount: flash,
+            }],
+        })
+    }
+}
+
+/// For each aggregator, the MorphoChainlinkOracleV2 markets it prices and the exponent of its
+/// effect (+1 via BASE_FEED_*, −1 via QUOTE_FEED_*). Oracles of other types are left out.
+async fn feed_signs(
+    p: &DynProvider,
+    market_oracles: &[(u64, Address)],
+) -> HashMap<Address, Vec<(u64, f64)>> {
+    let oracles: Vec<Address> = market_oracles
+        .iter()
+        .map(|(_, o)| *o)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let mut calls = Vec::with_capacity(oracles.len() * 4);
+    for o in &oracles {
+        calls.push(call(*o, IPriceSource::BASE_FEED_1Call {}));
+        calls.push(call(*o, IPriceSource::BASE_FEED_2Call {}));
+        calls.push(call(*o, IPriceSource::QUOTE_FEED_1Call {}));
+        calls.push(call(*o, IPriceSource::QUOTE_FEED_2Call {}));
+    }
+    let res = match multicall(p, &calls, 200).await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(protocol = ID, error = %format!("{e:#}"), "oracle feeds unreadable: no prediction");
+            return HashMap::new();
+        }
+    };
+    // (feed proxy, oracle, sign)
+    let mut proxies: Vec<(Address, Address, f64)> = Vec::new();
+    for (i, o) in oracles.iter().enumerate() {
+        let r = &res[4 * i..4 * i + 4];
+        let base = [
+            decode::<IPriceSource::BASE_FEED_1Call>(&r[0]),
+            decode::<IPriceSource::BASE_FEED_2Call>(&r[1]),
+        ];
+        let quote = [
+            decode::<IPriceSource::QUOTE_FEED_1Call>(&r[2]),
+            decode::<IPriceSource::QUOTE_FEED_2Call>(&r[3]),
+        ];
+        proxies.extend(
+            base.into_iter()
+                .flatten()
+                .filter(|a| !a.is_zero())
+                .map(|a| (a, *o, 1.0)),
+        );
+        proxies.extend(
+            quote
+                .into_iter()
+                .flatten()
+                .filter(|a| !a.is_zero())
+                .map(|a| (a, *o, -1.0)),
+        );
+    }
+    let sources: Vec<Address> = proxies
+        .iter()
+        .map(|(a, _, _)| *a)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let aggs = match mev_oracle::resolve_aggregators(p, &sources).await {
+        Ok(a) => a,
+        Err(e) => {
+            warn!(protocol = ID, error = %format!("{e:#}"), "oracle feeds unresolved: no prediction");
+            return HashMap::new();
+        }
+    };
+    // aggregator -> market -> summed exponent (a feed in both numerator and denominator cancels)
+    let mut acc: HashMap<Address, HashMap<u64, f64>> = HashMap::new();
+    for (agg, srcs) in &aggs {
+        for src in srcs {
+            for (proxy, oracle, sign) in proxies.iter().filter(|(p, _, _)| p == src) {
+                let _ = proxy;
+                for (sid, _) in market_oracles.iter().filter(|(_, o)| o == oracle) {
+                    *acc.entry(*agg).or_default().entry(*sid).or_default() += sign;
+                }
+            }
+        }
+    }
+    acc.into_iter()
+        .map(|(agg, m)| {
+            (
+                agg,
+                m.into_iter().filter(|(_, e)| *e != 0.0).collect::<Vec<_>>(),
+            )
+        })
+        .filter(|(_, v): &(Address, Vec<(u64, f64)>)| !v.is_empty())
+        .collect()
 }

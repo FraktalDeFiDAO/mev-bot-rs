@@ -10,7 +10,7 @@ arbitrage strategies) → candidates → REVM as the execution authority → pro
 - **Arbitrum ordering (superseded; verify):** this doc was written assuming FCFS + Timeboost
   (non-express txs wait ~200 ms, then ordered by arrival; priority fees buy nothing). The Arbitrum
   AIP replaces that with Priority Gas Auctions: per-tx `maxPriorityFeePerGas` priority, ties by
-  arrival, 125 ms rounds, no express lane. Go-live date is unconfirmed (DECISIONS #49,
+  arrival, 125 ms rounds, no express lane. Go-live date is unconfirmed (DECISIONS #52,
   AUDIT_2026-10-05.md). Until confirmed, treat the "latency, not gas bidding" conclusions below as
   provisional.
 - **Measured race position (race reports, 2026-10-04/05):** we land in the *same feed batch* as the
@@ -145,7 +145,7 @@ byte, 0.2 %), at 0.0201 gwei. The per-hop estimate (`arb_gas_estimate`: 100k + 1
 calibrated on live receipts; the L1 component is below its error and isn't modelled per trade.
 Under Timeboost, priority fees did not reorder non-express transactions (FCFS after the delay), so
 the competition budget was latency, not gas bidding. Under PGA a tip does set priority (ties still
-go to the earlier arrival), so the budget becomes latency plus a tip bid (DECISIONS #49–#50).
+go to the earlier arrival), so the budget becomes latency plus a tip bid (DECISIONS #52–#53).
 
 ## Phase 2 result: off on free infrastructure (2026-10-05)
 

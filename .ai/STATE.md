@@ -5,30 +5,29 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
 ---
 
 **Updated:** 2026-10-05
-**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot` (t3.small, DECISIONS #44), PR #27 build.
-Contabo stopped (rollback only). Deploy: `scripts/deploy.sh live --yes` (defaults to
-Ohio, builds locally, gate first). The user merges PRs (merging is blocked for the agent); wait for
-all 6 CI checks.
-**Executor:** `0x5932C0887173B7E9C4258EaCaB2bAc395137CB29` (2026-10-05, has `executeFlashSwap`, 8 lending targets allowed; old `0xc0B4…AF8D` retired). Hot wallet ~0.006 ETH.
+**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot`, build a5768b0 (#31). Deploy:
+`scripts/deploy.sh live --yes` builds from the local working tree: don't switch branches while it
+runs. The user merges PRs and runs `deploy-executor.sh` in a real terminal (it prompts).
+**Executor:** `0x5932C0887173B7E9C4258EaCaB2bAc395137CB29` (flash swaps; no `liquidateViaAave`
+yet). Hot wallet ~0.006 ETH.
+**RPC:** keyed Chainstack endpoints in `.env` (`ARBITRUM_SWEEP_URL_n`, `ARBITRUM_PRESIM_URL_n`,
+`ARBITRUM_WS_FALLBACK_n`); dRPC back in sweep fallbacks. Sweeps OK again since 12:22 UTC.
 
-## Where we are
+## User goal
 
-PR #27 (`feat/localsim`, CI green, awaiting the user's merge), simulation-engine phases 2, 5–8, 13, 15:
-- **Live once deployed:** triangular arbs (`mev_search::cycles`); wrapped price feeds (SVR/CAPO)
-  resolved via access lists; aggregator answers by direct `eth_call`; Compound backrun prediction.
-- **Off (flags):** `presim.local` (REVM worker: exact where complete, ~7 % live coverage on free RPC,
-  DECISIONS #45); `executor_flash_swaps` (needs the new executor deployed, #46).
-- Findings: `docs/planning/SIM_ENGINE.md`; decisions #45–47.
-
-RPC budget lesson: the host IP shares free limits with the live bot. Probes must not use arb1
-(presim primary); never poll at block rate.
+Profitable enough for own RPC nodes (~$800/mo), $200/mo tool plans, and living costs. Status: no
+profit yet. Evidence (DECISIONS #51): calm days have ~no liquidations (8, $42 debt in 48 h); crash
+days are large (2025-10-10/11: 907 Aave liquidations, ~$17.5 M debt, 22 liquidators; about half
+landed 1-4 blocks after the oracle report, so a fast re-check can compete). Arbitrage is contested
+by express-lane bots (~200 ms Timeboost head start); reverted routes cool down 30 min.
 
 ## Next
 
-1. #27 live (deploy-20261005-045515). Next PR `feat/cycle-ranking`: fair cycle cap + flash swaps on.
-   Watch the first flash-swap sends (`kind`/revert reasons) after it deploys.
-2. `deploy-executor.sh` needs a real terminal (its prompt gets EOF under `!`/no TTY).
-3. Phase 11/12: liquidation exits via the best route (≤2 hops today) incl. flash swaps.
-4. Phase 17: historical replay; Phase 18: profiling. Morpho/Fluid prediction (shadow books).
-5. Audit (docs/planning/AUDIT_2026-10-05.md, DECISIONS #49–#55): first confirm whether Arbitrum PGA is live
-   (replaces Timeboost); then priority-fee bid, win-rate gating, off-loop awaits, shorter in-flight wait.
+1. PR #32 (open): `liquidateViaAave` + profit-funded gas budget. After merge: user deploys the new
+   executor + allow-targets (8 lending targets, see DECISIONS #46 era commands) and copies `.env`;
+   then set `executor_aave_flash = true` and redeploy.
+2. Crash replay (Phase 17): replay 2025-10-10/11 through the bot's sizing/routing to estimate capture.
+3. Long-tail arbitrage: widen pool discovery to uncontested pairs.
+4. Watch `~/revert-traces.jsonl` on Ohio (diagnostic `trace_reverts.py`) for revert causes.
+5. Audit (docs/planning/AUDIT_2026-10-05.md, DECISIONS #52–#58): PGA bid, win-rate gating, off-loop
+   awaits, shorter in-flight wait.

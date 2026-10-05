@@ -14,6 +14,17 @@ interface IBalancerVault {
     ) external;
 }
 
+/// Aave V3 pool: single-asset flash loan (premium 5 bps on Arbitrum, pulled back via transferFrom).
+interface IAaveFlashPool {
+    function flashLoanSimple(
+        address receiver,
+        address asset,
+        uint256 amount,
+        bytes calldata params,
+        uint16 referralCode
+    ) external;
+}
+
 interface IWETH {
     function deposit() external payable;
 }
@@ -94,6 +105,8 @@ contract ArbExecutor {
     uint256 transient lastProfit;
     /// The pool a flash swap was started on; its callback (and only that one) runs the route.
     address transient flashPool;
+    /// The Aave pool an Aave-funded liquidation borrowed from; only its callback is accepted.
+    address transient aaveFlashPool;
 
     error NotOwner();
     error Unauthorized();
@@ -203,6 +216,54 @@ contract ArbExecutor {
         );
         flashActive = false;
         profit = lastProfit;
+    }
+
+    /// @notice Like `liquidate`, but funded by an Aave V3 `flashLoanSimple` from `aavePool` instead of
+    /// Balancer: deep liquidity for large positions (Balancer's Arbitrum balances cap loans), at a
+    /// 5 bps premium. Same allowlist, route checks and profit accounting.
+    /// @return profit amount of `debt` sent to `profitReceiver`
+    function liquidateViaAave(
+        address aavePool,
+        address debt,
+        address collateral,
+        uint256 flashAmount,
+        uint256 minProfit,
+        ProtocolCall[] calldata calls,
+        Hop[] calldata hops
+    ) external returns (uint256 profit) {
+        if (msg.sender != owner) revert NotOwner();
+        if (calls.length == 0) revert BadRoute();
+        if (collateral == debt) {
+            if (hops.length != 0) revert BadRoute();
+        } else if (hops.length == 0 || hops[0].tokenIn != collateral || hops[hops.length - 1].tokenOut != debt) {
+            revert BadRoute();
+        }
+        aaveFlashPool = aavePool;
+        IAaveFlashPool(aavePool)
+            .flashLoanSimple(address(this), debt, flashAmount, abi.encode(collateral, minProfit, calls, hops), 0);
+        if (aaveFlashPool != address(0)) revert Unauthorized(); // callback must have run
+        profit = lastProfit;
+    }
+
+    /// Aave V3 flash-loan callback: only the pool `liquidateViaAave` borrowed from, once, for a loan
+    /// this contract started. The pool pulls `amount + premium` after this returns.
+    function executeOperation(address asset, uint256 amount, uint256 premium, address initiator, bytes calldata params)
+        external
+        returns (bool)
+    {
+        if (msg.sender != aaveFlashPool || aaveFlashPool == address(0) || initiator != address(this)) {
+            revert Unauthorized();
+        }
+        aaveFlashPool = address(0);
+        uint256 minProfit = _liquidate(params, asset);
+        uint256 owed = amount + premium;
+        uint256 balance = IERC20(asset).balanceOf(address(this));
+        if (balance < owed + minProfit) revert NotProfitable(balance, owed + minProfit);
+        uint256 profit = balance - owed;
+        if (profit > 0) _transfer(asset, profitReceiver, profit);
+        _approve(asset, msg.sender, owed);
+        lastProfit = profit;
+        return true;
     }
 
     function receiveFlashLoan(

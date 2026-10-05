@@ -35,6 +35,9 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
+/// How long an arbitrage route is skipped after its send reverted (lost race or mispriced).
+const ROUTE_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+
 /// Upper bound on indexed triangular cycles (memory and per-update cost stay bounded).
 const MAX_CYCLES: usize = 20_000;
 
@@ -75,6 +78,8 @@ pub struct Engine {
     risk: RiskGuard,
     metrics: Arc<Metrics>,
     last_sim: HashMap<(Address, Address), Instant>,
+    /// Arbitrage routes whose send reverted, and when (skipped for `ROUTE_COOLDOWN`).
+    cooldown: HashMap<(Address, Address), Instant>,
     mode: Mode,
     liq: Option<LiqCtx>,
     presim_rx: Option<PresimRx>,
@@ -120,6 +125,8 @@ enum TxDone {
         kind: &'static str,
         est_profit_usd: f64,
         landed: Landed,
+        /// Arbitrage route (buy, sell pool): cooled down if it reverted.
+        route: Option<(Address, Address)>,
     },
     Failed {
         hash: Option<TxHash>,
@@ -148,6 +155,7 @@ impl Engine {
         let liq_setup = build_liquidation(
             &cfg,
             &rpc,
+            &secrets.sweep_urls,
             &data_dir,
             secrets.executor.unwrap_or_default(),
             &mut meters,
@@ -267,7 +275,14 @@ impl Engine {
         let localsim_stats = Arc::new(mev_localsim::worker::LocalStats::default());
         let presim_rx = match (presim_cfg, presim_feed) {
             (Some(pc), Some(feed)) => {
-                let p = metered_rotating(pc.rpc_urls.clone(), "presim", &mut meters)?;
+                // Keyed endpoints (from .env) first, then the public ones.
+                let presim_urls: Vec<String> = secrets
+                    .presim_urls
+                    .iter()
+                    .chain(&pc.rpc_urls)
+                    .cloned()
+                    .collect();
+                let p = metered_rotating(presim_urls.clone(), "presim", &mut meters)?;
                 let (tx, rx) = mpsc::unbounded_channel();
                 // Local mode: the worker simulates the feed in-process and passes only candidates
                 // it can't run yet to the RPC pre-simulator.
@@ -313,7 +328,7 @@ impl Engine {
                     presim_watch.clone(),
                 ));
                 info!(
-                    rpcs = pc.rpc_urls.len(),
+                    rpcs = presim_urls.len(),
                     max_in_flight = pc.max_in_flight,
                     "feed pre-simulation on"
                 );
@@ -347,6 +362,7 @@ impl Engine {
             risk,
             metrics,
             last_sim: HashMap::new(),
+            cooldown: HashMap::new(),
             mode,
             liq,
             presim_rx,
@@ -569,6 +585,21 @@ impl Engine {
         wei
     }
 
+    /// Did a send on `o`'s route revert within `ROUTE_COOLDOWN`?
+    fn cooling(&self, o: &Opportunity) -> bool {
+        self.cooldown
+            .get(&(o.buy_pool, o.sell_pool))
+            .is_some_and(|t| t.elapsed() < ROUTE_COOLDOWN)
+    }
+
+    /// The Aave pool to flash-borrow from when the executor supports `liquidateViaAave`.
+    fn aave_flash_pool(&self) -> Option<Address> {
+        self.cfg
+            .executor_aave_flash
+            .then(|| self.cfg.aave.as_ref().map(|a| a.pool))
+            .flatten()
+    }
+
     /// Can the executor fund `o`: a flash swap (no lender) or a Balancer loan within its cap.
     fn fundable(&self, o: &Opportunity) -> bool {
         (self.cfg.executor_flash_swaps && mev_bindings::flash_swappable(o))
@@ -653,7 +684,7 @@ impl Engine {
             min_est_profit_usd: self.cfg.risk.min_profit_usd,
         };
         // Best fundable two-pool and triangular candidates touching this pool.
-        let fundable = |o: &Opportunity| self.fundable(o);
+        let fundable = |o: &Opportunity| self.fundable(o) && !self.cooling(o);
         let two = two_pool_arbs(&self.store, pool, &params)
             .into_iter()
             .find(fundable);
@@ -808,6 +839,7 @@ impl Engine {
                 kind: "arb",
                 est_profit_usd: opp.est_profit_usd,
                 landed: landed.clone(),
+                route: Some((opp.buy_pool, opp.sell_pool)),
             });
             // Off the hot path: who beat us, and by how much.
             let rep = race::report(
@@ -851,10 +883,12 @@ impl Engine {
     /// Route, simulate, and (in live mode) send a liquidation planned by an adapter.
     /// Checks shared by simulated and backrun liquidations: size sanity, swap route, lender
     /// capacity. Logs the reason and returns None when the plan can't be sent.
+    /// Also picks the funding: Balancer within its cap, otherwise the Aave pool (`Some(pool)`)
+    /// when the executor supports it.
     async fn liq_precheck(
         &mut self,
         plan: &Plan,
-    ) -> Option<(Vec<mev_types::Hop>, serde_json::Value)> {
+    ) -> Option<(Vec<mev_types::Hop>, serde_json::Value, Option<Address>)> {
         let via = self.liq.as_ref()?.via.clone();
         let base = json!({ "protocol": plan.protocol, "account": plan.account.to_string(),
             "collateral": self.cfg.symbol(plan.collateral_asset), "debt": self.cfg.symbol(plan.debt_asset),
@@ -879,10 +913,21 @@ impl Engine {
                 }
             }
         };
-        let why = match self.max_loan.get(&plan.debt_asset) {
-            Some(cap) if f64::from(plan.flash_amount) <= *cap => return Some((hops, base)),
-            Some(_) => "liq_too_large",
-            None => "liq_no_lender",
+        let fits_balancer = self
+            .max_loan
+            .get(&plan.debt_asset)
+            .is_some_and(|cap| f64::from(plan.flash_amount) <= *cap);
+        if fits_balancer {
+            return Some((hops, base, None));
+        }
+        // Too large for Balancer (or not held there): Aave's own pool lends its reserves deeply.
+        if let Some(pool) = self.aave_flash_pool() {
+            return Some((hops, base, Some(pool)));
+        }
+        let why = if self.max_loan.contains_key(&plan.debt_asset) {
+            "liq_too_large"
+        } else {
+            "liq_no_lender"
         };
         self.metrics.event(why, base);
         None
@@ -898,7 +943,7 @@ impl Engine {
         tx_done: &mpsc::UnboundedSender<TxDone>,
     ) {
         self.metrics.update(|c| c.liq_planned += 1);
-        let Some((hops, base)) = self.liq_precheck(&plan).await else {
+        let Some((hops, base, aave_pool)) = self.liq_precheck(&plan).await else {
             return;
         };
         let Some(debt_px) = self.price(plan.debt_asset) else {
@@ -945,6 +990,7 @@ impl Engine {
                     min_profit,
                     BACKRUN_GAS_LIMIT,
                     gas_price as u128,
+                    aave_pool,
                 )
                 .await;
             let done = match sent.map(|s| s.hash) {
@@ -960,6 +1006,7 @@ impl Engine {
                             kind: "liquidation_backrun",
                             est_profit_usd: net_usd,
                             landed,
+                            route: None,
                         },
                         Err(e) => TxDone::Failed {
                             hash: Some(hash),
@@ -981,13 +1028,16 @@ impl Engine {
             return;
         }
         self.metrics.update(|c| c.liq_planned += 1);
-        let Some((hops, base)) = self.liq_precheck(&plan).await else {
+        let Some((hops, base, aave_pool)) = self.liq_precheck(&plan).await else {
             return;
         };
         let Some(sim) = &self.sim else {
             return self.metrics.event("liq_candidate", base);
         };
-        let (profit, gas) = match sim.simulate_liquidation(&plan, &hops, U256::ZERO).await {
+        let (profit, gas) = match sim
+            .simulate_liquidation(&plan, &hops, U256::ZERO, aave_pool)
+            .await
+        {
             Ok(SimOutcome::Profitable { profit, gas }) => (profit, gas),
             Ok(SimOutcome::Reverted(r)) => {
                 return self
@@ -1037,7 +1087,7 @@ impl Engine {
         let metrics = self.metrics.clone();
         tokio::spawn(async move {
             let done = match sender
-                .send_liquidation(&plan, &hops, min_profit, gas_limit)
+                .send_liquidation(&plan, &hops, min_profit, gas_limit, aave_pool)
                 .await
             {
                 Ok(hash) => {
@@ -1052,6 +1102,7 @@ impl Engine {
                             kind: "liquidation",
                             est_profit_usd: net_usd,
                             landed,
+                            route: None,
                         },
                         Err(e) => TxDone::Failed {
                             hash: Some(hash),
@@ -1076,7 +1127,13 @@ impl Engine {
                 kind,
                 est_profit_usd,
                 landed,
+                route,
             } => {
+                if let (false, Some(r)) = (landed.success, route) {
+                    // Lost race or mispriced: the next attempt on this route likely fails the same
+                    // way. Spend gas on uncontested (long-tail) routes instead.
+                    self.cooldown.insert(r, Instant::now());
+                }
                 let gas_usd =
                     landed.gas_used as f64 * landed.effective_gas_price as f64 * native_px;
                 if kind == "arb" {
@@ -1087,6 +1144,10 @@ impl Engine {
                     self.risk.record_lost_race(gas_usd, now_secs());
                 } else {
                     self.risk.record(landed.success, gas_usd, now_secs());
+                }
+                if landed.success {
+                    self.risk
+                        .record_profit(est_profit_usd - gas_usd, now_secs());
                 }
                 self.metrics.update(|c| {
                     c.gas_usd += gas_usd;
@@ -1169,6 +1230,7 @@ async fn wire_executor(
 async fn build_liquidation(
     cfg: &ChainConfig,
     rpc: &Rpc,
+    sweep_urls: &[String],
     data_dir: &std::path::Path,
     executor: Address,
     meters: &mut Vec<(&'static str, Arc<RpcMeter>)>,
@@ -1179,8 +1241,12 @@ async fn build_liquidation(
     let arpc = AdapterRpc {
         fast: rpc.http.clone(),
         scan: metered(&lcfg.scan_rpc, "scan", meters)?,
+        // Keyed sweep endpoints first (from .env), then the public ones as fallbacks.
         sweep: metered_rotating(
-            std::iter::once(lcfg.sweep_rpc.clone())
+            sweep_urls
+                .iter()
+                .cloned()
+                .chain(std::iter::once(lcfg.sweep_rpc.clone()))
                 .chain(lcfg.sweep_rpc_fallbacks.clone())
                 .collect(),
             "sweep",
