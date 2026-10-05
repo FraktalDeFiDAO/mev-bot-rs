@@ -274,6 +274,12 @@ pub struct Secrets {
     /// Alchemy app: paid reads rotate across all HTTP URLs, WS fails over in order.
     pub extra_http_urls: Vec<String>,
     pub extra_ws_urls: Vec<String>,
+    /// Keyed endpoints for the heavy health sweeps (`<PREFIX>_SWEEP_URL_1..9`), tried before the
+    /// public `sweep_rpc` / fallbacks (free public endpoints rate-limit the sweep bursts).
+    pub sweep_urls: Vec<String>,
+    /// Keyed endpoints serving `eth_simulateV1` (`<PREFIX>_PRESIM_URL_1..9`), rotated together with
+    /// the public `[presim] rpc_urls`.
+    pub presim_urls: Vec<String>,
 }
 
 impl Secrets {
@@ -327,7 +333,13 @@ impl Secrets {
             profit_receiver: addr("PROFIT_RECEIVER")?,
             executor: addr("EXECUTOR_ADDRESS")?,
             extra_http_urls: numbered(prefix, "HTTP_URL"),
-            extra_ws_urls: numbered(prefix, "WS_URL"),
+            // `<PREFIX>_WS_URL_2..9`, then `<PREFIX>_WS_FALLBACK_1..9` (more providers to fail over to).
+            extra_ws_urls: numbered(prefix, "WS_URL")
+                .into_iter()
+                .chain(numbered_from(prefix, "WS_FALLBACK", 1))
+                .collect(),
+            sweep_urls: numbered_from(prefix, "SWEEP_URL", 1),
+            presim_urls: numbered_from(prefix, "PRESIM_URL", 1),
         })
     }
 }
@@ -338,7 +350,12 @@ fn default_max_bonus_usd() -> f64 {
 
 /// `<PREFIX>_<KEY>_2` .. `_9`, in order, skipping unset/empty ones.
 fn numbered(prefix: &str, key: &str) -> Vec<String> {
-    (2..=9)
+    numbered_from(prefix, key, 2)
+}
+
+/// `<PREFIX>_<KEY>_<from>` .. `_9`, in order, skipping unset/empty ones.
+fn numbered_from(prefix: &str, key: &str, from: u32) -> Vec<String> {
+    (from..=9)
         .filter_map(|i| std::env::var(format!("{prefix}_{key}_{i}")).ok())
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
@@ -398,9 +415,15 @@ mod tests {
             executor: None,
             extra_http_urls: vec!["http://y".into()],
             extra_ws_urls: vec![],
+            sweep_urls: vec!["https://sweep.example/keyed0123456789abcdef".into()],
+            presim_urls: vec![],
         };
         let shown = format!("{s:?}");
         assert!(!shown.contains("deadbeef"));
+        assert!(
+            !shown.contains("keyed0123456789abcdef"),
+            "keyed URLs never printed"
+        );
         assert!(shown.contains("redacted"));
         assert_eq!(
             s.http_urls(),

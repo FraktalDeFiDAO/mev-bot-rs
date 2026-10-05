@@ -155,6 +155,7 @@ impl Engine {
         let liq_setup = build_liquidation(
             &cfg,
             &rpc,
+            &secrets.sweep_urls,
             &data_dir,
             secrets.executor.unwrap_or_default(),
             &mut meters,
@@ -274,7 +275,14 @@ impl Engine {
         let localsim_stats = Arc::new(mev_localsim::worker::LocalStats::default());
         let presim_rx = match (presim_cfg, presim_feed) {
             (Some(pc), Some(feed)) => {
-                let p = metered_rotating(pc.rpc_urls.clone(), "presim", &mut meters)?;
+                // Keyed endpoints (from .env) first, then the public ones.
+                let presim_urls: Vec<String> = secrets
+                    .presim_urls
+                    .iter()
+                    .chain(&pc.rpc_urls)
+                    .cloned()
+                    .collect();
+                let p = metered_rotating(presim_urls.clone(), "presim", &mut meters)?;
                 let (tx, rx) = mpsc::unbounded_channel();
                 // Local mode: the worker simulates the feed in-process and passes only candidates
                 // it can't run yet to the RPC pre-simulator.
@@ -320,7 +328,7 @@ impl Engine {
                     presim_watch.clone(),
                 ));
                 info!(
-                    rpcs = pc.rpc_urls.len(),
+                    rpcs = presim_urls.len(),
                     max_in_flight = pc.max_in_flight,
                     "feed pre-simulation on"
                 );
@@ -1193,6 +1201,7 @@ async fn wire_executor(
 async fn build_liquidation(
     cfg: &ChainConfig,
     rpc: &Rpc,
+    sweep_urls: &[String],
     data_dir: &std::path::Path,
     executor: Address,
     meters: &mut Vec<(&'static str, Arc<RpcMeter>)>,
@@ -1203,8 +1212,12 @@ async fn build_liquidation(
     let arpc = AdapterRpc {
         fast: rpc.http.clone(),
         scan: metered(&lcfg.scan_rpc, "scan", meters)?,
+        // Keyed sweep endpoints first (from .env), then the public ones as fallbacks.
         sweep: metered_rotating(
-            std::iter::once(lcfg.sweep_rpc.clone())
+            sweep_urls
+                .iter()
+                .cloned()
+                .chain(std::iter::once(lcfg.sweep_rpc.clone()))
                 .chain(lcfg.sweep_rpc_fallbacks.clone())
                 .collect(),
             "sweep",
