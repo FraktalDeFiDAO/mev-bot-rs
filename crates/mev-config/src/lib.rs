@@ -169,7 +169,7 @@ impl Default for PgaConfig {
             max_tip_usd_per_tx: 0.25,
             max_tip_usd_per_minute: 0.5,
             max_tip_usd_per_day: 2.0,
-            default_tip_gwei: 0.002,
+            default_tip_gwei: 0.005,
             min_tip_gwei: 0.0,
             outbid_margin: 0.1,
             competition_quantile: 0.75,

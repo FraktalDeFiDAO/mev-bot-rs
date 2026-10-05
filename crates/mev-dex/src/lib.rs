@@ -123,6 +123,12 @@ impl Pool {
         if sqrt_price <= 0.0 || liquidity <= 0.0 {
             return 0.0;
         }
+        // Algebra (Camelot V3) fees move with volatility on every swap; ours are refreshed only
+        // periodically, so the model is never treated as exact here (routes get verified first).
+        // Seen live: two mispriced reverts through the same Algebra pool on 2026-10-05.
+        if matches!(self.info.kind, PoolKind::AlgebraV3) {
+            return 0.0;
+        }
         let spacing = tick_spacing(&self.info.kind) as f64;
         let tick = (sqrt_price * sqrt_price).ln() / 1.0001f64.ln();
         let lower = (tick / spacing).floor() * spacing;
@@ -309,5 +315,24 @@ mod props {
             },
         );
         assert!(v2.max_exact_in(A).is_infinite());
+    }
+
+    #[test]
+    fn algebra_pools_are_never_exact() {
+        let p = Pool::new(
+            PoolInfo {
+                address: Address::ZERO,
+                dex: "camelot_v3".into(),
+                kind: PoolKind::AlgebraV3,
+                token0: A,
+                token1: B,
+            },
+            PoolState::V3 {
+                sqrt_price: 1.0,
+                liquidity: 1e18,
+            },
+        );
+        assert_eq!(p.max_exact_in(A), 0.0);
+        assert_eq!(p.max_exact_in(B), 0.0);
     }
 }
