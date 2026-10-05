@@ -23,12 +23,18 @@ pub enum Block {
     DailyGasCap { spent_usd: f64 },
 }
 
+/// Share of today's landed profit added to the daily gas budgets.
+const PROFIT_REINVEST_SHARE: f64 = 0.5;
+
 pub struct RiskGuard {
     limits: RiskLimits,
     kill_file: PathBuf,
     day: u64,
     spent_usd: f64,
     arb_spent_usd: f64,
+    /// Profit landed today: half of it is added to the gas budgets, so a profitable day (a crash's
+    /// liquidation cascade) isn't stopped by the fixed cap while losses stay bounded by it.
+    earned_usd: f64,
     consecutive_failures: u32,
     in_flight: bool,
 }
@@ -41,6 +47,7 @@ impl RiskGuard {
             day: 0,
             spent_usd: 0.0,
             arb_spent_usd: 0.0,
+            earned_usd: 0.0,
             consecutive_failures: 0,
             in_flight: false,
         }
@@ -87,7 +94,7 @@ impl RiskGuard {
                 net_usd: net_profit_usd,
             });
         }
-        if self.spent_usd + gas_usd > self.limits.max_gas_usd_per_day {
+        if self.spent_usd + gas_usd > self.limits.max_gas_usd_per_day + self.reinvested() {
             return Err(Block::DailyGasCap {
                 spent_usd: self.spent_usd,
             });
@@ -103,12 +110,25 @@ impl RiskGuard {
         now_secs: u64,
     ) -> Result<(), Block> {
         self.check(net_profit_usd, gas_usd, now_secs)?;
-        if self.arb_spent_usd + gas_usd > self.limits.max_arb_gas_usd_per_day {
+        if self.arb_spent_usd + gas_usd > self.limits.max_arb_gas_usd_per_day + self.reinvested() {
             return Err(Block::DailyGasCap {
                 spent_usd: self.arb_spent_usd,
             });
         }
         Ok(())
+    }
+
+    /// Profit landed today (USD), part of which extends the gas budgets.
+    pub fn record_profit(&mut self, usd: f64, now_secs: u64) {
+        self.roll_day(now_secs);
+        if usd > 0.0 {
+            self.earned_usd += usd;
+        }
+    }
+
+    /// Gas budget added by today's profit.
+    fn reinvested(&self) -> f64 {
+        self.earned_usd * PROFIT_REINVEST_SHARE
     }
 
     /// Gas spent on arbitrage (counts toward both the total and the arbitrage budget).
@@ -153,6 +173,7 @@ impl RiskGuard {
             self.day = day;
             self.spent_usd = 0.0;
             self.arb_spent_usd = 0.0;
+            self.earned_usd = 0.0;
         }
     }
 }
@@ -296,5 +317,28 @@ mod props {
                 prop_assert!(g.spent_today_usd() <= 3.0 + 1e-9);
             }
         }
+    }
+
+    #[test]
+    fn profit_extends_the_gas_budget_by_half() {
+        let limits = RiskLimits {
+            min_profit_usd: 0.0,
+            max_gas_usd_per_day: 1.0,
+            max_consecutive_failures: u32::MAX,
+            max_arb_gas_usd_per_day: 1.0,
+        };
+        let mut g = RiskGuard::new(limits, PathBuf::from("/nonexistent/kill"));
+        let t = 86_400 * 100;
+        g.record(true, 1.0, t);
+        assert!(matches!(
+            g.check(1.0, 0.5, t),
+            Err(Block::DailyGasCap { .. })
+        ));
+        g.record_profit(2.0, t); // +1.0 of budget
+        assert!(g.check(1.0, 0.5, t).is_ok());
+        assert!(g.check(1.0, 1.5, t).is_err(), "still bounded");
+        // Next day: budget and earnings reset.
+        g.record(true, 1.0, t + 86_400);
+        assert!(g.check(1.0, 0.5, t + 86_400).is_err());
     }
 }

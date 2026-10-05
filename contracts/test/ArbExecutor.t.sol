@@ -406,6 +406,53 @@ contract ArbExecutorForkTest is Test {
         emit log_named_decimal_uint("liquidation profit USDC", profit, 6);
     }
 
+    function test_liquidatesViaAaveFlashLoanForProfit() public {
+        uint256 debt = _liquidatablePosition(1_500);
+        uint256 flash = debt * 1001 / 1000;
+        ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        ArbExecutor.ProtocolCall[] memory calls = _aaveCall(borrower, flash);
+        uint256 before = IERC20Full(USDC).balanceOf(receiver);
+
+        vm.prank(owner);
+        uint256 profit = exec.liquidateViaAave(AAVE_POOL, USDC, WETH, flash, 1e6, calls, hops);
+
+        assertGt(profit, 1e6, "expected >1 USDC profit after the 5 bps premium");
+        assertEq(IERC20Full(USDC).balanceOf(receiver) - before, profit, "profit to receiver");
+        assertEq(IERC20Full(USDC).balanceOf(address(exec)), 0, "executor holds no USDC");
+        assertEq(IERC20Full(WETH).balanceOf(address(exec)), 0, "executor holds no WETH");
+        assertEq(IERC20Approve(USDC).allowance(address(exec), AAVE_POOL), 0, "pool pulled exactly what was owed");
+        emit log_named_decimal_uint("Aave-funded liquidation profit USDC", profit, 6);
+    }
+
+    function test_liquidateViaAaveGuards() public {
+        ArbExecutor.Hop[] memory hops = _wethToUsdcHops();
+        ArbExecutor.ProtocolCall[] memory calls = _aaveCall(borrower, 1e6);
+        vm.prank(attacker);
+        vm.expectRevert(ArbExecutor.NotOwner.selector);
+        exec.liquidateViaAave(AAVE_POOL, USDC, WETH, 1e6, 0, calls, hops);
+
+        // The callback: nobody outside our own flash loan, not even the real pool.
+        bytes memory params = abi.encode(WETH, uint256(0), calls, hops);
+        vm.prank(attacker);
+        vm.expectRevert(ArbExecutor.Unauthorized.selector);
+        exec.executeOperation(USDC, 1e6, 0, address(exec), params);
+        vm.prank(AAVE_POOL);
+        vm.expectRevert(ArbExecutor.Unauthorized.selector);
+        exec.executeOperation(USDC, 1e6, 0, address(exec), params);
+
+        // Healthy position: Aave's own check bubbles up and the flash loan unwinds.
+        deal(WETH, borrower, 1 ether);
+        vm.startPrank(borrower);
+        IERC20Approve(WETH).approve(AAVE_POOL, 1 ether);
+        IAavePoolFull(AAVE_POOL).supply(WETH, 1 ether, borrower, 0);
+        IAavePoolFull(AAVE_POOL).borrow(USDC, 100e6, 2, 0, borrower);
+        vm.stopPrank();
+        ArbExecutor.ProtocolCall[] memory healthy = _aaveCall(borrower, 101e6);
+        vm.prank(owner);
+        vm.expectRevert();
+        exec.liquidateViaAave(AAVE_POOL, USDC, WETH, 101e6, 0, healthy, hops);
+    }
+
     function test_liquidateHealthyPositionReverts() public {
         deal(WETH, borrower, 1 ether);
         vm.startPrank(borrower);
