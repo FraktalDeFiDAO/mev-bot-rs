@@ -38,7 +38,9 @@ pub struct RiskGuard {
     /// liquidation cascade) isn't stopped by the fixed cap while losses stay bounded by it.
     earned_usd: f64,
     consecutive_failures: u32,
-    in_flight: bool,
+    /// Transactions sent and not yet landed, and how many may be.
+    in_flight: u32,
+    max_in_flight: u32,
 }
 
 impl RiskGuard {
@@ -51,8 +53,16 @@ impl RiskGuard {
             arb_spent_usd: 0.0,
             earned_usd: 0.0,
             consecutive_failures: 0,
-            in_flight: false,
+            in_flight: 0,
+            max_in_flight: 1,
         }
+    }
+
+    /// Allow up to `n` transactions in flight at once (default 1). The engine keeps concurrent
+    /// arbitrages on disjoint pools, so they don't race each other.
+    pub fn with_max_in_flight(mut self, n: u32) -> Self {
+        self.max_in_flight = n.max(1);
+        self
     }
 
     /// Decide whether a trade may be sent. `now_secs` = unix time (for daily rollover).
@@ -88,7 +98,7 @@ impl RiskGuard {
                 consecutive_failures: self.consecutive_failures,
             });
         }
-        if self.in_flight && !concurrent {
+        if self.in_flight >= self.max_in_flight && !concurrent {
             return Err(Block::InFlight);
         }
         if net_profit_usd < self.limits.min_profit_usd {
@@ -140,13 +150,13 @@ impl RiskGuard {
     }
 
     pub fn mark_sent(&mut self) {
-        self.in_flight = true;
+        self.in_flight += 1;
     }
 
     /// Record the outcome of a sent tx.
     pub fn record(&mut self, success: bool, gas_usd: f64, now_secs: u64) {
         self.roll_day(now_secs);
-        self.in_flight = false;
+        self.in_flight = self.in_flight.saturating_sub(1);
         self.spent_usd += gas_usd;
         if success {
             self.consecutive_failures = 0
@@ -161,7 +171,7 @@ impl RiskGuard {
     /// paused liquidations too).
     pub fn record_lost_race(&mut self, gas_usd: f64, now_secs: u64) {
         self.roll_day(now_secs);
-        self.in_flight = false;
+        self.in_flight = self.in_flight.saturating_sub(1);
         self.spent_usd += gas_usd;
     }
 
@@ -298,6 +308,17 @@ mod tests {
         let mut g = guard();
         g.mark_sent();
         assert_eq!(g.check(1.0, 0.01, 0), Err(Block::InFlight));
+    }
+
+    #[test]
+    fn concurrent_sends_up_to_the_limit() {
+        let mut g = guard().with_max_in_flight(2);
+        g.mark_sent();
+        assert!(g.check(1.0, 0.01, 0).is_ok());
+        g.mark_sent();
+        assert_eq!(g.check(1.0, 0.01, 0), Err(Block::InFlight));
+        g.record_lost_race(0.01, 0);
+        assert!(g.check(1.0, 0.01, 0).is_ok(), "a landed tx frees a slot");
     }
 }
 

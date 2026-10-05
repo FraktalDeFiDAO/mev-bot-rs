@@ -96,6 +96,7 @@ min_profit_usd = 0.05          # net of gas
 max_gas_usd_per_day = 3.0
 max_consecutive_failures = 10
 max_loan_usd = 50000.0
+max_concurrent_sends = 3      # arbs on disjoint pools; 7 profitable opps were dropped behind one in-flight tx (2026-10-05)
 arb_presimulate = false       # live arbs send on the local model; executor minProfit (>= gas) is the guard
 
 [tokens]

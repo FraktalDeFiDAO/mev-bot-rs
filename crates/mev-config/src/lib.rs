@@ -45,6 +45,9 @@ pub struct RiskConfig {
     /// trades that turn out unprofitable, so a stale model costs gas, not capital.
     #[serde(default)]
     pub arb_presimulate: bool,
+    /// Transactions in flight at once (arbitrages on disjoint pools). Default 1.
+    #[serde(default = "default_max_concurrent_sends")]
+    pub max_concurrent_sends: u32,
     /// Daily gas arbitrage may spend (of `max_gas_usd_per_day`); the rest stays for liquidations.
     /// Default: two thirds.
     #[serde(default)]
@@ -419,6 +422,10 @@ impl Secrets {
                 .filter(|k| !k.is_empty()),
         })
     }
+}
+
+fn default_max_concurrent_sends() -> u32 {
+    1
 }
 
 fn default_max_bonus_usd() -> f64 {
