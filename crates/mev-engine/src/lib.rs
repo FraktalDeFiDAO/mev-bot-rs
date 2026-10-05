@@ -105,6 +105,10 @@ pub struct Engine {
     last_sim: HashMap<(Address, Address), Instant>,
     /// Arbitrage routes whose send reverted, and when (skipped for `ROUTE_COOLDOWN`).
     cooldown: HashMap<(Address, Address), Instant>,
+    /// UTC day (days since epoch) on which a daily cap switched all sending / arbitrage sending
+    /// to shadow; sending resumes when the day rolls over and the caps reset.
+    halt_all_day: Option<u64>,
+    halt_arb_day: Option<u64>,
     /// Pools touched by in-flight arbitrages (claimed at send) and each route's pools.
     busy_pools: HashMap<Address, Instant>,
     busy_routes: HashMap<(Address, Address), Vec<Address>>,
@@ -272,6 +276,7 @@ impl Engine {
                 .unwrap_or(cfg.risk.max_gas_usd_per_day * 2.0 / 3.0),
         };
         let metrics = Arc::new(Metrics::new(data_dir.clone())?);
+        metrics.set_live(mode == Mode::Live);
         let risk = RiskGuard::new(limits, data_dir.join("STOP"))
             .with_max_in_flight(cfg.risk.max_concurrent_sends);
         info!(pools = store.len(), kill_switch = %data_dir.join("STOP").display(), "ready");
@@ -424,6 +429,8 @@ impl Engine {
             metrics,
             last_sim: HashMap::new(),
             cooldown: HashMap::new(),
+            halt_all_day: None,
+            halt_arb_day: None,
             busy_pools: HashMap::new(),
             busy_routes: HashMap::new(),
             bid_policy: pga_policy,
@@ -679,6 +686,53 @@ impl Engine {
         }
     }
 
+    /// May real transactions be sent now? Live mode, unless a daily cap switched sending to
+    /// shadow for today (`arb`: arbitrage; a full halt also covers liquidations). Stamps the
+    /// resulting mode on the event log and records every switch.
+    fn sending(&self, arb: bool) -> bool {
+        let day = now_secs() / 86_400;
+        let live = self.mode == Mode::Live
+            && self.halt_all_day != Some(day)
+            && !(arb && self.halt_arb_day == Some(day));
+        let overall = self.mode == Mode::Live && self.halt_all_day != Some(day);
+        if self.metrics.set_live(overall) {
+            let to = if overall { "live" } else { "shadow" };
+            self.metrics.event("mode_switch", json!({ "to": to }));
+        }
+        live
+    }
+
+    /// A risk check refused a send: a failure-streak pause or the daily gas cap switches to
+    /// shadow for the rest of the UTC day (arbitrage alone for its own gas sub-budget).
+    fn on_cap(&mut self, block: &mev_risk::Block, arb: bool) {
+        use mev_risk::Block;
+        match block {
+            Block::Paused { .. } => self.halt(true, format!("{block:?}")),
+            Block::DailyGasCap { .. } => self.halt(!arb, format!("{block:?}")),
+            _ => {}
+        }
+    }
+
+    /// Switch to shadow until the next UTC day: all sending, or arbitrage only.
+    fn halt(&mut self, all: bool, reason: String) {
+        let day = now_secs() / 86_400;
+        let slot = if all {
+            &mut self.halt_all_day
+        } else {
+            &mut self.halt_arb_day
+        };
+        if *slot == Some(day) {
+            return;
+        }
+        *slot = Some(day);
+        warn!(all, %reason, "cap reached: switching to shadow until the next UTC day");
+        self.metrics.event(
+            "cap_reached",
+            json!({ "scope": if all { "all" } else { "arb" }, "reason": reason }),
+        );
+        let _ = self.sending(true);
+    }
+
     /// Did a send on `o`'s route revert within `ROUTE_COOLDOWN`?
     fn cooling(&self, o: &Opportunity) -> bool {
         self.cooldown
@@ -722,6 +776,9 @@ impl Engine {
             }
         };
         if let Err(cap) = self.tip_budget.allow(bid.tip_cost_usd, now) {
+            if matches!(cap, mev_risk::bid::TipCap::PerDay { .. }) && self.mode == Mode::Live {
+                self.halt(true, format!("{cap:?}"));
+            }
             self.metrics.update(|c| c.bids_skipped += 1);
             self.metrics.event(
                 "bid_skip",
@@ -910,7 +967,7 @@ impl Engine {
         // (the race is decided in ~100s of ms). Shadow always simulates to keep measuring it.
         // Live sends on the model only when it is exact for this route (no V3 tick crossed);
         // otherwise the executor eth_call confirms it first (a crossed tick can mean less output).
-        let presimulate = self.mode != Mode::Live || self.cfg.risk.arb_presimulate || !opp.exact;
+        let presimulate = !self.sending(true) || self.cfg.risk.arb_presimulate || !opp.exact;
         let (profit_usd, gas) = if presimulate {
             self.metrics.update(|c| c.simulated += 1);
             let outcome = match sim.simulate_fast(&opp, U256::ZERO).await {
@@ -950,7 +1007,7 @@ impl Engine {
             "arb opportunity"
         );
 
-        if self.mode != Mode::Live {
+        if !self.sending(true) {
             // Shadow: log the PGA bid this would have placed (nothing is sent).
             let _ = self.pga_bid(profit_usd, gas, gas_price, native_px, &base);
             return;
@@ -959,6 +1016,7 @@ impl Engine {
             return;
         };
         if let Err(block) = self.risk.check_arb(net_usd, gas_usd, now_secs()) {
+            self.on_cap(&block, true);
             self.metrics.event(
                 "risk_block",
                 json!({ "opp": base, "reason": format!("{block:?}") }),
@@ -1169,7 +1227,7 @@ impl Engine {
         }
         self.metrics.update(|c| c.liq_profitable += 1);
         self.metrics.event("liq_backrun", ev.clone());
-        if self.mode != Mode::Live {
+        if !self.sending(false) {
             // Shadow: log the PGA bid this would have placed (nothing is sent).
             let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
             let _ = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev);
@@ -1179,6 +1237,7 @@ impl Engine {
             return;
         };
         if let Err(block) = self.risk.check_concurrent(net_usd, gas_usd, now_secs()) {
+            self.on_cap(&block, false);
             return self.metrics.event(
                 "risk_block",
                 json!({ "liq": ev, "reason": format!("{block:?}") }),
@@ -1271,7 +1330,7 @@ impl Engine {
         info!(protocol = plan.protocol, account = %plan.account, profit_usd = format!("{profit_usd:.4}"),
               gas_usd = format!("{gas_usd:.4}"), net_usd = format!("{net_usd:.4}"), "simulated liquidation");
 
-        if self.mode != Mode::Live {
+        if !self.sending(false) {
             // Shadow: log the PGA bid this would have placed (nothing is sent).
             let _ = self.pga_bid(profit_usd, gas, gas_price, native_px, &base);
             return;
@@ -1280,6 +1339,7 @@ impl Engine {
             return;
         };
         if let Err(block) = self.risk.check(net_usd, gas_usd, now_secs()) {
+            self.on_cap(&block, false);
             return self.metrics.event(
                 "risk_block",
                 json!({ "liq": base, "reason": format!("{block:?}") }),

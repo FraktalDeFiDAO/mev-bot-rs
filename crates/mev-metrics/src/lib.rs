@@ -4,7 +4,10 @@ use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Write},
     path::PathBuf,
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use anyhow::Result;
@@ -50,6 +53,9 @@ pub struct Metrics {
     dir: PathBuf,
     file: Mutex<(String, BufWriter<File>)>,
     pub counters: Mutex<Counters>,
+    /// Whether the bot is sending real transactions; stamped on every event so live and shadow
+    /// data share one history (`events-*.jsonl`) and can be told apart.
+    live: AtomicBool,
 }
 
 impl Metrics {
@@ -61,13 +67,19 @@ impl Metrics {
             dir,
             file: Mutex::new((day, file)),
             counters: Mutex::new(Counters::default()),
+            live: AtomicBool::new(false),
         })
+    }
+
+    /// Set the mode stamped on later events; true if it changed.
+    pub fn set_live(&self, live: bool) -> bool {
+        self.live.swap(live, Ordering::Relaxed) != live
     }
 
     /// Append one event. Never fails the caller — logging errors are reported via tracing.
     pub fn event(&self, kind: &str, data: Value) {
         let now = Utc::now();
-        let line = json!({ "ts": now.to_rfc3339(), "kind": kind, "data": data }).to_string();
+        let line = json!({ "ts": now.to_rfc3339(), "mode": if self.live.load(Ordering::Relaxed) { "live" } else { "shadow" }, "kind": kind, "data": data }).to_string();
         // Error strings can embed RPC URLs with API keys.
         let line = mev_types::redact_secrets(&line);
         let mut guard = self.file.lock().unwrap();
@@ -111,6 +123,28 @@ fn open(dir: &std::path::Path, day: &str) -> Result<BufWriter<File>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn events_are_stamped_with_the_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = Metrics::new(dir.path().to_path_buf()).unwrap();
+        m.event("a", json!({}));
+        assert!(m.set_live(true));
+        assert!(!m.set_live(true));
+        m.event("b", json!({}));
+        let day = Utc::now().format("%Y-%m-%d");
+        let text = std::fs::read_to_string(dir.path().join(format!("events-{day}.jsonl"))).unwrap();
+        let modes: Vec<String> = text
+            .lines()
+            .map(|l| {
+                serde_json::from_str::<Value>(l).unwrap()["mode"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(modes, ["shadow", "live"]);
+    }
 
     #[test]
     fn event_files_never_contain_rpc_keys() {
