@@ -19,6 +19,9 @@ pairs = [
   ["WETH", "ARB"], ["WETH", "GMX"], ["WETH", "LINK"], ["WETH", "PENDLE"], ["WETH", "UNI"],
   ["ARB", "USDC"], ["ARB", "USDT"], ["WBTC", "USDC"], ["WBTC", "USDT"], ["USDC", "USDT"],
   ["USDC", "USDC.e"], ["USDC", "DAI"], ["GMX", "USDC"], ["LINK", "USDC"], ["PENDLE", "USDC"],
+  # Aave collateral/debt seen in the 2025-10-10/11 crash with no route (135 of 907 liquidations).
+  ["wstETH", "WETH"], ["weETH", "WETH"], ["rETH", "WETH"], ["AAVE", "WETH"], ["AAVE", "USDC"],
+  ["GHO", "USDC"],
 ]
 
 [auto_discovery]
@@ -104,6 +107,11 @@ GMX = "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a"
 LINK = "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4"
 PENDLE = "0x0c880f6761F1af8d9Aa9C466984b80DAb9a8c9e8"
 UNI = "0xFa7F8980b0f1E64A2062791cc3b0871572f1F7f0"
+wstETH = "0x5979D7b546E38E414F7E9822514be443A4800529"
+weETH = "0x35751007a407ca6FEFfE80b3cB397736D2cf4dbe"
+rETH = "0xEC70Dcb4A1EFa46b8F2D97C310C9c4790ba5ffA8"
+AAVE = "0xba5DdD1f9d7F570dc94a51479a000E3BCE967196"
+GHO = "0x7dfF72693f6A4149b17e7C6314655f6A9F7c8B33"
 
 
 [[dexes]]
