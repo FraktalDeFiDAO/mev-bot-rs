@@ -914,6 +914,8 @@ impl Engine {
         );
 
         if self.mode != Mode::Live {
+            // Shadow: log the PGA bid this would have placed (nothing is sent).
+            let _ = self.pga_bid(profit_usd, gas, gas_price, native_px, &base);
             return;
         }
         let Some(sender) = self.sender.clone() else {
@@ -1124,6 +1126,9 @@ impl Engine {
         self.metrics.update(|c| c.liq_profitable += 1);
         self.metrics.event("liq_backrun", ev.clone());
         if self.mode != Mode::Live {
+            // Shadow: log the PGA bid this would have placed (nothing is sent).
+            let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
+            let _ = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev);
             return;
         }
         let Some(sender) = self.sender.clone() else {
@@ -1223,6 +1228,8 @@ impl Engine {
               gas_usd = format!("{gas_usd:.4}"), net_usd = format!("{net_usd:.4}"), "simulated liquidation");
 
         if self.mode != Mode::Live {
+            // Shadow: log the PGA bid this would have placed (nothing is sent).
+            let _ = self.pga_bid(profit_usd, gas, gas_price, native_px, &base);
             return;
         }
         let Some(sender) = self.sender.clone() else {
