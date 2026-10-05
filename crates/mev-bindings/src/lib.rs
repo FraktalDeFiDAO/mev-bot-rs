@@ -119,6 +119,7 @@ sol! {
         struct Hop { uint8 kind; address pool; address tokenIn; address tokenOut; bool zeroForOne; uint16 feeBps; }
         struct ProtocolCall { address target; bytes data; address approveSpender; uint256 approveAmount; }
         function execute(address token, uint256 amount, uint256 minProfit, Hop[] calldata hops) external returns (uint256 profit);
+        function executeFlashSwap(uint256 amount, uint256 minProfit, Hop[] calldata hops) external returns (uint256 profit);
         function liquidate(address debt, address collateral, uint256 flashAmount, uint256 minProfit, ProtocolCall[] calldata calls, Hop[] calldata hops) external returns (uint256 profit);
         function setTarget(address target, bool allowed) external;
         function allowedTarget(address target) external view returns (bool);
@@ -144,6 +145,50 @@ pub fn to_sol_hop(h: &mev_types::Hop) -> ArbExecutor::Hop {
         tokenOut: h.token_out,
         zeroForOne: h.zero_for_one,
         feeBps: h.fee_bps,
+    }
+}
+
+/// Executor hop kind shared by Uniswap V3 / Sushi V3 / Pancake V3 / Algebra pools.
+pub const V3_HOP: u8 = 2;
+
+/// Can this arbitrage run as a flash swap (`executeFlashSwap`): the first hop is a V3-style pool
+/// starting from the loan token, and no later hop reuses that pool (it is locked during its own
+/// callback). Such routes need no lender: no fee and no lender-balance cap.
+pub fn flash_swappable(opp: &mev_types::Opportunity) -> bool {
+    let Some(first) = opp.hops.first() else {
+        return false;
+    };
+    opp.hops.len() >= 2
+        && first.kind == V3_HOP
+        && first.token_in == opp.loan_token
+        && opp.hops[1..].iter().all(|h| h.pool != first.pool)
+}
+
+/// Executor calldata for an arbitrage: a flash swap when `flash_swaps` (the deployed executor
+/// supports it) and the route allows, otherwise a Balancer flash loan (`execute`). Both return the
+/// profit as `uint256`.
+pub fn arb_calldata(
+    opp: &mev_types::Opportunity,
+    min_profit: alloy::primitives::U256,
+    flash_swaps: bool,
+) -> Vec<u8> {
+    use alloy::sol_types::SolCall;
+    let hops = opp.hops.iter().map(to_sol_hop).collect();
+    if flash_swaps && flash_swappable(opp) {
+        ArbExecutor::executeFlashSwapCall {
+            amount: opp.amount_in,
+            minProfit: min_profit,
+            hops,
+        }
+        .abi_encode()
+    } else {
+        ArbExecutor::executeCall {
+            token: opp.loan_token,
+            amount: opp.amount_in,
+            minProfit: min_profit,
+            hops,
+        }
+        .abi_encode()
     }
 }
 

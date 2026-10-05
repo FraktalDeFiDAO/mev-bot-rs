@@ -66,6 +66,10 @@ pub struct Engine {
     native: Address,
     usd_decimals: u8,
     max_loan: HashMap<Address, f64>,
+    /// What the arbitrage search may size up to: `max_loan`, or with flash swaps the risk limit
+    /// (a V3-first route borrows from its own first pool). Balancer-funded routes above `max_loan`
+    /// are dropped (`fundable`).
+    search_loan: HashMap<Address, f64>,
     sim: Option<Simulator>,
     sender: Option<Arc<Sender>>,
     risk: RiskGuard,
@@ -200,6 +204,17 @@ impl Engine {
                 max_loan.insert(*t, cap);
             }
         }
+        let search_loan: HashMap<Address, f64> = if cfg.executor_flash_swaps {
+            loan_tokens
+                .iter()
+                .filter_map(|t| {
+                    let px = store.usd_per_raw_unit(*t, usd, usd_decimals, native)?;
+                    (px > 0.0).then(|| (*t, cfg.risk.max_loan_usd / px))
+                })
+                .collect()
+        } else {
+            max_loan.clone()
+        };
 
         let (sim, sender) = wire_executor(&cfg, &secrets, &rpc, mode).await?;
 
@@ -326,6 +341,7 @@ impl Engine {
             native,
             usd_decimals,
             max_loan,
+            search_loan,
             sim,
             sender,
             risk,
@@ -553,9 +569,18 @@ impl Engine {
         wei
     }
 
+    /// Can the executor fund `o`: a flash swap (no lender) or a Balancer loan within its cap.
+    fn fundable(&self, o: &Opportunity) -> bool {
+        (self.cfg.executor_flash_swaps && mev_bindings::flash_swappable(o))
+            || self
+                .max_loan
+                .get(&o.loan_token)
+                .is_some_and(|cap| f64::from(o.amount_in) <= *cap)
+    }
+
     /// Re-enumerate triangular cycles over the current pool set.
     fn rebuild_cycles(&mut self) {
-        let loans: Vec<Address> = self.max_loan.keys().copied().collect();
+        let loans: Vec<Address> = self.search_loan.keys().copied().collect();
         self.cycles = mev_search::cycles::CycleIndex::build(&self.store, &loans, MAX_CYCLES);
     }
 
@@ -623,17 +648,20 @@ impl Engine {
     ) {
         let price = |t: Address| self.price(t);
         let params = SearchParams {
-            max_loan: &self.max_loan,
+            max_loan: &self.search_loan,
             usd_per_raw: &price,
             min_est_profit_usd: self.cfg.risk.min_profit_usd,
         };
-        // Best of the two-pool and triangular candidates touching this pool.
-        let two = two_pool_arbs(&self.store, pool, &params).into_iter().next();
+        // Best fundable two-pool and triangular candidates touching this pool.
+        let fundable = |o: &Opportunity| self.fundable(o);
+        let two = two_pool_arbs(&self.store, pool, &params)
+            .into_iter()
+            .find(fundable);
         let tri = self
             .cycles
             .arbs(&self.store, pool, &params)
             .into_iter()
-            .next();
+            .find(fundable);
         let Some(opp) = [two, tri]
             .into_iter()
             .flatten()
@@ -1115,7 +1143,8 @@ async fn wire_executor(
                 .cloned()
                 .chain(secrets.extra_http_urls.iter().cloned())
                 .collect();
-            let s = Sender::new(pk, rpc.http.clone(), &extra, exec, cfg.chain_id).await?;
+            let mut s = Sender::new(pk, rpc.http.clone(), &extra, exec, cfg.chain_id).await?;
+            s.flash_swaps = cfg.executor_flash_swaps;
             if s.address != owner {
                 bail!(
                     "PRIVATE_KEY address {} is not the executor owner {owner}",
@@ -1129,7 +1158,9 @@ async fn wire_executor(
         (None, Mode::Live) => bail!("live mode needs PRIVATE_KEY"),
         _ => None,
     };
-    Ok((Some(Simulator::new(rpc.http.clone(), exec, owner)), sender))
+    let mut sim = Simulator::new(rpc.http.clone(), exec, owner);
+    sim.flash_swaps = cfg.executor_flash_swaps;
+    Ok((Some(sim), sender))
 }
 
 /// Build the liquidation runner from config: one adapter per enabled protocol section.

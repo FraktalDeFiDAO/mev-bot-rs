@@ -92,6 +92,8 @@ contract ArbExecutor {
     address transient expectedTokenIn;
     uint256 transient expectedMaxIn;
     uint256 transient lastProfit;
+    /// The pool a flash swap was started on; its callback (and only that one) runs the route.
+    address transient flashPool;
 
     error NotOwner();
     error Unauthorized();
@@ -139,6 +141,33 @@ contract ArbExecutor {
         flashActive = true;
         vault.flashLoan(address(this), tokens, amounts, abi.encode(MODE_ARB, abi.encode(minProfit, hops)));
         flashActive = false;
+        profit = lastProfit;
+    }
+
+    /// @notice Flash swap: swap `amount` of the route's token on the first hop's V3-style pool, which
+    /// pays out before being paid; the remaining hops run inside its callback and the pool is repaid
+    /// from their proceeds. No lender, no loan fee, no lender-balance cap. Distinct pools only (the
+    /// first pool is locked during its own callback).
+    /// @return profit amount of the route token sent to `profitReceiver`
+    function executeFlashSwap(uint256 amount, uint256 minProfit, Hop[] calldata hops)
+        external
+        returns (uint256 profit)
+    {
+        if (msg.sender != owner) revert NotOwner();
+        if (hops.length < 2 || hops[0].kind != UNI_V3 || hops[0].tokenIn != hops[hops.length - 1].tokenOut) {
+            revert BadRoute();
+        }
+        Hop calldata first = hops[0];
+        flashPool = first.pool;
+        IUniV3Pool(first.pool)
+            .swap(
+                address(this),
+                first.zeroForOne,
+                int256(amount),
+                first.zeroForOne ? MIN_SQRT_RATIO_PLUS_ONE : MAX_SQRT_RATIO_MINUS_ONE,
+                abi.encode(minProfit, hops)
+            );
+        if (flashPool != address(0)) revert Unauthorized(); // callback must have run
         profit = lastProfit;
     }
 
@@ -242,18 +271,44 @@ contract ArbExecutor {
     }
 
     /// @dev Uniswap V3 / Sushi V3.
-    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) external {
-        _payPool(amount0Delta, amount1Delta);
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external {
+        if (data.length == 0) _payPool(amount0Delta, amount1Delta);
+        else _flashSwapCallback(amount0Delta, amount1Delta, data);
     }
 
     /// @dev PancakeSwap V3 — same swap() as Uniswap V3, different callback name.
-    function pancakeV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) external {
-        _payPool(amount0Delta, amount1Delta);
+    function pancakeV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external {
+        if (data.length == 0) _payPool(amount0Delta, amount1Delta);
+        else _flashSwapCallback(amount0Delta, amount1Delta, data);
     }
 
     /// @dev Algebra (Camelot V3) — same swap() shape as Uniswap V3, different callback name.
-    function algebraSwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata) external {
-        _payPool(amount0Delta, amount1Delta);
+    function algebraSwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external {
+        if (data.length == 0) _payPool(amount0Delta, amount1Delta);
+        else _flashSwapCallback(amount0Delta, amount1Delta, data);
+    }
+
+    /// Inside a flash swap: run the rest of the route on what the pool paid out, repay the pool,
+    /// send the profit. Only the pool `executeFlashSwap` started, once.
+    function _flashSwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) internal {
+        if (msg.sender != flashPool || flashPool == address(0)) revert Unauthorized();
+        flashPool = address(0);
+        (uint256 minProfit, Hop[] memory hops) = abi.decode(data, (uint256, Hop[]));
+        Hop memory first = hops[0];
+        uint256 owed = uint256(first.zeroForOne ? amount0Delta : amount1Delta);
+        uint256 received = uint256(-(first.zeroForOne ? amount1Delta : amount0Delta));
+        uint256 amountIn = received;
+        for (uint256 i = 1; i < hops.length; ++i) {
+            if (hops[i].tokenIn != hops[i - 1].tokenOut || hops[i].pool == first.pool) revert BadRoute();
+            amountIn = _swap(hops[i], amountIn);
+        }
+        address token = first.tokenIn;
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        if (balance < owed + minProfit) revert NotProfitable(balance, owed + minProfit);
+        _transfer(token, msg.sender, owed);
+        uint256 profit = balance - owed;
+        if (profit > 0) _transfer(token, profitReceiver, profit);
+        lastProfit = profit;
     }
 
     /// Pay the pool we're swapping on, only during that swap, never more than the hop's input.

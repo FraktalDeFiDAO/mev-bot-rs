@@ -29,6 +29,8 @@ pub struct Sender {
     executor: Address,
     chain_id: u64,
     nonce: AtomicU64,
+    /// The deployed executor has `executeFlashSwap` (V3-first routes then need no lender).
+    pub flash_swaps: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +81,7 @@ impl Sender {
             executor,
             chain_id,
             nonce: AtomicU64::new(nonce),
+            flash_swaps: false,
         })
     }
 
@@ -95,13 +98,7 @@ impl Sender {
         gas_limit: u64,
         gas_price: Option<u128>,
     ) -> Result<Sent> {
-        let calldata = ArbExecutor::executeCall {
-            token: opp.loan_token,
-            amount: opp.amount_in,
-            minProfit: min_profit,
-            hops: opp.hops.iter().map(to_sol_hop).collect(),
-        }
-        .abi_encode();
+        let calldata = mev_bindings::arb_calldata(opp, min_profit, self.flash_swaps);
         self.send_calldata(calldata, gas_limit, gas_price).await
     }
 
@@ -284,15 +281,9 @@ pub fn is_nonce_error(e: &anyhow::Error) -> bool {
         || s.contains("already known")
 }
 
-/// Executor calldata for an arbitrage (pure; unit-tested against the ABI).
+/// Executor calldata for a Balancer-funded arbitrage (pure; unit-tested against the ABI).
 pub fn execute_calldata(opp: &Opportunity, min_profit: U256) -> Vec<u8> {
-    ArbExecutor::executeCall {
-        token: opp.loan_token,
-        amount: opp.amount_in,
-        minProfit: min_profit,
-        hops: opp.hops.iter().map(to_sol_hop).collect(),
-    }
-    .abi_encode()
+    mev_bindings::arb_calldata(opp, min_profit, false)
 }
 
 /// Executor calldata for a liquidation (pure; unit-tested against the ABI).
@@ -354,6 +345,63 @@ mod tests {
             (opp.loan_token, opp.amount_in, U256::from(9), 1)
         );
         assert_eq!(d.hops[0].pool, Address::with_last_byte(1));
+    }
+
+    /// Loan token 2: V3 hop 2->3 on pool 1, then a hop 3->2 of `kind` on `pool`.
+    fn round_trip(kind: u8, pool: u8) -> Opportunity {
+        let back = Hop {
+            kind,
+            pool: Address::with_last_byte(pool),
+            token_in: Address::with_last_byte(3),
+            token_out: Address::with_last_byte(2),
+            zero_for_one: true,
+            fee_bps: 30,
+        };
+        Opportunity {
+            loan_token: Address::with_last_byte(2),
+            amount_in: U256::from(5),
+            hops: vec![hop(), back],
+            est_profit: 1.0,
+            est_profit_usd: 1.0,
+            buy_pool: Address::ZERO,
+            sell_pool: Address::ZERO,
+        }
+    }
+
+    #[test]
+    fn flash_swaps_only_for_v3_first_routes_when_enabled() {
+        use mev_bindings::{arb_calldata, flash_swappable};
+        let v3_first = round_trip(0, 4);
+        assert!(flash_swappable(&v3_first));
+        let d = ArbExecutor::executeFlashSwapCall::abi_decode(&arb_calldata(
+            &v3_first,
+            U256::from(7),
+            true,
+        ))
+        .unwrap();
+        assert_eq!(
+            (d.amount, d.minProfit, d.hops.len()),
+            (U256::from(5), U256::from(7), 2)
+        );
+        // Disabled (executor without executeFlashSwap): Balancer.
+        assert!(
+            ArbExecutor::executeCall::abi_decode(&arb_calldata(&v3_first, U256::ZERO, false))
+                .is_ok()
+        );
+        // V2 first hop, or the first pool reused (locked in its own callback): Balancer.
+        let mut v2_first = v3_first.clone();
+        v2_first.hops.swap(0, 1);
+        v2_first.loan_token = Address::with_last_byte(3);
+        assert!(!flash_swappable(&v2_first));
+        assert!(!flash_swappable(&round_trip(2, 1)));
+        assert!(
+            ArbExecutor::executeCall::abi_decode(&arb_calldata(
+                &round_trip(2, 1),
+                U256::ZERO,
+                true
+            ))
+            .is_ok()
+        );
     }
 
     #[test]

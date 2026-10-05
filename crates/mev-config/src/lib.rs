@@ -187,6 +187,10 @@ pub struct ChainConfig {
     pub sequencer_rpc: Option<String>,
     pub min_pool_liquidity_usd: f64,
     pub gas_limit_estimate: u64,
+    /// The deployed executor has `executeFlashSwap`: routes starting on a V3-style pool run
+    /// without a lender (no fee, no lender-balance cap). Only set after deploying that executor.
+    #[serde(default)]
+    pub executor_flash_swaps: bool,
     pub tokens: HashMap<String, Address>,
     /// Tokens we may flash-borrow (must be held by the Balancer vault).
     pub loan_tokens: Vec<String>,
