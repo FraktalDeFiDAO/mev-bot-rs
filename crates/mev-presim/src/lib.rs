@@ -35,6 +35,20 @@ pub fn is_candidate(st: &SequencedTx) -> bool {
     st.to.is_some() && st.input.len() >= 4 && !INERT_SELECTORS.iter().any(|s| st.input[..4] == *s)
 }
 
+/// 20-byte addresses (watched pools and their tokens) a feed tx must mention to be simulated.
+pub type Watchlist = std::sync::Arc<std::sync::RwLock<std::collections::HashSet<[u8; 20]>>>;
+
+/// Whether `input` contains any address in `watch` — as a 32-byte ABI word or packed (Uniswap V3
+/// paths), a raw 20-byte match finds both. An empty watchlist matches everything.
+pub fn mentions_any(input: &[u8], watch: &std::collections::HashSet<[u8; 20]>) -> bool {
+    if watch.is_empty() {
+        return true;
+    }
+    input
+        .windows(20)
+        .any(|w| watch.contains(<&[u8; 20]>::try_from(w).unwrap()))
+}
+
 /// Topic0 of the pool events the engine consumes (V2 `Sync`, V3/Algebra `Swap`, PancakeV3 `Swap`).
 pub fn is_pool_event(topic0: &B256) -> bool {
     *topic0 == IUniswapV2Pair::Sync::SIGNATURE_HASH
@@ -113,6 +127,8 @@ pub fn to_rpc_log(l: &SimLog) -> alloy::rpc::types::Log {
 pub struct PresimStats {
     pub feed: std::sync::atomic::AtomicU64,
     pub candidates: std::sync::atomic::AtomicU64,
+    /// Contract calls that mention no watched pool or token (not simulated).
+    pub unrelated: std::sync::atomic::AtomicU64,
     pub skipped_busy: std::sync::atomic::AtomicU64,
     pub moved_pools: std::sync::atomic::AtomicU64,
     pub no_pool_effect: std::sync::atomic::AtomicU64,
@@ -128,6 +144,7 @@ impl PresimStats {
         use std::sync::atomic::Ordering::Relaxed;
         let t = |a: &std::sync::atomic::AtomicU64| a.swap(0, Relaxed);
         let (feed, cand, busy) = (t(&self.feed), t(&self.candidates), t(&self.skipped_busy));
+        let unrelated = t(&self.unrelated);
         let (moved, none, to, err) = (
             t(&self.moved_pools),
             t(&self.no_pool_effect),
@@ -137,7 +154,7 @@ impl PresimStats {
         let sims = moved + none;
         let mean = t(&self.sim_ms_total).checked_div(sims).unwrap_or(0);
         format!(
-            "feed={feed} candidates={cand} skipped_busy={busy} moved_pools={moved} no_pool_effect={none} timeouts={to} errors={err} mean_sim_ms={mean}"
+            "feed={feed} unrelated={unrelated} candidates={cand} skipped_busy={busy} moved_pools={moved} no_pool_effect={none} timeouts={to} errors={err} mean_sim_ms={mean}"
         )
     }
 }
@@ -160,6 +177,7 @@ pub async fn run(
     timeout: std::time::Duration,
     out: tokio::sync::mpsc::UnboundedSender<Presimulated>,
     stats: std::sync::Arc<PresimStats>,
+    watch: Watchlist,
 ) {
     use std::sync::atomic::Ordering::Relaxed;
     let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(max_in_flight.max(1)));
@@ -169,6 +187,11 @@ pub async fn run(
         }
         stats.feed.fetch_add(1, Relaxed);
         if !is_candidate(&st) {
+            continue;
+        }
+        // Can't move a watched pool unless it names one of its tokens (or the pool itself).
+        if !mentions_any(&st.input, &watch.read().unwrap()) {
+            stats.unrelated.fetch_add(1, Relaxed);
             continue;
         }
         stats.candidates.fetch_add(1, Relaxed);
@@ -279,5 +302,26 @@ mod tests {
         assert_eq!(r.address(), l.address);
         assert_eq!(r.topics(), l.topics.as_slice());
         assert_eq!(r.data().data, l.data);
+    }
+
+    #[test]
+    fn watchlist_matches_abi_words_and_packed_paths() {
+        let weth = [0x82u8; 20];
+        let watch: std::collections::HashSet<[u8; 20]> = [weth].into_iter().collect();
+        // ABI word: 12 zero bytes + address.
+        let mut abi = vec![0x38, 0xed, 0x17, 0x39];
+        abi.extend([0u8; 12]);
+        abi.extend(weth);
+        assert!(mentions_any(&abi, &watch));
+        // Packed V3 path: token(20) | fee(3) | token(20).
+        let mut path = vec![0x11u8; 20];
+        path.extend([0, 1, 244]);
+        path.extend(weth);
+        assert!(mentions_any(&path, &watch));
+        assert!(!mentions_any(&[0x22u8; 64], &watch));
+        assert!(
+            mentions_any(&[1, 2, 3], &Default::default()),
+            "empty watchlist = no filter"
+        );
     }
 }
