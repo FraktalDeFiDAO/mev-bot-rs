@@ -73,6 +73,8 @@ pub struct Engine {
     /// Recent feed arrivals by tx hash (race telemetry clock).
     feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>>,
     presim_stats: Arc<mev_presim::PresimStats>,
+    /// Pools + tokens a feed tx must mention to be pre-simulated (refreshed on resync).
+    presim_watch: mev_presim::Watchlist,
     /// Request meters per provider ("fast" = paid), drained into the minute summary.
     meters: Vec<(&'static str, Arc<RpcMeter>)>,
     /// (fetched at, wei); refreshed in the background so hot paths never wait on it.
@@ -238,6 +240,8 @@ impl Engine {
             None => (None, None),
         };
         let presim_stats = Arc::new(mev_presim::PresimStats::default());
+        let presim_watch: mev_presim::Watchlist = Default::default();
+        *presim_watch.write().unwrap() = watchlist(&store);
         let presim_rx = match (presim_cfg, presim_feed) {
             (Some(pc), Some(feed)) => {
                 let p = metered_rotating(pc.rpc_urls.clone(), "presim", &mut meters)?;
@@ -249,6 +253,7 @@ impl Engine {
                     Duration::from_millis(pc.timeout_ms),
                     tx,
                     presim_stats.clone(),
+                    presim_watch.clone(),
                 ));
                 info!(
                     rpcs = pc.rpc_urls.len(),
@@ -289,6 +294,7 @@ impl Engine {
             presim_rx,
             feed_log,
             presim_stats,
+            presim_watch,
             meters,
             gas_price: Default::default(),
             gas_refreshing: Default::default(),
@@ -359,6 +365,7 @@ impl Engine {
                         if let Err(e) = mev_discovery::refresh(&self.rpc, &mut self.store).await {
                             warn!(error = %e, "resync failed");
                         }
+                        *self.presim_watch.write().unwrap() = watchlist(&self.store);
                     }
                     _ = summary.tick() => self.log_summary(),
                     _ = &mut shutdown => { info!("shutting down"); return Ok(()); }
@@ -1175,6 +1182,15 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Watched pools and their tokens as raw 20-byte addresses (presim calldata filter).
+fn watchlist(store: &PoolStore) -> std::collections::HashSet<[u8; 20]> {
+    store
+        .pools()
+        .flat_map(|p| [p.info.address, p.info.token0, p.info.token1])
+        .map(|a| a.0.0)
+        .collect()
 }
 
 async fn fetch_gas_price(http: &alloy::providers::DynProvider) -> f64 {
