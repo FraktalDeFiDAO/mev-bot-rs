@@ -35,8 +35,11 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-/// Share of the flash lender's balance we're willing to borrow.
+/// Upper bound on indexed triangular cycles (memory and per-update cost stay bounded).
+const MAX_CYCLES: usize = 20_000;
+
 mod race;
+
 /// Gas a backrun liquidation is priced at (flash loan + protocol call + swap), and its limit.
 /// Unsimulated, so the limit is generous; unused gas isn't charged.
 const BACKRUN_GAS: u64 = 900_000;
@@ -44,6 +47,7 @@ const BACKRUN_GAS_LIMIT: u64 = 2_000_000;
 /// Share of the oracle-price bonus expected to survive swap fees and slippage.
 const BACKRUN_BONUS_HAIRCUT: f64 = 0.7;
 
+/// Share of the flash lender's balance we're willing to borrow.
 const LENDER_SHARE: f64 = 0.5;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -83,6 +87,8 @@ pub struct Engine {
     gas_refreshing: Arc<std::sync::atomic::AtomicBool>,
     /// Tokens we looked up swap routes for on demand (and when): at most one lookup per hour.
     route_lookups: HashMap<Address, Instant>,
+    /// Triangular cycles over watched pools, indexed by pool (rebuilt on resync).
+    cycles: mev_search::cycles::CycleIndex,
 }
 
 /// Liquidation side of the engine (the runner and its adapters run as their own task).
@@ -336,6 +342,7 @@ impl Engine {
             gas_price: Default::default(),
             gas_refreshing: Default::default(),
             route_lookups: HashMap::new(),
+            cycles: Default::default(),
         })
     }
 
@@ -345,6 +352,8 @@ impl Engine {
         let mut resync = tokio::time::interval(Duration::from_secs(60));
         let mut summary = tokio::time::interval(Duration::from_secs(60));
         let mut backoff = Backoff::default();
+        self.rebuild_cycles();
+        info!(cycles = self.cycles.len(), "triangular cycles indexed");
         let mut liq_rx = self.liq.as_mut().and_then(|l| l.rx.take());
         let mut presim_rx = self.presim_rx.take();
         // Created once, outside the loops: a signal arriving while a handler runs is not lost.
@@ -403,6 +412,7 @@ impl Engine {
                             warn!(error = %e, "resync failed");
                         }
                         *self.presim_watch.write().unwrap() = watchlist(&self.store);
+                        self.rebuild_cycles();
                     }
                     _ = summary.tick() => self.log_summary(),
                     _ = &mut shutdown => { info!("shutting down"); return Ok(()); }
@@ -543,6 +553,12 @@ impl Engine {
         wei
     }
 
+    /// Re-enumerate triangular cycles over the current pool set.
+    fn rebuild_cycles(&mut self) {
+        let loans: Vec<Address> = self.max_loan.keys().copied().collect();
+        self.cycles = mev_search::cycles::CycleIndex::build(&self.store, &loans, MAX_CYCLES);
+    }
+
     fn price(&self, token: Address) -> Option<f64> {
         self.store
             .usd_per_raw_unit(token, self.usd, self.usd_decimals, self.native)
@@ -611,7 +627,18 @@ impl Engine {
             usd_per_raw: &price,
             min_est_profit_usd: self.cfg.risk.min_profit_usd,
         };
-        let Some(opp) = two_pool_arbs(&self.store, pool, &params).into_iter().next() else {
+        // Best of the two-pool and triangular candidates touching this pool.
+        let two = two_pool_arbs(&self.store, pool, &params).into_iter().next();
+        let tri = self
+            .cycles
+            .arbs(&self.store, pool, &params)
+            .into_iter()
+            .next();
+        let Some(opp) = [two, tri]
+            .into_iter()
+            .flatten()
+            .max_by(|a, b| a.est_profit_usd.total_cmp(&b.est_profit_usd))
+        else {
             return;
         };
         let loan_px = self.price(opp.loan_token).unwrap_or(0.0);
