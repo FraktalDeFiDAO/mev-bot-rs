@@ -3326,6 +3326,8 @@ dependencies = [
  "mev-presim",
  "mev-sequencer",
  "revm",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

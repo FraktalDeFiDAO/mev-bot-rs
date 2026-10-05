@@ -11,6 +11,8 @@ alloy = { workspace = true, features = ["k256"] }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 revm = { version = "43", default-features = false, features = ["std", "optional_balance_check", "optional_no_base_fee", "optional_block_gas_limit", "optional_eip3607"] }
 mev-sequencer = { workspace = true }
 mev-presim = { workspace = true }

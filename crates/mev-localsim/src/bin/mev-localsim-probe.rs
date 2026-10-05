@@ -1,7 +1,9 @@
 //! Is in-process simulation fast and accurate enough without our own node? Follows the sequencer
 //! feed, simulates candidate txs locally (filling the cache from RPC on misses), and compares the
 //! pool events of complete local runs with `eth_simulateV1` (ground truth). Never sends anything.
-//!   cargo run --release -p mev-localsim --bin mev-localsim-probe -- [secs=600] [ttl_blocks=20] [fill_rpc] [truth_rpc]
+//! Diff-fed: every block's prestate diff is applied in order, so the cache is exact as of the last
+//! applied block; misses are fetched pinned to that block.
+//!   cargo run --release -p mev-localsim --bin mev-localsim-probe -- [secs=600] [diff_rpc] [fill_rpc] [truth_rpc]
 
 use std::{
     collections::HashSet,
@@ -43,33 +45,78 @@ fn pool_events(logs: &Logs) -> Logs {
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let secs: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(600);
-    let ttl: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(20);
-    let fill_rpc = provider(
-        args.get(3)
-            .map(String::as_str)
-            .unwrap_or("https://arbitrum-one-rpc.publicnode.com"),
-    )?;
-    let truth_rpc = provider(
-        args.get(4)
-            .map(String::as_str)
-            .unwrap_or("https://arb1.arbitrum.io/rpc"),
-    )?;
+    let url = |i: usize, d: &'static str| args.get(i).map(String::as_str).unwrap_or(d).to_string();
+    let diff_rpc = provider(&url(2, "https://arbitrum.drpc.org"))?;
+    let fill_rpc = provider(&url(3, "https://arbitrum.drpc.org"))?;
+    let truth_rpc = provider(&url(4, "https://arbitrum-one-rpc.publicnode.com"))?;
 
-    let cache = Arc::new(Mutex::new(StateCache::new(ttl)));
+    // Exactness comes from applied block diffs, not a TTL.
+    let cache = Arc::new(Mutex::new(StateCache::new(u64::MAX)));
     let stats = Arc::new(Mutex::new(Stats::default()));
     let inflight: Arc<Mutex<HashSet<Key>>> = Default::default();
     let fill_slots = Arc::new(Semaphore::new(8));
     let truth_slots = Arc::new(Semaphore::new(4));
 
-    // Head tracking.
+    // Head tracking + diff follower: fetch block diffs (4 in flight), apply strictly in order.
+    let head_rpc = provider("https://arb1.arbitrum.io/rpc")?;
+    let start_head = head_rpc.get_block_number().await?;
     {
-        let (cache, p) = (cache.clone(), fill_rpc.clone());
+        let mut c = cache.lock().unwrap();
+        c.head = start_head;
+        c.applied = start_head;
+    }
+    let head = Arc::new(std::sync::atomic::AtomicU64::new(start_head));
+    {
+        let (head, p) = (head.clone(), head_rpc.clone());
         tokio::spawn(async move {
             loop {
                 if let Ok(n) = p.get_block_number().await {
-                    cache.lock().unwrap().head = n;
+                    head.fetch_max(n, std::sync::atomic::Ordering::Relaxed);
                 }
-                tokio::time::sleep(Duration::from_millis(250)).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+    }
+    {
+        let (head, p) = (head.clone(), diff_rpc.clone());
+        let (dtx, mut drx) = mpsc::unbounded_channel::<(u64, Vec<mev_localsim::diff::Change>)>();
+        tokio::spawn(async move {
+            let slots = Arc::new(Semaphore::new(4));
+            let mut next = start_head + 1;
+            loop {
+                if next > head.load(std::sync::atomic::Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    continue;
+                }
+                let n = next;
+                next += 1;
+                let Ok(permit) = slots.clone().acquire_owned().await else {
+                    return;
+                };
+                let (p, dtx) = (p.clone(), dtx.clone());
+                tokio::spawn(async move {
+                    // Retry: a skipped block would leave the cache silently wrong.
+                    for _ in 0..5 {
+                        if let Ok(b) = mev_localsim::diff::fetch_block_diff(&p, n).await {
+                            let _ = dtx.send((n, mev_localsim::diff::changes(&b)));
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    drop(permit);
+                });
+            }
+        });
+        let cache = cache.clone();
+        tokio::spawn(async move {
+            let mut pending = std::collections::BTreeMap::new();
+            while let Some((n, ch)) = drx.recv().await {
+                pending.insert(n, ch);
+                let mut c = cache.lock().unwrap();
+                while let Some(ch) = pending.remove(&(c.applied + 1)) {
+                    let n = c.applied + 1;
+                    c.apply_block(n, ch);
+                }
             }
         });
     }
@@ -93,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let (out, head) = {
             let c = cache.lock().unwrap();
-            (simulate(&c, &st.tx, now), c.head)
+            (simulate(&c, &st.tx, now), c.applied)
         };
         let Ok(out) = out else { continue };
         {
@@ -192,10 +239,14 @@ fn report(stats: &Arc<Mutex<Stats>>, cache: &Arc<Mutex<StateCache>>, t: Duration
             100.0 * a as f64 / b as f64
         }
     };
-    let (accts, slots) = cache.lock().unwrap().len();
+    let (accts, slots, applied) = {
+        let c = cache.lock().unwrap();
+        let (a, sl) = c.len();
+        (a, sl, c.applied)
+    };
     println!(
         "[{:>4}s] candidates {} | complete {:.0}% (stale-involved {:.0}%) | local us p50 {} p90 {} p99 {} | \
-         truth compared {} exact {:.0}% | real pool-movers {} predicted exactly {:.0}% | false movers {} | truth errors {} | cache {} accounts {} slots",
+         truth compared {} exact {:.0}% | real pool-movers {} predicted exactly {:.0}% | false movers {} | truth errors {} | cache {} accounts {} slots @ block {}",
         t.as_secs(),
         s.candidates,
         ratio(s.complete, s.candidates),
@@ -211,5 +262,6 @@ fn report(stats: &Arc<Mutex<Stats>>, cache: &Arc<Mutex<StateCache>>, t: Duration
         s.truth_errors,
         accts,
         slots,
+        applied,
     );
 }

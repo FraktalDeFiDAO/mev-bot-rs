@@ -7,6 +7,8 @@
 //! used but reported as stale. Whether stale state is accurate enough is measured against
 //! `eth_simulateV1` by `mev-localsim-probe` before anything trades on it.
 
+pub mod diff;
+
 use std::{
     collections::HashMap,
     convert::Infallible,
@@ -49,7 +51,14 @@ pub struct StateCache {
     pub head: u64,
     /// Entries older than this many blocks are reported as stale.
     pub ttl_blocks: u64,
+    /// Last block whose state diff has been applied (diff-fed mode): the cache is exact as of it.
+    pub applied: u64,
+    /// Changes of the most recent applied blocks, replayed onto keys fetched at an older block.
+    recent: std::collections::VecDeque<(u64, Vec<diff::Change>)>,
 }
+
+/// Blocks of changes kept for replaying onto late fills (~16 s of Arbitrum blocks).
+const RECENT_BLOCKS: usize = 64;
 
 impl StateCache {
     pub fn new(ttl_blocks: u64) -> Self {
@@ -250,26 +259,28 @@ fn dedup(mut v: Vec<Key>) -> Vec<Key> {
     v
 }
 
-/// Fetch `keys` at the latest block and store them (accounts with code; slots).
+/// Fetch `keys` as of `block` (so they are consistent with a cache applied up to it).
 pub async fn fill(p: &DynProvider, keys: &[Key], block: u64) -> Vec<(Key, Fetched)> {
     let futs = keys.iter().map(|k| async move {
         let r: anyhow::Result<Fetched> = async {
             Ok(match *k {
                 Key::Account(a) => {
+                    let at: alloy::eips::BlockId = block.into();
                     let (bal, nonce, code) = tokio::try_join!(
-                        p.get_balance(a).into_future(),
-                        p.get_transaction_count(a).into_future(),
-                        p.get_code_at(a).into_future(),
+                        p.get_balance(a).block_id(at).into_future(),
+                        p.get_transaction_count(a).block_id(at).into_future(),
+                        p.get_code_at(a).block_id(at).into_future(),
                     )?;
                     Fetched::Account(bal, nonce, code)
                 }
-                Key::Slot(a, s) => Fetched::Slot(p.get_storage_at(a, s).await?),
+                Key::Slot(a, s) => {
+                    Fetched::Slot(p.get_storage_at(a, s).block_id(block.into()).await?)
+                }
             })
         }
         .await;
         r.ok().map(|f| (*k, f))
     });
-    let _ = block;
     futures::future::join_all(futs)
         .await
         .into_iter()
@@ -285,7 +296,24 @@ pub enum Fetched {
 }
 
 impl StateCache {
+    /// Insert values fetched at `block`, then replay the changes of later applied blocks that
+    /// touch them, so they match the rest of the cache (exact as of `applied`).
     pub fn apply(&mut self, fetched: Vec<(Key, Fetched)>, block: u64) {
+        let keys: std::collections::HashSet<Key> = fetched.iter().map(|(k, _)| *k).collect();
+        self.insert_fetched(fetched, block);
+        let later: Vec<diff::Change> = self
+            .recent
+            .iter()
+            .filter(|(n, _)| *n > block)
+            .flat_map(|(_, cs)| cs.iter().filter(|c| touches(c, &keys)).cloned())
+            .collect();
+        let at = self.applied.max(block);
+        for c in &later {
+            self.apply_change(c, at);
+        }
+    }
+
+    fn insert_fetched(&mut self, fetched: Vec<(Key, Fetched)>, block: u64) {
         for (k, f) in fetched {
             match (k, f) {
                 (Key::Account(a), Fetched::Account(bal, nonce, code)) => {
@@ -295,6 +323,84 @@ impl StateCache {
                 _ => {}
             }
         }
+    }
+}
+
+impl StateCache {
+    /// Apply a block's state changes. Only state already cached is updated (we track what our
+    /// simulations need, not the whole chain); a destroyed account is dropped.
+    /// Apply one change to cached state only. Returns whether anything cached changed.
+    fn apply_change(&mut self, c: &diff::Change, block: u64) -> bool {
+        match c {
+            diff::Change::Balance(a, v) => self.accounts.get_mut(a).map(|e| {
+                e.value.balance = *v;
+                e.block = block;
+            }),
+            diff::Change::Nonce(a, v) => self.accounts.get_mut(a).map(|e| {
+                e.value.nonce = *v;
+                e.block = block;
+            }),
+            diff::Change::Code(a, code) => {
+                let prev = self
+                    .accounts
+                    .get(a)
+                    .map(|e| (e.value.balance, e.value.nonce));
+                prev.map(|(bal, nonce)| self.insert_account(*a, bal, nonce, code.clone(), block))
+            }
+            diff::Change::Slot(a, k, v) => self.storage.get_mut(&(*a, *k)).map(|e| {
+                e.value = *v;
+                e.block = block;
+            }),
+            // A destroyed account's storage goes too, even if only its slots were cached.
+            diff::Change::Destroyed(a) => {
+                let had_account = self.accounts.remove(a).is_some();
+                let before = self.storage.len();
+                self.storage.retain(|(addr, _), _| addr != a);
+                (had_account || self.storage.len() != before).then_some(())
+            }
+        }
+        .is_some()
+    }
+
+    /// Apply a block's state changes. Only state already cached is updated (we track what our
+    /// simulations need, not the whole chain); a destroyed account is dropped.
+    pub fn apply_changes(&mut self, changes: &[diff::Change], block: u64) -> usize {
+        let applied = changes
+            .iter()
+            .filter(|c| self.apply_change(c, block))
+            .count();
+        // Everything cached is now known as of `block` (unchanged entries are still correct).
+        for e in self.accounts.values_mut() {
+            e.block = block;
+        }
+        for e in self.storage.values_mut() {
+            e.block = block;
+        }
+        applied
+    }
+
+    /// Diff-fed mode: apply block `n` (blocks must be applied in order) and remember its changes.
+    pub fn apply_block(&mut self, n: u64, changes: Vec<diff::Change>) -> usize {
+        let applied = self.apply_changes(&changes, n);
+        self.recent.push_back((n, changes));
+        while self.recent.len() > RECENT_BLOCKS {
+            self.recent.pop_front();
+        }
+        self.applied = n;
+        self.head = self.head.max(n);
+        applied
+    }
+}
+
+fn touches(c: &diff::Change, keys: &std::collections::HashSet<Key>) -> bool {
+    match c {
+        diff::Change::Balance(a, _) | diff::Change::Nonce(a, _) | diff::Change::Code(a, _) => {
+            keys.contains(&Key::Account(*a))
+        }
+        diff::Change::Slot(a, k, _) => keys.contains(&Key::Slot(*a, *k)),
+        diff::Change::Destroyed(a) => keys.iter().any(|k| match k {
+            Key::Account(x) | Key::Slot(x, _) => x == a,
+        }),
     }
 }
 
@@ -356,5 +462,40 @@ mod tests {
         cache.head = 105;
         let third = simulate(&cache, &tx, 1_700_000_000).unwrap();
         assert!(third.complete && third.stale.contains(&Key::Account(target)));
+    }
+
+    #[test]
+    fn late_fill_replays_newer_block_changes() {
+        let pool = Address::repeat_byte(0x77);
+        let slot = U256::from(4);
+        let mut cache = StateCache::new(0);
+        // Blocks 11 and 12 applied while the slot wasn't cached yet: nothing to update then.
+        cache.apply_block(11, vec![diff::Change::Slot(pool, slot, U256::from(111))]);
+        cache.apply_block(12, vec![diff::Change::Slot(pool, slot, U256::from(222))]);
+        assert_eq!(cache.applied, 12);
+        // A fill pinned at block 10 lands late: block 11 and 12 changes are replayed onto it.
+        cache.apply(
+            vec![(Key::Slot(pool, slot), Fetched::Slot(U256::from(100)))],
+            10,
+        );
+        let mut db = SnapshotDb {
+            cache: &cache,
+            missing: vec![],
+            stale: vec![],
+        };
+        assert_eq!(db.storage(pool, slot).unwrap(), U256::from(222));
+        // A fill at the applied block needs no replay; a cleared slot reads zero after destruction.
+        cache.apply_block(13, vec![diff::Change::Destroyed(pool)]);
+        let mut db = SnapshotDb {
+            cache: &cache,
+            missing: vec![],
+            stale: vec![],
+        };
+        assert_eq!(db.storage(pool, slot).unwrap(), U256::ZERO);
+        assert_eq!(
+            db.missing,
+            vec![Key::Slot(pool, slot)],
+            "destroyed state must be refetched"
+        );
     }
 }
