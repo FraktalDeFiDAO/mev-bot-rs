@@ -31,7 +31,7 @@ enabled = true
 scan_rpc = "https://arb1.arbitrum.io/rpc"                # only public RPC verified to return complete wide getLogs
 sweep_rpc = "https://arbitrum-one-rpc.publicnode.com"    # heavy health sweeps (eth_call only)
 # Sweeps rotate across these too, falling through on rate limits (PublicNode alone hit -32005).
-sweep_rpc_fallbacks = ["https://arbitrum-one.public.blastapi.io", "https://arb1.arbitrum.io/rpc"]   # serve eth_call (meowrpc does not); not dRPC: reserved for block diffs
+sweep_rpc_fallbacks = ["https://arbitrum-one.public.blastapi.io", "https://arb1.arbitrum.io/rpc"]   # serve eth_call (meowrpc does not); not dRPC: reserved for block diffs ([presim])
 at_risk_hf = 1.05
 min_debt_usd = 20.0              # bonus on less won't cover gas
 sweep_secs = 300
@@ -149,6 +149,13 @@ factory = "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"
 # through to dRPC: mean 98-116 ms and 2-8x the timeouts.
 [presim]
 enabled = true
-rpc_urls = ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"]   # not dRPC: reserved for block diffs
+rpc_urls = ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"]   # not dRPC: reserved for diffs
 max_in_flight = 16
 timeout_ms = 250
+# In-process simulation (revm, mev-localsim): every feed tx runs locally on a state cache kept
+# exact by per-block prestate diffs; rpc_urls above only serve candidates not cached yet.
+local = false   # measured 2026-10-05: ~7 % of feed txs complete locally, ~0 pool movers (first-sight keys); enable with an own node (DECISIONS #45)
+# dRPC is the only free endpoint serving debug_traceBlockByNumber (prestateTracer). Keyless limit:
+# 120k CU/min per IP; diffs use ~22k at ~4 blocks/s. Nothing else may use it (fills got us 429'd).
+diff_rpc_urls = ["https://arbitrum.drpc.org"]
+fill_rpc_urls = ["https://arbitrum-one-rpc.publicnode.com", "https://arbitrum-one.public.blastapi.io"]   # eth_getProof per address; not arb1 (presim primary, same IP)

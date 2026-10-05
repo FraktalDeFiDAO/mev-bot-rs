@@ -339,14 +339,11 @@ impl AaveV3Adapter {
             .collect();
         let p = &self.rpc.sweep;
         let aggs: Vec<Address> = self.feed_assets.keys().copied().collect();
-        let answer_calls: Vec<_> = aggs
-            .iter()
-            .map(|a| call(*a, IAggregator::latestAnswerCall {}))
-            .collect();
         let fetched = async {
             let reserves = self.reserves_info_on(p).await?;
             let positions = self.positions_on(p, &users).await?;
-            let answers = multicall(p, &answer_calls, 200).await?;
+            // Direct eth_calls: access-controlled aggregators refuse Multicall3 (contract) callers.
+            let answers = mev_oracle::latest_answers(p, &aggs).await;
             anyhow::Ok((reserves, positions, answers))
         };
         match fetched.await {
@@ -354,14 +351,6 @@ impl AaveV3Adapter {
                 let cached = positions
                     .into_iter()
                     .filter_map(|pos| Cached::new(pos, &reserves))
-                    .collect();
-                let answers = aggs
-                    .iter()
-                    .zip(answers.iter())
-                    .filter_map(|(a, r)| {
-                        let v = decode::<IAggregator::latestAnswerCall>(r)?;
-                        Some((*a, v.to_string().parse::<f64>().ok()?))
-                    })
                     .collect();
                 *self.snapshot.lock().unwrap() = Snapshot {
                     reserves,
@@ -478,7 +467,7 @@ impl LiquidationAdapter for AaveV3Adapter {
         Ok(math::plan(&pos, &reserves).map(|p| self.build_plan(h.account, &pos, &p)))
     }
 
-    fn predict(&self, feed: Address, answer: f64) -> Vec<Plan> {
+    fn predict(&self, feed: Address, answer: f64, _executor: Address) -> Vec<Plan> {
         let Some(assets) = self.feed_assets.get(&feed) else {
             return vec![];
         };

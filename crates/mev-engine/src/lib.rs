@@ -35,8 +35,11 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-/// Share of the flash lender's balance we're willing to borrow.
+/// Upper bound on indexed triangular cycles (memory and per-update cost stay bounded).
+const MAX_CYCLES: usize = 20_000;
+
 mod race;
+
 /// Gas a backrun liquidation is priced at (flash loan + protocol call + swap), and its limit.
 /// Unsimulated, so the limit is generous; unused gas isn't charged.
 const BACKRUN_GAS: u64 = 900_000;
@@ -44,6 +47,7 @@ const BACKRUN_GAS_LIMIT: u64 = 2_000_000;
 /// Share of the oracle-price bonus expected to survive swap fees and slippage.
 const BACKRUN_BONUS_HAIRCUT: f64 = 0.7;
 
+/// Share of the flash lender's balance we're willing to borrow.
 const LENDER_SHARE: f64 = 0.5;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -62,6 +66,10 @@ pub struct Engine {
     native: Address,
     usd_decimals: u8,
     max_loan: HashMap<Address, f64>,
+    /// What the arbitrage search may size up to: `max_loan`, or with flash swaps the risk limit
+    /// (a V3-first route borrows from its own first pool). Balancer-funded routes above `max_loan`
+    /// are dropped (`fundable`).
+    search_loan: HashMap<Address, f64>,
     sim: Option<Simulator>,
     sender: Option<Arc<Sender>>,
     risk: RiskGuard,
@@ -73,6 +81,7 @@ pub struct Engine {
     /// Recent feed arrivals by tx hash (race telemetry clock).
     feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>>,
     presim_stats: Arc<mev_presim::PresimStats>,
+    localsim_stats: Arc<mev_localsim::worker::LocalStats>,
     /// Pools + tokens a feed tx must mention to be pre-simulated (refreshed on resync).
     presim_watch: mev_presim::Watchlist,
     /// Request meters per provider ("fast" = paid), drained into the minute summary.
@@ -82,6 +91,8 @@ pub struct Engine {
     gas_refreshing: Arc<std::sync::atomic::AtomicBool>,
     /// Tokens we looked up swap routes for on demand (and when): at most one lookup per hour.
     route_lookups: HashMap<Address, Instant>,
+    /// Triangular cycles over watched pools, indexed by pool (rebuilt on resync).
+    cycles: mev_search::cycles::CycleIndex,
 }
 
 /// Liquidation side of the engine (the runner and its adapters run as their own task).
@@ -193,6 +204,17 @@ impl Engine {
                 max_loan.insert(*t, cap);
             }
         }
+        let search_loan: HashMap<Address, f64> = if cfg.executor_flash_swaps {
+            loan_tokens
+                .iter()
+                .filter_map(|t| {
+                    let px = store.usd_per_raw_unit(*t, usd, usd_decimals, native)?;
+                    (px > 0.0).then(|| (*t, cfg.risk.max_loan_usd / px))
+                })
+                .collect()
+        } else {
+            max_loan.clone()
+        };
 
         let (sim, sender) = wire_executor(&cfg, &secrets, &rpc, mode).await?;
 
@@ -242,12 +264,47 @@ impl Engine {
         let presim_stats = Arc::new(mev_presim::PresimStats::default());
         let presim_watch: mev_presim::Watchlist = Default::default();
         *presim_watch.write().unwrap() = watchlist(&store);
+        let localsim_stats = Arc::new(mev_localsim::worker::LocalStats::default());
         let presim_rx = match (presim_cfg, presim_feed) {
             (Some(pc), Some(feed)) => {
                 let p = metered_rotating(pc.rpc_urls.clone(), "presim", &mut meters)?;
                 let (tx, rx) = mpsc::unbounded_channel();
+                // Local mode: the worker simulates the feed in-process and passes only candidates
+                // it can't run yet to the RPC pre-simulator.
+                let rpc_feed = if pc.local && !pc.diff_rpc_urls.is_empty() {
+                    let (fb_tx, fb_rx) = mpsc::unbounded_channel();
+                    let endpoints = mev_localsim::worker::Endpoints {
+                        diff: metered_rotating(
+                            pc.diff_rpc_urls.clone(),
+                            "localsim-diff",
+                            &mut meters,
+                        )?,
+                        fill: metered_rotating(
+                            if pc.fill_rpc_urls.is_empty() {
+                                pc.diff_rpc_urls.clone()
+                            } else {
+                                pc.fill_rpc_urls.clone()
+                            },
+                            "localsim-fill",
+                            &mut meters,
+                        )?,
+                        head: p.clone(),
+                    };
+                    tokio::spawn(mev_localsim::worker::run(
+                        feed,
+                        endpoints,
+                        presim_watch.clone(),
+                        tx.clone(),
+                        fb_tx,
+                        localsim_stats.clone(),
+                    ));
+                    info!("local feed simulation on (revm, diff-fed state)");
+                    fb_rx
+                } else {
+                    feed
+                };
                 tokio::spawn(mev_presim::run(
-                    feed,
+                    rpc_feed,
                     p,
                     pc.max_in_flight,
                     Duration::from_millis(pc.timeout_ms),
@@ -284,6 +341,7 @@ impl Engine {
             native,
             usd_decimals,
             max_loan,
+            search_loan,
             sim,
             sender,
             risk,
@@ -294,11 +352,13 @@ impl Engine {
             presim_rx,
             feed_log,
             presim_stats,
+            localsim_stats,
             presim_watch,
             meters,
             gas_price: Default::default(),
             gas_refreshing: Default::default(),
             route_lookups: HashMap::new(),
+            cycles: Default::default(),
         })
     }
 
@@ -308,6 +368,8 @@ impl Engine {
         let mut resync = tokio::time::interval(Duration::from_secs(60));
         let mut summary = tokio::time::interval(Duration::from_secs(60));
         let mut backoff = Backoff::default();
+        self.rebuild_cycles();
+        info!(cycles = self.cycles.len(), "triangular cycles indexed");
         let mut liq_rx = self.liq.as_mut().and_then(|l| l.rx.take());
         let mut presim_rx = self.presim_rx.take();
         // Created once, outside the loops: a signal arriving while a handler runs is not lost.
@@ -366,6 +428,7 @@ impl Engine {
                             warn!(error = %e, "resync failed");
                         }
                         *self.presim_watch.write().unwrap() = watchlist(&self.store);
+                        self.rebuild_cycles();
                     }
                     _ = summary.tick() => self.log_summary(),
                     _ = &mut shutdown => { info!("shutting down"); return Ok(()); }
@@ -506,6 +569,21 @@ impl Engine {
         wei
     }
 
+    /// Can the executor fund `o`: a flash swap (no lender) or a Balancer loan within its cap.
+    fn fundable(&self, o: &Opportunity) -> bool {
+        (self.cfg.executor_flash_swaps && mev_bindings::flash_swappable(o))
+            || self
+                .max_loan
+                .get(&o.loan_token)
+                .is_some_and(|cap| f64::from(o.amount_in) <= *cap)
+    }
+
+    /// Re-enumerate triangular cycles over the current pool set.
+    fn rebuild_cycles(&mut self) {
+        let loans: Vec<Address> = self.search_loan.keys().copied().collect();
+        self.cycles = mev_search::cycles::CycleIndex::build(&self.store, &loans, MAX_CYCLES);
+    }
+
     fn price(&self, token: Address) -> Option<f64> {
         self.store
             .usd_per_raw_unit(token, self.usd, self.usd_decimals, self.native)
@@ -515,6 +593,9 @@ impl Engine {
         self.metrics.heartbeat();
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
             info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
+            if self.cfg.presim.as_ref().is_some_and(|p| p.local) {
+                info!(stats = %self.localsim_stats.take_summary(), "localsim (last minute)");
+            }
         }
         // RPC usage since the last summary (≈ per minute): the data-efficiency scoreboard.
         let mut usage = serde_json::Map::new();
@@ -567,11 +648,25 @@ impl Engine {
     ) {
         let price = |t: Address| self.price(t);
         let params = SearchParams {
-            max_loan: &self.max_loan,
+            max_loan: &self.search_loan,
             usd_per_raw: &price,
             min_est_profit_usd: self.cfg.risk.min_profit_usd,
         };
-        let Some(opp) = two_pool_arbs(&self.store, pool, &params).into_iter().next() else {
+        // Best fundable two-pool and triangular candidates touching this pool.
+        let fundable = |o: &Opportunity| self.fundable(o);
+        let two = two_pool_arbs(&self.store, pool, &params)
+            .into_iter()
+            .find(fundable);
+        let tri = self
+            .cycles
+            .arbs(&self.store, pool, &params)
+            .into_iter()
+            .find(fundable);
+        let Some(opp) = [two, tri]
+            .into_iter()
+            .flatten()
+            .max_by(|a, b| a.est_profit_usd.total_cmp(&b.est_profit_usd))
+        else {
             return;
         };
         let loan_px = self.price(opp.loan_token).unwrap_or(0.0);
@@ -1048,7 +1143,8 @@ async fn wire_executor(
                 .cloned()
                 .chain(secrets.extra_http_urls.iter().cloned())
                 .collect();
-            let s = Sender::new(pk, rpc.http.clone(), &extra, exec, cfg.chain_id).await?;
+            let mut s = Sender::new(pk, rpc.http.clone(), &extra, exec, cfg.chain_id).await?;
+            s.flash_swaps = cfg.executor_flash_swaps;
             if s.address != owner {
                 bail!(
                     "PRIVATE_KEY address {} is not the executor owner {owner}",
@@ -1062,7 +1158,9 @@ async fn wire_executor(
         (None, Mode::Live) => bail!("live mode needs PRIVATE_KEY"),
         _ => None,
     };
-    Ok((Some(Simulator::new(rpc.http.clone(), exec, owner)), sender))
+    let mut sim = Simulator::new(rpc.http.clone(), exec, owner);
+    sim.flash_swaps = cfg.executor_flash_swaps;
+    Ok((Some(sim), sender))
 }
 
 /// Build the liquidation runner from config: one adapter per enabled protocol section.

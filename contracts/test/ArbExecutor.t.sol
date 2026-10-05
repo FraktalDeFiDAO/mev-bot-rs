@@ -240,6 +240,71 @@ contract ArbExecutorForkTest is Test {
         exec.execute(USDC, 5_000e6, 1_000_000e6, hops);
     }
 
+    /// Flash-swap route (profit in WETH): sell WETH on Uniswap V3 (the pool fronts the USDC), buy
+    /// the cheap WETH back on Sushi after `_createArb`, repay the V3 pool in WETH.
+    function _flashRoute() internal view returns (ArbExecutor.Hop[] memory hops) {
+        bool usdcIsToken0OnSushi = IV2Pair(sushiPair).token0() == USDC;
+        hops = new ArbExecutor.Hop[](2);
+        hops[0] = ArbExecutor.Hop(2, v3Pool, WETH, USDC, WETH < USDC, 0);
+        hops[1] = ArbExecutor.Hop(0, sushiPair, USDC, WETH, usdcIsToken0OnSushi, 30);
+    }
+
+    function test_flashSwapCapturesRealArbAndHoldsNothing() public {
+        _createArb(30 ether);
+        uint256 before = IERC20Full(WETH).balanceOf(receiver);
+        ArbExecutor.Hop[] memory hops = _flashRoute();
+        vm.prank(owner);
+        uint256 profit = exec.executeFlashSwap(2 ether, 1e12, hops);
+        assertGt(profit, 1e12, "expected profit");
+        assertEq(IERC20Full(WETH).balanceOf(receiver) - before, profit, "profit to receiver");
+        assertEq(IERC20Full(USDC).balanceOf(address(exec)), 0, "executor holds no USDC");
+        assertEq(IERC20Full(WETH).balanceOf(address(exec)), 0, "executor holds no WETH");
+        emit log_named_decimal_uint("flash-swap profit WETH", profit, 18);
+    }
+
+    function test_flashSwapOnlyOwnerAndRouteChecks() public {
+        ArbExecutor.Hop[] memory hops = _flashRoute();
+        vm.prank(attacker);
+        vm.expectRevert(ArbExecutor.NotOwner.selector);
+        exec.executeFlashSwap(1 ether, 0, hops);
+
+        // First hop must be a V3-style pool.
+        ArbExecutor.Hop[] memory v2First = _route();
+        vm.prank(owner);
+        vm.expectRevert(ArbExecutor.BadRoute.selector);
+        exec.executeFlashSwap(1_000e6, 0, v2First);
+
+        // Route must return to its starting token.
+        ArbExecutor.Hop[] memory open = new ArbExecutor.Hop[](2);
+        open[0] = hops[0];
+        open[1] = hops[0];
+        vm.prank(owner);
+        vm.expectRevert(ArbExecutor.BadRoute.selector);
+        exec.executeFlashSwap(1 ether, 0, open);
+    }
+
+    function test_flashSwapUnprofitableAndMinProfitRevert() public {
+        ArbExecutor.Hop[] memory hops = _flashRoute();
+        vm.prank(owner);
+        vm.expectRevert(); // no gap: the round trip loses fees
+        exec.executeFlashSwap(1 ether, 0, hops);
+
+        _createArb(30 ether);
+        vm.prank(owner);
+        vm.expectRevert(); // absurd minimum
+        exec.executeFlashSwap(2 ether, 1_000 ether, hops);
+    }
+
+    function test_flashCallbackRejectsCallsOutsideAFlashSwap() public {
+        bytes memory data = abi.encode(uint256(0), _flashRoute());
+        vm.prank(v3Pool); // the real pool, but no flash swap of ours is running
+        vm.expectRevert(ArbExecutor.Unauthorized.selector);
+        exec.uniswapV3SwapCallback(0, -1, data);
+        vm.prank(attacker);
+        vm.expectRevert(ArbExecutor.Unauthorized.selector);
+        exec.algebraSwapCallback(0, -1, data);
+    }
+
     /// Round trip through a V3-style pool and back via Sushi V2 after creating an arb, so the new
     /// callback is exercised for real. `v3Like` = Pancake V3 or Algebra pool for WETH/USDC.
     /// `dump` = WETH dumped into Sushi to create the gap. Kept small for concentrated-liquidity

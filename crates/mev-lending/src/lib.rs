@@ -139,7 +139,7 @@ pub trait LiquidationAdapter: Send + Sync {
     /// liquidatable, from cached state only (no RPC: this runs on the latency-critical path).
     /// They can't be simulated (the chain doesn't have the price yet); the executor's on-chain
     /// profit check is the guard. Default: no prediction.
-    fn predict(&self, _feed: Address, _answer: f64) -> Vec<Plan> {
+    fn predict(&self, _feed: Address, _answer: f64, _executor: Address) -> Vec<Plan> {
         Vec::new()
     }
 

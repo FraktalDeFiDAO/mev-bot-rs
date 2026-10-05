@@ -1,5 +1,7 @@
 //! Arbitrage search over the pool store. Pure computation — no I/O.
 
+pub mod cycles;
+
 use std::collections::HashMap;
 
 use alloy::primitives::U256;
@@ -107,7 +109,7 @@ pub fn best_route(
     best
 }
 
-fn hop(pool: &Pool, token_in: Address, token_out: Address) -> Hop {
+pub(crate) fn hop(pool: &Pool, token_in: Address, token_out: Address) -> Hop {
     Hop {
         kind: pool.info.kind.hop_kind(),
         pool: pool.info.address,
@@ -122,7 +124,7 @@ fn hop(pool: &Pool, token_in: Address, token_out: Address) -> Hop {
 }
 
 /// Maximize a concave profit function on [0, cap] by ternary search. Returns (amount, profit).
-fn best_size(cap: f64, f: impl Fn(f64) -> f64) -> (f64, f64) {
+pub(crate) fn best_size(cap: f64, f: impl Fn(f64) -> f64) -> (f64, f64) {
     let (mut lo, mut hi) = (0.0, cap);
     for _ in 0..100 {
         let m1 = lo + (hi - lo) / 3.0;

@@ -69,20 +69,20 @@ R replay tested · B benchmarked · Doc documented.
 |---|---|---|---|---|---|---|---|---|---|
 | 0 Audit + map | ✔ | ✔ | – | – | – | – | – | – | ✔ |
 | 1 REVM correctness baseline | ✔ | ✔ | ✔ (probe) | ✔ | ✔ | ✔ (live probe) | | ✔ (p50/p90/p99) | ✔ |
-| 2 Hot-state DB: block diffs + snapshot + overlays | ✔ | ✔ | partial (diff-fed cache) | ✔ | ✔ | ✔ (live probe: 124/124 same-block) | | ✔ (diff p50 ~170 ms, sim p50 0.4 ms) | ✔ |
-| 3 Persistent parallel workers | ✔ | | | | | | | | |
+| 2 Hot-state DB: block diffs + snapshot + overlays | ✔ | ✔ | ✔ (diff-fed cache, pending overlay, worker) | ✔ | ✔ | ✔ (exact where complete; live coverage ~7 % → off, DECISIONS #45) | | ✔ (diff p50 ~170 ms, sim p50 0.4 ms) | ✔ |
+| 3 Persistent parallel workers | ✔ | ✔ | partial (one persistent worker owns cache + overlay; no per-sim DB setup) | ✔ | ✔ | ✔ | | ✔ (0.4 ms/tx, one core suffices at feed rate) | ✔ |
 | 4 DEX adapters + full-path REVM | ✔ | | | | | | | | |
-| 5 Two-pool / triangular / multi-hop | ✔ | | | | | | | | |
-| 6 Funding abstraction | ✔ | | | | | | | | |
-| 7 Aave flash-loan arbitrage | ✔ | | | | | | | | |
-| 8 DEX-native flash swaps | ✔ | | | | | | | | |
+| 5 Two-pool / triangular / multi-hop | ✔ | ✔ | ✔ (two-pool + triangular `CycleIndex`, pool-indexed) | ✔ | ✔ | | | | ✔ |
+| 6 Funding abstraction | ✔ | ✔ | ✔ (`arb_calldata`: flash swap or Balancer per route; `fundable`) | ✔ | ✔ | | | | ✔ |
+| 7 Aave flash-loan arbitrage | ✔ | ✔ (rejected: 5 bps fee > typical margin; flash swaps cover the depth) | – | | | | | | ✔ |
+| 8 DEX-native flash swaps | ✔ | ✔ | ✔ (`executeFlashSwap`) | ✔ | ✔ (fuzz + invariant suite) | ✔ (fork: real arb captured, guards) | | | ✔ |
 | 9 Aave liquidation index | ✔ | ✔ | ✔ (event index + predict) | ✔ | ✔ | ✔ | ✔ (`mev-liq-audit`) | | ✔ |
 | 10 Flash-funded liquidation | ✔ | ✔ | ✔ (Balancer) | ✔ | ✔ | ✔ (fork E2E) | | | ✔ |
 | 11 Liquidation route optimizer | ✔ | | partial (≤2 hops) | | | | | | |
 | 12 Liquidation + arbitrage routes | ✔ | | | | | | | | |
-| 13 Shadow books | ✔ | partial (Aave predict) | partial | | | | | | |
+| 13 Shadow books | ✔ | ✔ (Aave + Compound predict) | ✔ (Aave, Compound; Morpho/Fluid poll) | ✔ | ✔ | ✔ (live: Compound 0 @ today, 861 @ −40 %) | | | ✔ |
 | 14 Dependency invalidation | ✔ | | partial (`affected`) | | | | | | |
-| 15 Arbitrum fee / competition | ✔ | | | | | | | | |
+| 15 Arbitrum fee / competition | ✔ | ✔ | ✔ (calibrated L2 gas; L1 share measured negligible) | ✔ | | ✔ (receipts) | | | ✔ |
 | 16 Low-latency feed | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | | partial (race telemetry) | ✔ |
 | 17 Historical replay | ✔ | | partial (liquidations) | | | | | | |
 | 18 Profile-driven hardening | ongoing | | | | | | | | |
@@ -109,3 +109,56 @@ R replay tested · B benchmarked · Doc documented.
 
 revm execution is correct on complete, same-block state. Remaining gap: freshness (the last block)
 and completeness (first sight). Step 2: speculative overlay of feed txs + pre-warming.
+
+## Phase 5: triangular arbitrage
+
+`mev_search::cycles::CycleIndex` enumerates directed triangles `L → X → Y → L` (three distinct
+pools, `L` a loanable token) once at startup and on each resync, capped at 20 000, indexed by pool.
+A pool update prices only the cycles containing it: marginal-rate screen (product > 1 after fees),
+then the same ternary size search as two-pool. The engine takes the best of two-pool and triangular
+per update; the executor already runs any hop chain. Gas is priced per hop (below).
+
+## Phase 13: shadow books, wrapped price feeds
+
+Compound v3 predicts absorbs from a pending Chainlink report like Aave does. Two oracle defects
+found and fixed on the way (they affected every adapter):
+
+- **Wrapped feeds were not watched.** SVR proxies, CAPO adapters and custom wrappers revert on
+  every aggregator getter, so their underlying aggregators never triggered anything. The resolver
+  now follows `eth_createAccessList(latestRoundData)` to the contracts the feed reads.
+- **Baseline answers were unreadable.** Access-controlled aggregators only serve reads where
+  `msg.sender == tx.origin`; Multicall3 calls failed silently. Answers are read by direct
+  `eth_call` (`mev_oracle::latest_answers`).
+
+Feeds are not assumed proportional to their aggregator (wrappers rescale, compose or invert). Each
+(aggregator, Comet, asset) link is +1 when price and answer differ by a power of ten, otherwise
+learned from two sweeps where the answer moved ≥ 0.05 %; unknown links are never repriced.
+
+## Phase 15: fee model (measured 2026-10-05)
+
+A real two-hop arbitrage: 314 399 L2 gas, of which 570 for L1 data (548 calldata bytes, ~1 gas per
+byte, 0.2 %), at 0.0201 gwei. The per-hop estimate (`arb_gas_estimate`: 100k + 115k × hops) is
+calibrated on live receipts; the L1 component is below its error and isn't modelled per trade.
+Priority fees don't reorder non-express transactions (FCFS after the Timeboost delay), so the
+competition budget is latency, not gas bidding.
+
+## Phase 2 result: off on free infrastructure (2026-10-05)
+
+Measured on live traffic (worker vs mined receipts): the worker keeps up (dRPC diffs ~210 blocks/min,
+lag 0-3, overlay rebuild ~0.5 s/min) and its complete predictions match the chain in 2-4 ms, but only
+~7 % of feed txs complete locally and almost no pool-moving ones. Pool movers touch first-sight
+state (new users' balances and allowances, newly crossed ticks); each such key costs an RPC round,
+which is the latency of the RPC presim it would replace. Defects found and fixed on the way:
+per-field fills got rate-limited (78 % failed) → one `eth_getProof` per address; head polling at
+block rate tipped arb1 into 429 for the host → head from the feed's sequence number; unconfirmed
+pending txs could make every block rebuild re-run hundreds of txs → 3 s expiry. Revisit with an own
+node (DECISIONS #45).
+
+## Phase 8: flash swaps
+
+`executeFlashSwap(amount, minProfit, hops)`: the first hop's V3-style pool pays out first; the rest
+of the route runs inside its swap callback and the pool is repaid from the proceeds (guard: a
+transient `flashPool`, only the pool we started, once; inner V3 hops keep the `expectedPool` guard).
+Fork tests capture a real arbitrage with nothing left in the executor. Balancer's Arbitrum balances
+(~$14k USDC, 95 WETH, 3 WBTC) capped Balancer-funded loans; flash swaps lift that for V3-first
+routes. Aave `flashLoanSimple` was not added: its 5 bps fee exceeds typical arbitrage margins.

@@ -2,7 +2,9 @@
 
 use alloy::{
     primitives::{Address, U256},
-    providers::DynProvider,
+    providers::{DynProvider, Provider},
+    rpc::types::TransactionRequest,
+    sol_types::SolCall,
 };
 use anyhow::Result;
 use mev_bindings::{ArbExecutor, to_sol_call, to_sol_hop};
@@ -19,6 +21,8 @@ pub struct Simulator {
     provider: DynProvider,
     executor: Address,
     owner: Address,
+    /// The deployed executor has `executeFlashSwap` (must match the sender's setting).
+    pub flash_swaps: bool,
 }
 
 impl Simulator {
@@ -27,23 +31,38 @@ impl Simulator {
             provider,
             executor,
             owner,
+            flash_swaps: false,
         }
+    }
+
+    /// The executor call for `opp` as its owner (flash swap or Balancer, see `arb_calldata`).
+    fn arb_request(&self, opp: &Opportunity, min_profit: U256) -> TransactionRequest {
+        TransactionRequest::default()
+            .from(self.owner)
+            .to(self.executor)
+            .input(mev_bindings::arb_calldata(opp, min_profit, self.flash_swaps).into())
+    }
+
+    /// `eth_call` the arbitrage; the executor returns its profit.
+    async fn call_arb(&self, req: &TransactionRequest) -> std::result::Result<U256, String> {
+        let raw = self
+            .provider
+            .call(req.clone())
+            .await
+            .map_err(|e| short(&e.to_string()))?;
+        ArbExecutor::executeCall::abi_decode_returns(&raw).map_err(|e| short(&e.to_string()))
     }
 
     /// `eth_call` the executor as its owner; if it returns profit, estimate gas (on Arbitrum the
     /// estimate includes the L1 data cost).
     pub async fn simulate(&self, opp: &Opportunity, min_profit: U256) -> Result<SimOutcome> {
-        let exec = ArbExecutor::new(self.executor, &self.provider);
-        let hops: Vec<_> = opp.hops.iter().map(to_sol_hop).collect();
-        let builder = exec
-            .execute(opp.loan_token, opp.amount_in, min_profit, hops)
-            .from(self.owner);
-        match builder.call().await {
-            Ok(profit) => match builder.estimate_gas().await {
+        let req = self.arb_request(opp, min_profit);
+        match self.call_arb(&req).await {
+            Ok(profit) => match self.provider.estimate_gas(req).await {
                 Ok(gas) => Ok(SimOutcome::Profitable { profit, gas }),
                 Err(e) => Ok(SimOutcome::Reverted(format!("estimate_gas: {e}"))),
             },
-            Err(e) => Ok(SimOutcome::Reverted(short(&e.to_string()))),
+            Err(e) => Ok(SimOutcome::Reverted(e)),
         }
     }
 }
@@ -57,17 +76,12 @@ pub fn arb_gas_estimate(hops: usize) -> u64 {
 impl Simulator {
     /// Latency-critical path: a single eth_call, no estimate_gas round-trip.
     pub async fn simulate_fast(&self, opp: &Opportunity, min_profit: U256) -> Result<SimOutcome> {
-        let exec = ArbExecutor::new(self.executor, &self.provider);
-        let hops: Vec<_> = opp.hops.iter().map(to_sol_hop).collect();
-        let builder = exec
-            .execute(opp.loan_token, opp.amount_in, min_profit, hops)
-            .from(self.owner);
-        match builder.call().await {
+        match self.call_arb(&self.arb_request(opp, min_profit)).await {
             Ok(profit) => Ok(SimOutcome::Profitable {
                 profit,
                 gas: arb_gas_estimate(opp.hops.len()),
             }),
-            Err(e) => Ok(SimOutcome::Reverted(short(&e.to_string()))),
+            Err(e) => Ok(SimOutcome::Reverted(e)),
         }
     }
 }

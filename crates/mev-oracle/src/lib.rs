@@ -7,7 +7,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use alloy::{primitives::Address, providers::DynProvider};
+use alloy::{
+    primitives::Address,
+    providers::{DynProvider, Provider},
+    rpc::types::TransactionRequest,
+    sol_types::SolCall,
+};
 use anyhow::Result;
 use mev_bindings::IPriceSource;
 use mev_rpc::{call, decode, multicall};
@@ -66,18 +71,72 @@ pub async fn resolve_aggregators(
             } else if !wrapped.is_empty() {
                 next.extend(wrapped.into_iter().map(|x| (x, *origin)));
             } else {
-                // Unknown shape (custom oracle): watch the contract itself — harmless if unused.
-                debug!(source = %c, "price source has no known aggregator getter; watching it directly");
-                out.entry(*c).or_default().push(*origin);
+                // Unknown shape (SVR / CAPO wrappers, custom oracles): follow the contracts that
+                // `latestRoundData` reads. A leaf (reads only itself) is the aggregator.
+                let inner = touched(p, *c).await;
+                if inner.is_empty() {
+                    debug!(source = %c, "price source reads no other contract; watching it directly");
+                    out.entry(*c).or_default().push(*origin);
+                } else {
+                    next.extend(inner.into_iter().map(|x| (x, *origin)));
+                }
             }
         }
         frontier = next;
+    }
+    // Chains deeper than MAX_DEPTH: watch where resolution stopped.
+    for (c, origin) in frontier {
+        out.entry(c).or_default().push(origin);
     }
     for v in out.values_mut() {
         v.sort();
         v.dedup();
     }
     Ok(out)
+}
+
+/// Latest answers of Chainlink aggregators, by direct `eth_call` per aggregator (concurrent).
+/// Not via Multicall3: access-controlled aggregators only serve callers where
+/// `msg.sender == tx.origin`. Unreadable aggregators are left out.
+pub async fn latest_answers(p: &DynProvider, aggregators: &[Address]) -> HashMap<Address, f64> {
+    use futures::StreamExt;
+    futures::stream::iter(aggregators.iter().copied())
+        .map(|a| async move {
+            let tx = TransactionRequest::default()
+                .to(a)
+                .input(IPriceSource::latestAnswerCall {}.abi_encode().into());
+            let raw = p.call(tx).await.ok()?;
+            let v = IPriceSource::latestAnswerCall::abi_decode_returns(&raw).ok()?;
+            Some((a, v.to_string().parse::<f64>().ok()?))
+        })
+        .buffer_unordered(8)
+        .filter_map(|x| async move { x })
+        .collect()
+        .await
+}
+
+/// Contracts other than `c` that `c.latestRoundData()` reads (`eth_createAccessList`). Empty if
+/// none or if the endpoint doesn't serve access lists.
+async fn touched(p: &DynProvider, c: Address) -> Vec<Address> {
+    // Explicit gas limit: some endpoints otherwise charge the call the block gas cap and reject it
+    // for insufficient funds (and a zero gas price is rejected post-London).
+    let tx = TransactionRequest::default()
+        .to(c)
+        .gas_limit(2_000_000)
+        .input(IPriceSource::latestRoundDataCall {}.abi_encode().into());
+    match p.create_access_list(&tx).await {
+        Ok(r) => r
+            .access_list
+            .0
+            .into_iter()
+            .map(|i| i.address)
+            .filter(|a| *a != c)
+            .collect(),
+        Err(e) => {
+            debug!(source = %c, error = %e, "access list unavailable");
+            vec![]
+        }
+    }
 }
 
 /// Chainlink node operators submit reports through per-operator `AuthorizedForwarder` contracts:

@@ -147,6 +147,16 @@ pub struct PresimConfig {
     /// Give up on a simulation after this long: its result would arrive after the block.
     #[serde(default = "default_presim_timeout_ms")]
     pub timeout_ms: u64,
+    /// Simulate feed txs in-process (revm over a state cache kept exact by per-block diffs);
+    /// `rpc_urls` then only serves candidates whose state isn't cached yet.
+    #[serde(default)]
+    pub local: bool,
+    /// Must serve `debug_traceBlockByNumber` with `prestateTracer` (dRPC does; PublicNode/arb1 don't).
+    #[serde(default)]
+    pub diff_rpc_urls: Vec<String>,
+    /// State reads at a block for cache misses.
+    #[serde(default)]
+    pub fill_rpc_urls: Vec<String>,
 }
 
 fn default_presim_in_flight() -> usize {
@@ -177,6 +187,10 @@ pub struct ChainConfig {
     pub sequencer_rpc: Option<String>,
     pub min_pool_liquidity_usd: f64,
     pub gas_limit_estimate: u64,
+    /// The deployed executor has `executeFlashSwap`: routes starting on a V3-style pool run
+    /// without a lender (no fee, no lender-balance cap). Only set after deploying that executor.
+    #[serde(default)]
+    pub executor_flash_swaps: bool,
     pub tokens: HashMap<String, Address>,
     /// Tokens we may flash-borrow (must be held by the Balancer vault).
     pub loan_tokens: Vec<String>,

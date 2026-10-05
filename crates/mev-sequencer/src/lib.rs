@@ -45,7 +45,15 @@ pub struct SequencedTx {
     pub tx: TxEnvelope,
 }
 
+/// Arbitrum One's Nitro genesis block: L2 block number = feed sequence number + this.
+pub const ARB_ONE_GENESIS_BLOCK: u64 = 22_207_817;
+
 impl SequencedTx {
+    /// The L2 block this tx was sequenced into (Arbitrum One).
+    pub fn block(&self) -> u64 {
+        self.seq + ARB_ONE_GENESIS_BLOCK
+    }
+
     /// 4-byte function selector, if any.
     pub fn selector(&self) -> Option<[u8; 4]> {
         self.input.get(..4).map(|s| [s[0], s[1], s[2], s[3]])

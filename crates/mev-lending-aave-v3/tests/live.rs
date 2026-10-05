@@ -127,7 +127,7 @@ async fn predicts_liquidations_from_a_price_report_on_real_positions() {
         .unwrap();
 
     // Same price as the snapshot: nothing newly crosses (calibration reproduces on-chain HFs).
-    let same = a.predict(eth_usd, now);
+    let same = a.predict(eth_usd, now, Address::ZERO);
     assert!(
         same.is_empty(),
         "calibration: {} predicted at today's price ({} already liquidatable on-chain)",
@@ -135,7 +135,7 @@ async fn predicts_liquidations_from_a_price_report_on_real_positions() {
         liquidatable_now
     );
     // ETH -40% (prices persist, so this is relative to the answer just reported).
-    let crash = a.predict(eth_usd, now * 0.6);
+    let crash = a.predict(eth_usd, now * 0.6, Address::ZERO);
     eprintln!(
         "{} accounts, {} at-risk swept, liquidatable now {}, predicted at today's price {}, at -40% {}",
         accounts.len(),
