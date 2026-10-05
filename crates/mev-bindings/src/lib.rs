@@ -102,6 +102,9 @@ sol! {
         function BASE_FEED_2() external view returns (address);
         function QUOTE_FEED_1() external view returns (address);
         function QUOTE_FEED_2() external view returns (address);
+        // Any Chainlink-style feed: traced (access list) when no getter above resolves it.
+        function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80);
+        function latestAnswer() external view returns (int256);
     }
 
     #[sol(rpc)]

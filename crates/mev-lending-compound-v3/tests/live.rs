@@ -58,3 +58,72 @@ async fn reads_all_comets_storefronts_and_builds_valid_plans() {
         }
     }
 }
+
+/// Backrun prediction on real positions: sweep the bot's cached Comet accounts (fills the
+/// snapshot), then for every collateral price feed predict at today's answer (calibration: nothing
+/// newly crosses) and at -40 % (borrowers on volatile collateral cross, with well-formed plans).
+#[tokio::test]
+#[ignore = "network"]
+async fn predicts_absorbs_from_a_price_report_on_real_positions() {
+    alloy::sol! {
+        #[sol(rpc)]
+        interface IAgg { function latestAnswer() external view returns (int256); }
+    }
+    let cache = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../data/arbitrum/compound_v3_borrowers.json");
+    if !cache.exists() {
+        eprintln!("skipping: no {}", cache.display());
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let idx = dir.path().join("compound_v3_borrowers.json");
+    std::fs::copy(&cache, &idx).unwrap();
+    let c = mev_config::ChainConfig::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/arbitrum.toml"),
+    )
+    .unwrap()
+    .compound_v3
+    .unwrap();
+    let r = rpc();
+    let a = CompoundV3Adapter::new(c, r.clone(), idx).await.unwrap();
+    let accounts = a.accounts();
+    a.health(&accounts, false).await.unwrap();
+    eprintln!("snapshot: {:?}", a.snapshot_summary());
+    let exec = Address::repeat_byte(0xee);
+    let (mut same, mut crash) = (0, 0);
+    for feed in a.price_feeds() {
+        let Ok(now) = IAgg::new(feed, &r.fast).latestAnswer().call().await else {
+            continue;
+        };
+        let now: f64 = now.to_string().parse().unwrap();
+        same += a.predict(feed, now, exec).len();
+        let plans = a.predict(feed, now * 0.6, exec);
+        for p in &plans {
+            assert!(p.flash_amount > alloy::primitives::U256::ZERO && p.bonus_usd > 0.0);
+            assert_eq!(p.calls.len(), 2, "absorb + buyCollateral");
+            let absorb = IComet::absorbCall::abi_decode(&p.calls[0].data).unwrap();
+            assert_eq!(
+                (absorb.absorber, absorb.accounts[0]),
+                (exec, p.account.account)
+            );
+        }
+        crash += plans.len();
+        // Restore the snapshot's answer so the next feed starts from today's state.
+        a.predict(feed, now, exec);
+    }
+    eprintln!(
+        "{} accounts, predicted at today's price {same}, at -40% {crash}",
+        accounts.len()
+    );
+    assert_eq!(
+        same, 0,
+        "calibration: nothing newly crosses at today's prices"
+    );
+    let (_, answers, known, links) = a.snapshot_summary();
+    eprintln!("answers {answers}, links with a measured elasticity {known}/{links}");
+    assert!(
+        answers > 0,
+        "aggregator answers must be readable for the baseline"
+    );
+    assert!(known > 0, "plain proxies are classified from one sweep");
+}

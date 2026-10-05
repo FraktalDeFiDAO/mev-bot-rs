@@ -297,7 +297,11 @@ impl Runner {
         let mut predicted: Vec<Plan> = Vec::new();
         for i in hits.iter().copied() {
             let Some((_, answer)) = report else { break };
-            predicted.extend(self.slots[i].adapter.predict(feed, answer));
+            predicted.extend(
+                self.slots[i]
+                    .adapter
+                    .predict(feed, answer, self.cfg.executor),
+            );
         }
         predicted.sort_by(|a, b| b.bonus_usd.total_cmp(&a.bonus_usd));
         {
@@ -459,7 +463,7 @@ mod tests {
             feed == self.feed
         }
         /// Below $3000 (ETH/USD, 8 decimals) the fake account becomes liquidatable.
-        fn predict(&self, feed: Address, answer: f64) -> Vec<Plan> {
+        fn predict(&self, feed: Address, answer: f64, _executor: Address) -> Vec<Plan> {
             if feed != self.feed || answer >= 3_000e8 {
                 return vec![];
             }

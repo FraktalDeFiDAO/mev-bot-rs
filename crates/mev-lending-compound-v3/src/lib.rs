@@ -18,6 +18,7 @@ pub mod math;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
+    sync::Mutex,
     time::Duration,
 };
 
@@ -36,7 +37,7 @@ use mev_lending::{
 };
 use mev_lending_index::{EventIndex, IndexConfig, market_key, topic_address};
 use mev_rpc::{call, decode, multicall};
-use tracing::info;
+use tracing::{info, warn};
 
 pub const ID: ProtocolId = "compound-v3";
 /// `AccountRef::sub_id` values.
@@ -44,6 +45,11 @@ pub const BORROWER: u64 = 0;
 pub const STOREFRONT: u64 = 1;
 
 sol! {
+    #[sol(rpc)]
+    interface IAggregator {
+        function latestAnswer() external view returns (int256);
+    }
+
     #[sol(rpc)]
     interface IComet {
         struct AssetInfo { uint8 offset; address asset; address priceFeed; uint64 scale; uint64 borrowCollateralFactor; uint64 liquidateCollateralFactor; uint64 liquidationFactor; uint128 supplyCap; }
@@ -105,7 +111,87 @@ pub struct CompoundV3Adapter {
     index: EventIndex,
     /// Aggregator -> Comets whose collateral it prices.
     feeds: HashMap<Address, HashSet<Address>>,
+    /// Aggregator -> (Comet, collateral asset) it prices (for repricing on a predicted update).
+    feed_assets: HashMap<Address, HashSet<(Address, Address)>>,
+    /// Backrun prediction state, refreshed by sweeps and moved by each predicted update.
+    snapshot: Mutex<Snapshot>,
 }
+
+/// Per Comet: market (prices, factors) and at-risk borrowers' positions, as of the last sweep.
+#[derive(Default)]
+struct Snapshot {
+    comets: HashMap<Address, CometSnap>,
+    /// Aggregator -> last known answer.
+    answers: HashMap<Address, f64>,
+    /// How each (aggregator, Comet, asset) price follows its aggregator, learned across sweeps.
+    elasticity: HashMap<(Address, Address, Address), Elasticity>,
+}
+
+/// An asset price's response to its aggregator's answer: `price ∝ answer^e`. Wrappers can rescale
+/// (SVR), compose (CAPO: rate × ETH/USD) or invert (USDC priced in ETH) a feed, so `e` is measured,
+/// never assumed: +1 when price and answer differ by a power of ten, otherwise classified from
+/// two sweeps between which the answer moved. Unknown ⇒ the asset is not repriced.
+#[derive(Debug, Clone, Copy)]
+struct Elasticity {
+    price: f64,
+    answer: f64,
+    e: Option<f64>,
+}
+
+impl Elasticity {
+    fn first(price: f64, answer: f64) -> Self {
+        // A plain or rescaled proxy (e.g. SVR's 18-decimal aggregator behind an 8-decimal feed):
+        // price and answer differ by an exact power of ten.
+        let k = (answer / price).log10();
+        let plain = k.is_finite() && (k - k.round()).abs() < 1e-9;
+        Self {
+            price,
+            answer,
+            e: plain.then_some(1.0),
+        }
+    }
+
+    /// Re-measure against a new sample. The old sample is kept until the answer has moved enough
+    /// to measure (tiny moves would make the estimate noise).
+    fn update(self, price: f64, answer: f64) -> Self {
+        let now = Self::first(price, answer);
+        if now.e.is_some() {
+            return now;
+        }
+        let da = (answer / self.answer).ln();
+        if !(da.is_finite() && da.abs() > ELASTICITY_MIN_MOVE) {
+            return self;
+        }
+        let est = (price / self.price).ln() / da;
+        Self {
+            e: [1.0, -1.0].into_iter().find(|c| (est - c).abs() < 0.15),
+            ..now
+        }
+    }
+}
+
+struct CometSnap {
+    market: math::Market,
+    for_sale: bool,
+    positions: Vec<(Address, math::Position)>,
+}
+
+/// What a plan buys: `amount` of collateral `asset`, after `absorb`ing the borrower if set.
+struct Buy {
+    asset: Address,
+    amount: f64,
+    absorb: bool,
+}
+
+/// Per Comet from a sweep: market and at-risk borrowers' positions.
+type SweepSnap = Vec<(Address, math::Market, Vec<(Address, math::Position)>)>;
+
+/// Smallest aggregator move (log) that classifies an elasticity (0.05 %).
+const ELASTICITY_MIN_MOVE: f64 = 5e-4;
+/// Predicted health below this triggers a backrun (margin against rounding).
+const PREDICT_HF_MAX: f64 = 0.9995;
+/// Sweeps keep positions of borrowers below this health factor for prediction.
+const SNAPSHOT_HF: f64 = 1.10;
 
 impl CompoundV3Adapter {
     pub async fn new(cfg: CompoundV3Config, rpc: AdapterRpc, cache_path: PathBuf) -> Result<Self> {
@@ -146,6 +232,17 @@ impl CompoundV3Adapter {
                 .map(|c| c.address)
                 .collect()
         });
+        let feed_assets = mev_lending::feed_index(&aggregators, |src| {
+            comets
+                .iter()
+                .flat_map(|c| {
+                    c.assets
+                        .iter()
+                        .filter(move |a| a.feed == src)
+                        .map(move |a| (c.address, a.asset))
+                })
+                .collect()
+        });
         let index = EventIndex::open(IndexConfig {
             addresses: comets.iter().map(|c| c.address).collect(),
             topics: vec![IComet::Withdraw::SIGNATURE_HASH],
@@ -169,7 +266,134 @@ impl CompoundV3Adapter {
             comets,
             index,
             feeds,
+            feed_assets,
+            snapshot: Mutex::new(Snapshot::default()),
         })
+    }
+
+    /// Prediction snapshot overview: (Comet, at-risk positions, storefront open), aggregator
+    /// answers known, and (aggregator, Comet, asset) links with a measured elasticity / all links.
+    pub fn snapshot_summary(&self) -> (Vec<(Address, usize, bool)>, usize, usize, usize) {
+        let s = self.snapshot.lock().unwrap();
+        (
+            s.comets
+                .iter()
+                .map(|(a, c)| (*a, c.positions.len(), c.for_sale))
+                .collect(),
+            s.answers.len(),
+            s.elasticity.values().filter(|e| e.e.is_some()).count(),
+            s.elasticity.len(),
+        )
+    }
+
+    /// The executor plan for buying `amount` of `asset` (after `absorb` of `account` if set).
+    fn build_plan(
+        &self,
+        c: &Comet,
+        market: &math::Market,
+        account: AccountRef,
+        buy: Buy,
+        executor: Address,
+    ) -> Option<Plan> {
+        let Buy {
+            asset,
+            amount,
+            absorb,
+        } = buy;
+        let q = market.quote(asset, amount)?;
+        if q.base_amount < 1.0 {
+            return None;
+        }
+        let base_amount = U256::from(q.base_amount as u128);
+        let mut calls = Vec::new();
+        if absorb {
+            calls.push(ProtocolCall {
+                target: c.address,
+                data: IComet::absorbCall {
+                    absorber: executor,
+                    accounts: vec![account.account],
+                }
+                .abi_encode()
+                .into(),
+                approve_spender: Address::ZERO,
+                approve_amount: U256::ZERO,
+            });
+        }
+        calls.push(ProtocolCall {
+            target: c.address,
+            data: IComet::buyCollateralCall {
+                asset,
+                minAmount: U256::from((amount * 0.999) as u128),
+                baseAmount: base_amount,
+                recipient: executor,
+            }
+            .abi_encode()
+            .into(),
+            approve_spender: c.address,
+            approve_amount: base_amount,
+        });
+        Some(Plan {
+            protocol: ID,
+            account,
+            debt_asset: c.base,
+            collateral_asset: asset,
+            flash_amount: base_amount,
+            expected_collateral: amount,
+            bonus_usd: q.discount_usd,
+            calls,
+        })
+    }
+
+    /// Keep at-risk borrowers' positions, each Comet's market and storefront state, and the
+    /// aggregators' latest answers for backrun prediction (sweep RPC; not latency-critical).
+    async fn refresh_snapshot(&self, sweep: SweepSnap) {
+        let p = &self.rpc.sweep;
+        let mut comets = HashMap::new();
+        for (addr, market, positions) in sweep {
+            let Some(c) = self.comet(addr) else { continue };
+            let for_sale = match self.storefront_state(p, c).await {
+                Ok((f, _)) => f,
+                Err(e) => {
+                    warn!(protocol = ID, error = %format!("{e:#}"), "prediction snapshot: storefront");
+                    false
+                }
+            };
+            comets.insert(
+                addr,
+                CometSnap {
+                    market,
+                    for_sale,
+                    positions,
+                },
+            );
+        }
+        // Direct eth_calls, not Multicall3: access-controlled aggregators only serve reads where
+        // msg.sender == tx.origin.
+        let aggs: Vec<Address> = self.feed_assets.keys().copied().collect();
+        let answers: HashMap<Address, f64> = mev_oracle::latest_answers(p, &aggs).await;
+        let mut snap = self.snapshot.lock().unwrap();
+        for (agg, hits) in &self.feed_assets {
+            let Some(&a) = answers.get(agg) else { continue };
+            for (comet, asset) in hits {
+                let Some(price) = comets.get(comet).and_then(|c: &CometSnap| {
+                    c.market
+                        .assets
+                        .iter()
+                        .find(|x| x.asset == *asset)
+                        .map(|x| x.price)
+                }) else {
+                    continue;
+                };
+                let k = (*agg, *comet, *asset);
+                let next = match snap.elasticity.get(&k) {
+                    Some(e) => e.update(price, a),
+                    None => Elasticity::first(price, a),
+                };
+                snap.elasticity.insert(k, next);
+            }
+        }
+        snap.comets = comets;
+        snap.answers = answers;
     }
 
     fn comet(&self, address: Address) -> Option<&Comet> {
@@ -399,6 +623,7 @@ impl LiquidationAdapter for CompoundV3Adapter {
             &self.rpc.sweep
         };
         let mut out = Vec::new();
+        let mut snap = Vec::new();
         for c in &self.comets {
             let mine: Vec<&AccountRef> =
                 accounts.iter().filter(|a| a.market == c.address).collect();
@@ -412,6 +637,7 @@ impl LiquidationAdapter for CompoundV3Adapter {
                 .filter(|a| a.sub_id == BORROWER)
                 .map(|a| a.account)
                 .collect();
+            let mut at_risk = Vec::new();
             if !users.is_empty() {
                 for (u, pos) in self.debtor_positions(p, c, &users).await? {
                     let u = &u;
@@ -419,6 +645,9 @@ impl LiquidationAdapter for CompoundV3Adapter {
                         continue;
                     }
                     let h = market.health(&pos);
+                    if !fast && h.health_factor < SNAPSHOT_HF {
+                        at_risk.push((*u, pos.clone()));
+                    }
                     out.push(Health {
                         account: AccountRef {
                             market: c.address,
@@ -430,6 +659,9 @@ impl LiquidationAdapter for CompoundV3Adapter {
                         collateral_usd: h.collateral_usd,
                     });
                 }
+            }
+            if !fast {
+                snap.push((c.address, market.clone(), at_risk));
             }
             if mine.iter().any(|a| a.sub_id == STOREFRONT) {
                 let (for_sale, reserves) = self.storefront_state(p, c).await?;
@@ -446,6 +678,9 @@ impl LiquidationAdapter for CompoundV3Adapter {
                     });
                 }
             }
+        }
+        if !fast {
+            self.refresh_snapshot(snap).await;
         }
         Ok(out)
     }
@@ -484,54 +719,97 @@ impl LiquidationAdapter for CompoundV3Adapter {
             };
             (asset, amount, true)
         };
-        let Some(q) = market.quote(asset, amount) else {
-            return Ok(None);
-        };
-        if q.base_amount < 1.0 {
-            return Ok(None);
-        }
-        let base_amount = U256::from(q.base_amount as u128);
-        let mut calls = Vec::new();
-        if absorb {
-            calls.push(ProtocolCall {
-                target: c.address,
-                data: IComet::absorbCall {
-                    absorber: executor,
-                    accounts: vec![h.account.account],
-                }
-                .abi_encode()
-                .into(),
-                approve_spender: Address::ZERO,
-                approve_amount: U256::ZERO,
-            });
-        }
-        calls.push(ProtocolCall {
-            target: c.address,
-            data: IComet::buyCollateralCall {
+        Ok(self.build_plan(
+            c,
+            &market,
+            h.account,
+            Buy {
                 asset,
-                minAmount: U256::from((amount * 0.999) as u128),
-                baseAmount: base_amount,
-                recipient: executor,
-            }
-            .abi_encode()
-            .into(),
-            approve_spender: c.address,
-            approve_amount: base_amount,
-        });
-        Ok(Some(Plan {
-            protocol: ID,
-            account: h.account,
-            debt_asset: c.base,
-            collateral_asset: asset,
-            flash_amount: base_amount,
-            expected_collateral: amount,
-            bonus_usd: q.discount_usd,
-            calls,
-        }))
+                amount,
+                absorb,
+            },
+            executor,
+        ))
     }
 
     fn price_feeds(&self) -> Vec<Address> {
         self.feeds.keys().copied().collect()
+    }
+
+    fn predict(&self, feed: Address, answer: f64, executor: Address) -> Vec<Plan> {
+        let Some(hit) = self.feed_assets.get(&feed) else {
+            return vec![];
+        };
+        let mut guard = self.snapshot.lock().unwrap();
+        let snap = &mut *guard;
+        let Some(old) = snap.answers.insert(feed, answer).filter(|o| *o != 0.0) else {
+            return vec![]; // first sighting: nothing to compare against
+        };
+        let ratio = answer / old;
+        if !(ratio.is_finite() && ratio > 0.0) {
+            return vec![];
+        }
+        let mut plans = Vec::new();
+        let elasticity = &snap.elasticity;
+        for (comet_addr, cs) in snap.comets.iter_mut() {
+            // Assets this aggregator prices on this Comet, with a measured response to it.
+            let assets: Vec<(Address, f64)> = hit
+                .iter()
+                .filter(|(c, _)| c == comet_addr)
+                .filter_map(|(_, a)| Some((*a, elasticity.get(&(feed, *comet_addr, *a))?.e?)))
+                .collect();
+            if assets.is_empty() {
+                continue;
+            }
+            let before: Vec<f64> = cs
+                .positions
+                .iter()
+                .map(|(_, p)| cs.market.health(p).health_factor)
+                .collect();
+            for a in cs.market.assets.iter_mut() {
+                if let Some((_, e)) = assets.iter().find(|(x, _)| *x == a.asset) {
+                    a.price *= ratio.powf(*e);
+                }
+            }
+            if !cs.for_sale {
+                continue; // buyCollateral would revert NotForSale
+            }
+            let Some(c) = self.comet(*comet_addr) else {
+                continue;
+            };
+            for ((user, pos), hf_before) in cs.positions.iter().zip(before) {
+                let exposed = pos
+                    .collateral
+                    .iter()
+                    .any(|(a, amt)| *amt > 0.0 && assets.iter().any(|(x, _)| x == a));
+                if !exposed || hf_before < PREDICT_HF_MAX {
+                    continue; // unaffected, or already the regular re-poll's job
+                }
+                if cs.market.health(pos).health_factor >= PREDICT_HF_MAX {
+                    continue;
+                }
+                let Some((asset, amount)) = cs.market.best_collateral(pos) else {
+                    continue;
+                };
+                let account = AccountRef {
+                    market: *comet_addr,
+                    account: *user,
+                    sub_id: BORROWER,
+                };
+                plans.extend(self.build_plan(
+                    c,
+                    &cs.market,
+                    account,
+                    Buy {
+                        asset,
+                        amount,
+                        absorb: true,
+                    },
+                    executor,
+                ));
+            }
+        }
+        plans
     }
 
     fn affected(&self, feed: Address, account: &AccountRef) -> bool {
@@ -549,5 +827,46 @@ impl LiquidationAdapter for CompoundV3Adapter {
             .iter()
             .flat_map(|c| std::iter::once(c.base).chain(c.assets.iter().map(|a| a.asset)))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Elasticity;
+
+    #[test]
+    fn plain_proxy_is_proportional_from_the_first_sample() {
+        assert_eq!(Elasticity::first(2727.3, 272730000000.0).e, Some(1.0));
+        assert_eq!(
+            Elasticity::first(2727.3, 2.7273e21).e,
+            Some(1.0),
+            "rescaled proxy"
+        );
+        assert_eq!(
+            Elasticity::first(3312.9, 2727.3e8).e,
+            None,
+            "composite: needs a second sample"
+        );
+    }
+
+    #[test]
+    fn learns_proportional_inverse_and_unrelated_responses() {
+        // CAPO-style composite: price = rate × answer, rate ≈ 1.2147.
+        let e = Elasticity::first(1.2147 * 2700.0, 2700e8).update(1.2147 * 2754.0, 2754e8);
+        assert_eq!(e.e, Some(1.0));
+        // Inverted (USDC priced in ETH from ETH/USD): ETH +2 % ⇒ USDC −1.96 %.
+        let e = Elasticity::first(1e18 / 2700.0, 2700e8).update(1e18 / 2754.0, 2754e8);
+        assert_eq!(e.e, Some(-1.0));
+        // Unrelated move: no class.
+        let e = Elasticity::first(1.0e8, 2700e8).update(1.001e8, 2754e8);
+        assert_eq!(e.e, None);
+    }
+
+    #[test]
+    fn tiny_moves_keep_the_old_sample() {
+        let e = Elasticity::first(1.2147 * 2700.0, 2700e8);
+        let e = e.update(1.2147 * 2700.1, 2700.1e8); // 0.004 %: below the measuring threshold
+        assert_eq!((e.price, e.e), (1.2147 * 2700.0, None));
+        assert_eq!(e.update(1.2147 * 2754.0, 2754e8).e, Some(1.0));
     }
 }
