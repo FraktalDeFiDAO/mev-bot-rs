@@ -45,9 +45,31 @@ pub struct LocalStats {
     pub lag_blocks: AtomicU64,
     /// Cache resets after a block diff couldn't be fetched.
     pub resets: AtomicU64,
+    /// Keys requested by fills / returned / misses not fetched because every fill slot was busy.
+    pub fill_keys: AtomicU64,
+    pub fill_keys_ok: AtomicU64,
+    pub fill_dropped: AtomicU64,
+    /// Pending txs after the last block (gauge) and time spent rebuilding the overlay.
+    pub pending: AtomicU64,
+    pub rebuild_us_total: AtomicU64,
+    /// Missing keys that had already been filled (should stay ~0: a fill must stick).
+    pub refills: AtomicU64,
+    /// Missing keys per contract over the period (diagnostics: where first-sight misses come from).
+    pub miss_by_addr:
+        std::sync::Mutex<std::collections::HashMap<alloy::primitives::Address, (u64, u64)>>,
 }
 
 impl LocalStats {
+    /// Contracts with the most missing keys since the last call: (address, account misses, slot
+    /// misses), top `n`.
+    pub fn take_top_misses(&self, n: usize) -> Vec<(alloy::primitives::Address, u64, u64)> {
+        let m = std::mem::take(&mut *self.miss_by_addr.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut v: Vec<_> = m.into_iter().map(|(a, (x, y))| (a, x, y)).collect();
+        v.sort_by_key(|(_, x, y)| std::cmp::Reverse(x + y));
+        v.truncate(n);
+        v
+    }
+
     pub fn take_summary(&self) -> String {
         let t = |a: &AtomicU64| a.swap(0, Relaxed);
         let (txs, complete, moved, fallback) = (
@@ -57,10 +79,19 @@ impl LocalStats {
             t(&self.fallback),
         );
         let (blocks, fills) = (t(&self.blocks_applied), t(&self.fills));
+        let (keys, keys_ok, dropped) = (
+            t(&self.fill_keys),
+            t(&self.fill_keys_ok),
+            t(&self.fill_dropped),
+        );
         let mean_us = t(&self.sim_us_total).checked_div(txs).unwrap_or(0);
+        let rebuild_ms = t(&self.rebuild_us_total) / 1000;
         format!(
             "txs={txs} local_complete={complete} local_moved_pools={moved} rpc_fallback={fallback} \
-             blocks_applied={blocks} fills={fills} mean_sim_us={mean_us} lag_blocks={} resets={}",
+             blocks_applied={blocks} fills={fills} fill_keys={keys_ok}/{keys} fill_dropped={dropped} \
+             mean_sim_us={mean_us} rebuild_ms={rebuild_ms} pending={} refills={} lag_blocks={} resets={}",
+            self.pending.load(Relaxed),
+            t(&self.refills),
             self.lag_blocks.load(Relaxed),
             self.resets.load(Relaxed)
         )
@@ -78,6 +109,11 @@ const FILL_IN_FLIGHT: usize = 4;
 const DIFF_TIMEOUT: Duration = Duration::from_secs(3);
 const DIFF_ATTEMPTS: u64 = 8;
 const FILL_TIMEOUT: Duration = Duration::from_secs(5);
+/// Backstop head poll (the feed advances the head in real time).
+const HEAD_POLL: Duration = Duration::from_secs(2);
+/// A feed-derived head this far beyond the polled one is not trusted (protects the diff fetcher
+/// from requesting blocks that don't exist if the sequence-number mapping ever changes).
+const MAX_FEED_HEAD_LEAD: u64 = 64;
 
 /// Run until the feed closes. `fallback` receives candidate txs that couldn't run locally.
 pub async fn run(
@@ -102,16 +138,17 @@ pub async fn run(
     cache.applied = start;
     let mut pending = Pending::default();
 
-    // Head follower.
+    // Chain head: advanced by every feed tx (its block, no RPC); a slow poll is the backstop if
+    // the feed stalls. Polling at block rate got the shared public endpoint to rate-limit the IP.
     let head = Arc::new(AtomicU64::new(start));
     {
         let (head, p) = (head.clone(), rpc.head.clone());
         tokio::spawn(async move {
             loop {
+                tokio::time::sleep(HEAD_POLL).await;
                 if let Ok(n) = p.get_block_number().await {
                     head.fetch_max(n, Relaxed);
                 }
-                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         });
     }
@@ -158,6 +195,8 @@ pub async fn run(
     let (ftx, mut frx) = mpsc::unbounded_channel::<(u64, Vec<Key>, Vec<(Key, Fetched)>)>();
     let fill_slots = Arc::new(Semaphore::new(FILL_IN_FLIGHT));
     let mut inflight: HashSet<Key> = HashSet::new();
+    // Keys a fill returned, for the `refills` health counter (cleared on reset).
+    let mut filled: HashSet<Key> = HashSet::new();
     let mut buffered: BTreeMap<u64, BlockDiff> = BTreeMap::new();
 
     loop {
@@ -171,13 +210,17 @@ pub async fn run(
                     match got {
                         Some((ch, hashes)) => {
                             cache.apply_block(n, ch);
+                            let t = std::time::Instant::now();
                             pending.on_block(&cache, &hashes);
+                            stats.rebuild_us_total.fetch_add(t.elapsed().as_micros() as u64, Relaxed);
+                            stats.pending.store(pending.len() as u64, Relaxed);
                             stats.blocks_applied.fetch_add(1, Relaxed);
                         }
                         None => {
                             warn!(block = n, "localsim: block diff unavailable; resetting the state cache");
                             cache.reset(n);
                             inflight.clear();
+                            filled.clear();
                             pending.on_block(&cache, &HashSet::new());
                             stats.resets.fetch_add(1, Relaxed);
                         }
@@ -191,6 +234,8 @@ pub async fn run(
                     inflight.remove(k);
                 }
                 // After a reset the fetched values may predate it: only merge recent fills.
+                stats.fill_keys_ok.fetch_add(got.len() as u64, Relaxed);
+                filled.extend(got.iter().map(|(k, _)| *k));
                 if at <= cache.applied && cache.applied - at < 64 {
                     cache.apply(got, at);
                 }
@@ -198,6 +243,10 @@ pub async fn run(
             maybe = feed.recv() => {
                 let Some(st) = maybe else { return };
                 stats.txs.fetch_add(1, Relaxed);
+                let b = st.block();
+                if b <= head.load(Relaxed) + MAX_FEED_HEAD_LEAD {
+                    head.fetch_max(b, Relaxed);
+                }
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -230,17 +279,31 @@ pub async fn run(
                 // Missing state: RPC pre-simulation for this one, fetch its keys for next time.
                 stats.fallback.fetch_add(1, Relaxed);
                 let _ = fallback.send(st);
+                {
+                    let mut m = stats.miss_by_addr.lock().unwrap_or_else(|e| e.into_inner());
+                    for k in &o.missing {
+                        match k {
+                            Key::Account(a) => m.entry(*a).or_default().0 += 1,
+                            Key::Slot(a, _) => m.entry(*a).or_default().1 += 1,
+                        }
+                    }
+                }
+                stats
+                    .refills
+                    .fetch_add(o.missing.iter().filter(|k| filled.contains(k)).count() as u64, Relaxed);
                 let want: Vec<Key> = o.missing.into_iter().filter(|k| inflight.insert(*k)).collect();
                 if want.is_empty() {
                     continue;
                 }
                 let Ok(permit) = fill_slots.clone().try_acquire_owned() else {
+                    stats.fill_dropped.fetch_add(1, Relaxed);
                     for k in &want {
                         inflight.remove(k);
                     }
                     continue;
                 };
                 stats.fills.fetch_add(1, Relaxed);
+                stats.fill_keys.fetch_add(want.len() as u64, Relaxed);
                 let (p, ftx, at) = (rpc.fill.clone(), ftx.clone(), cache.applied);
                 tokio::spawn(async move {
                     let got = tokio::time::timeout(FILL_TIMEOUT, fill(&p, &want, at))

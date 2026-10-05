@@ -333,7 +333,8 @@ impl Overlay {
 /// cache + overlay tracks the sequencer's live state instead of the last block.
 #[derive(Debug, Default)]
 pub struct Pending {
-    txs: std::collections::VecDeque<(B256, TxEnvelope, u64)>,
+    /// (hash, tx, block timestamp used, when it was pushed)
+    txs: std::collections::VecDeque<(B256, TxEnvelope, u64, std::time::Instant)>,
     pub overlay: Overlay,
     /// Pending txs whose effects are missing from the overlay (incomplete locally).
     pub gaps: usize,
@@ -341,6 +342,9 @@ pub struct Pending {
 
 /// More pending txs than this means blocks aren't being applied; the oldest are dropped.
 const MAX_PENDING: usize = 512;
+/// A sequenced tx is in a block within ~250 ms. Older pending txs were missed by the confirmed-
+/// hash match (or predate a reset); keeping them would make every block rebuild re-run them.
+const PENDING_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl Pending {
     /// Execute a newly sequenced tx on base + overlay and commit its writes if it ran from complete
@@ -358,7 +362,8 @@ impl Pending {
         } else {
             self.gaps += 1;
         }
-        self.txs.push_back((hash, tx, timestamp));
+        self.txs
+            .push_back((hash, tx, timestamp, std::time::Instant::now()));
         while self.txs.len() > MAX_PENDING {
             self.txs.pop_front();
         }
@@ -368,11 +373,12 @@ impl Pending {
     /// A block was applied to the base: drop the txs it contained and rebuild the overlay from
     /// the rest, re-executed in order on the new base.
     pub fn on_block(&mut self, cache: &StateCache, confirmed: &std::collections::HashSet<B256>) {
-        self.txs.retain(|(h, _, _)| !confirmed.contains(h));
+        self.txs
+            .retain(|(h, _, _, at)| !confirmed.contains(h) && at.elapsed() < PENDING_MAX_AGE);
         self.overlay = Overlay::default();
         self.gaps = 0;
         let txs: Vec<_> = self.txs.iter().cloned().collect();
-        for (_, tx, ts) in &txs {
+        for (_, tx, ts, _) in &txs {
             match execute(cache, Some(&self.overlay), tx, *ts) {
                 Ok((out, state)) if out.complete => self.overlay.commit(&state),
                 _ => self.gaps += 1,
@@ -395,35 +401,62 @@ fn dedup(mut v: Vec<Key>) -> Vec<Key> {
     v
 }
 
-/// Fetch `keys` as of `block` (so they are consistent with a cache applied up to it). Keys
-/// that fail are left out.
+/// Fetch `keys` as of `block`: one `eth_getProof` per address returns its balance, nonce, code
+/// hash and every wanted slot at once (3-5x fewer requests than per-field reads, which got free
+/// endpoints to rate-limit us); code is fetched only for accounts with code. Addresses run with
+/// bounded concurrency; failed addresses are left out (refetched on the next miss).
 pub async fn fill(p: &DynProvider, keys: &[Key], block: u64) -> Vec<(Key, Fetched)> {
     use futures::StreamExt;
-    // Bounded fan-out: a burst of reads gets free endpoints to rate-limit the whole IP.
-    futures::stream::iter(keys.to_vec())
-        .map(|k| {
+    let mut by_addr: std::collections::BTreeMap<Address, (bool, Vec<U256>)> = Default::default();
+    for k in keys {
+        match *k {
+            Key::Account(a) => by_addr.entry(a).or_default().0 = true,
+            Key::Slot(a, s) => by_addr.entry(a).or_default().1.push(s),
+        }
+    }
+    futures::stream::iter(by_addr)
+        .map(|(a, (account, slots))| {
             let p = p.clone();
-            async move { fetch_one(&p, k, block).await.ok().map(|f| (k, f)) }
+            async move {
+                fetch_address(&p, a, account, slots, block)
+                    .await
+                    .unwrap_or_default()
+            }
         })
         .buffer_unordered(FILL_CONCURRENCY)
-        .filter_map(|r| async move { r })
+        .flat_map(futures::stream::iter)
         .collect()
         .await
 }
 
-async fn fetch_one(p: &DynProvider, k: Key, block: u64) -> anyhow::Result<Fetched> {
+async fn fetch_address(
+    p: &DynProvider,
+    a: Address,
+    account: bool,
+    slots: Vec<U256>,
+    block: u64,
+) -> anyhow::Result<Vec<(Key, Fetched)>> {
     let at: alloy::eips::BlockId = block.into();
-    Ok(match k {
-        Key::Account(a) => {
-            let (bal, nonce, code) = tokio::try_join!(
-                p.get_balance(a).block_id(at).into_future(),
-                p.get_transaction_count(a).block_id(at).into_future(),
-                p.get_code_at(a).block_id(at).into_future(),
-            )?;
-            Fetched::Account(bal, nonce, code)
-        }
-        Key::Slot(a, s) => Fetched::Slot(p.get_storage_at(a, s).block_id(at).await?),
-    })
+    let keys: Vec<B256> = slots.iter().map(|s| B256::from(*s)).collect();
+    let proof = p.get_proof(a, keys).block_id(at).await?;
+    let mut out: Vec<(Key, Fetched)> = slots
+        .iter()
+        .zip(&proof.storage_proof)
+        .map(|(s, sp)| (Key::Slot(a, *s), Fetched::Slot(sp.value)))
+        .collect();
+    if account {
+        let code = if proof.code_hash == revm::primitives::KECCAK_EMPTY || proof.code_hash.is_zero()
+        {
+            Bytes::new()
+        } else {
+            p.get_code_at(a).block_id(at).await?
+        };
+        out.push((
+            Key::Account(a),
+            Fetched::Account(proof.balance, proof.nonce, code),
+        ));
+    }
+    Ok(out)
 }
 
 /// Concurrent state reads per fill batch.

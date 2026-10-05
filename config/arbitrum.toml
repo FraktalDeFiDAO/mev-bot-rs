@@ -154,8 +154,8 @@ max_in_flight = 16
 timeout_ms = 250
 # In-process simulation (revm, mev-localsim): every feed tx runs locally on a state cache kept
 # exact by per-block prestate diffs; rpc_urls above only serve candidates not cached yet.
-local = true
+local = false   # measured 2026-10-05: ~7 % of feed txs complete locally, ~0 pool movers (first-sight keys); enable with an own node (DECISIONS #45)
 # dRPC is the only free endpoint serving debug_traceBlockByNumber (prestateTracer). Keyless limit:
 # 120k CU/min per IP; diffs use ~22k at ~4 blocks/s. Nothing else may use it (fills got us 429'd).
 diff_rpc_urls = ["https://arbitrum.drpc.org"]
-fill_rpc_urls = ["https://arbitrum-one-rpc.publicnode.com", "https://arb1.arbitrum.io/rpc"]
+fill_rpc_urls = ["https://arbitrum-one-rpc.publicnode.com", "https://arbitrum-one.public.blastapi.io"]   # eth_getProof per address; not arb1 (presim primary, same IP)

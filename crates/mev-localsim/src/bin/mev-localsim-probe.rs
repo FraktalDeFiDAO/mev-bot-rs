@@ -1,7 +1,7 @@
 //! Measures the production local-simulation worker against the chain. Runs `worker::run` on the
 //! live sequencer feed exactly as the engine does and compares every pool-event prediction it
 //! emits with the transaction's **mined receipt** (the real ground truth). Never sends anything.
-//!   cargo run --release -p mev-localsim --bin mev-localsim-probe -- [secs=900] [diff_rpc] [fill_rpc]
+//!   cargo run --release -p mev-localsim --bin mev-localsim-probe -- [secs=900] [diff_rpc] [fill_rpcs,comma-separated]
 
 use std::{
     sync::{Arc, Mutex},
@@ -39,10 +39,12 @@ fn pool_events(logs: impl IntoIterator<Item = (Address, Vec<B256>, Bytes)>) -> L
         .collect()
 }
 
-/// (succeeded, pool events) from the mined receipt, if it shows up within ~7 s.
+/// (succeeded, pool events) from the mined receipt, if it shows up within ~7 s. First look after
+/// 1.5 s (inclusion is ~0.25 s), then once a second: few requests on shared public endpoints.
 async fn mined_pool_events(p: &DynProvider, hash: B256) -> Option<(bool, Logs)> {
-    for _ in 0..12 {
-        tokio::time::sleep(Duration::from_millis(600)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    for _ in 0..6 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
         if let Ok(Some(r)) = p.get_transaction_receipt(hash).await {
             let logs = pool_events(
                 r.inner
@@ -63,12 +65,29 @@ async fn main() -> anyhow::Result<()> {
     let url = |i: usize, d: &'static str| args.get(i).map(String::as_str).unwrap_or(d).to_string();
     let endpoints = worker::Endpoints {
         diff: provider(&url(2, "https://arbitrum.drpc.org"))?,
-        // dRPC is reserved for block diffs (the only free endpoint serving them).
-        fill: provider(&url(3, "https://arbitrum-one-rpc.publicnode.com"))?,
+        // dRPC is reserved for block diffs (the only free endpoint serving them). Fills rotate
+        // across endpoints, as in production.
+        // Not arb1: it serves the live bot's presim from the same IP.
+        fill: mev_rpc::metered_rotating_provider(
+            &url(
+                3,
+                "https://arbitrum-one-rpc.publicnode.com,https://arbitrum-one.public.blastapi.io",
+            )
+            .split(',')
+            .map(String::from)
+            .collect::<Vec<_>>(),
+            mev_rpc::RpcMeter::new(),
+        )?,
         head: provider("https://arb1.arbitrum.io/rpc")?,
     };
-    // Receipts from arb1: complete, and not the rate-limited simulate endpoint.
-    let receipts = provider("https://arb1.arbitrum.io/rpc")?;
+    // Receipts rotate across endpoints (one alone gets the IP rate-limited).
+    let receipts = mev_rpc::metered_rotating_provider(
+        &[
+            "https://arbitrum-one.public.blastapi.io".to_string(),
+            "https://arbitrum-one-rpc.publicnode.com".to_string(),
+        ],
+        mev_rpc::RpcMeter::new(),
+    )?;
 
     let (feed_tx, feed_rx) = mpsc::unbounded_channel::<SequencedTx>();
     tokio::spawn(mev_sequencer::run(
@@ -185,4 +204,10 @@ fn report(stats: &Arc<Mutex<Stats>>, w: &Arc<worker::LocalStats>, t: Duration) {
         s.fallback_missed_movers,
     );
     println!("[{:>4}s] worker: {}", t.as_secs(), w.take_summary());
+    for (a, acct, slots) in w.take_top_misses(12) {
+        println!(
+            "[{:>4}s]   missing in {a}: accounts {acct} slots {slots}",
+            t.as_secs()
+        );
+    }
 }
