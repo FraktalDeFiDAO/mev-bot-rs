@@ -26,8 +26,10 @@ pub struct CycleIndex {
 }
 
 impl CycleIndex {
-    /// Enumerate directed triangles starting at each loan token. Stops at `max_cycles` (largest
-    /// stores would otherwise blow up; the cap keeps memory and update cost bounded).
+    /// Enumerate directed triangles starting at each loan token. `max_cycles` is shared equally
+    /// across loan tokens (so tokens listed last still get cycles), and within a token the deepest
+    /// cycles are kept: ranked by the smaller loan-token reserve of the first and last pool (both in
+    /// that token's units). Enumeration stops at 20x the quota per token to bound start-up work.
     pub fn build(store: &PoolStore, loans: &[Address], max_cycles: usize) -> Self {
         // token -> [(pool, other token)]
         let mut adj: HashMap<Address, Vec<(Address, Address)>> = HashMap::new();
@@ -36,10 +38,15 @@ impl CycleIndex {
             adj.entry(a).or_default().push((pool, b));
             adj.entry(b).or_default().push((pool, a));
         }
+        let reserve = |pool: &Address, token: Address| {
+            store.get(pool).map(|p| p.reserve_of(token)).unwrap_or(0.0)
+        };
+        let quota = max_cycles / loans.len().max(1);
         let mut idx = CycleIndex::default();
-        'outer: for &l in loans {
+        for &l in loans {
             let Some(first) = adj.get(&l) else { continue };
-            for &(p1, x) in first {
+            let mut found: Vec<(f64, Cycle)> = Vec::new();
+            'loan: for &(p1, x) in first {
                 if x == l {
                     continue;
                 }
@@ -51,19 +58,27 @@ impl CycleIndex {
                         if back != l || p3 == p1 || p3 == p2 {
                             continue;
                         }
-                        if idx.cycles.len() >= max_cycles {
-                            break 'outer;
+                        if found.len() >= quota.saturating_mul(20) {
+                            break 'loan;
                         }
-                        let id = idx.cycles.len() as u32;
-                        idx.cycles.push(Cycle {
-                            loan: l,
-                            legs: [(p1, l, x), (p2, x, y), (p3, y, l)],
-                        });
-                        for p in [p1, p2, p3] {
-                            idx.by_pool.entry(p).or_default().push(id);
-                        }
+                        let depth = reserve(&p1, l).min(reserve(&p3, l));
+                        found.push((
+                            depth,
+                            Cycle {
+                                loan: l,
+                                legs: [(p1, l, x), (p2, x, y), (p3, y, l)],
+                            },
+                        ));
                     }
                 }
+            }
+            found.sort_by(|a, b| b.0.total_cmp(&a.0));
+            for (_, c) in found.into_iter().take(quota) {
+                let id = idx.cycles.len() as u32;
+                for (p, _, _) in c.legs {
+                    idx.by_pool.entry(p).or_default().push(id);
+                }
+                idx.cycles.push(c);
             }
         }
         idx
@@ -205,10 +220,31 @@ mod tests {
             assert_eq!(idx.affected(&Address::with_last_byte(pool)).count(), 2);
         }
         assert_eq!(idx.affected(&Address::with_last_byte(99)).count(), 0);
-        assert!(
-            CycleIndex::build(&s, &[tok(1)], 1).len() == 1,
+        assert_eq!(
+            CycleIndex::build(&s, &[tok(1)], 1).len(),
+            1,
             "cap respected"
         );
+    }
+
+    #[test]
+    fn cap_is_shared_across_loans_and_keeps_the_deepest_cycles() {
+        let (l, x, y) = (tok(1), tok(2), tok(3));
+        let mut s = store(true);
+        // A second, deeper L/X pool: its cycles must win when the quota is tight.
+        s.insert(v2(14, l, x, 1e12, 2e12));
+        // Cap 2 shared by two loans: one cycle each, not both for the first-listed loan.
+        let idx = CycleIndex::build(&s, &[l, y], 2);
+        assert_eq!(idx.len(), 2);
+        assert_eq!(idx.cycles.iter().filter(|c| c.loan == l).count(), 1);
+        assert_eq!(idx.cycles.iter().filter(|c| c.loan == y).count(), 1);
+        let deep = Address::with_last_byte(14);
+        let c = idx.cycles.iter().find(|c| c.loan == l).unwrap();
+        assert!(
+            c.legs[0].0 == deep || c.legs[2].0 == deep,
+            "deepest L cycle kept"
+        );
+        let _ = x;
     }
 
     #[test]

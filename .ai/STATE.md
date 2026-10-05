@@ -5,11 +5,11 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
 ---
 
 **Updated:** 2026-10-05
-**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot` (t3.small, DECISIONS #44), still on the
-pre-#27 build. Contabo stopped (rollback only). Deploy: `scripts/deploy.sh live --yes` (defaults to
+**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot` (t3.small, DECISIONS #44), PR #27 build.
+Contabo stopped (rollback only). Deploy: `scripts/deploy.sh live --yes` (defaults to
 Ohio, builds locally, gate first). The user merges PRs (merging is blocked for the agent); wait for
 all 6 CI checks.
-**Executor:** `0xc0B4BA513359979793B9aaa8C74b526aD644AF8D` (no `executeFlashSwap`). Hot wallet ~0.007 ETH.
+**Executor:** `0x5932C0887173B7E9C4258EaCaB2bAc395137CB29` (2026-10-05, has `executeFlashSwap`, 8 lending targets allowed; old `0xc0B4…AF8D` retired). Hot wallet ~0.006 ETH.
 
 ## Where we are
 
@@ -25,9 +25,8 @@ RPC budget lesson: the host IP shares free limits with the live bot. Probes must
 
 ## Next
 
-1. User merges #27 → `scripts/deploy.sh live --yes`; watch for `prediction snapshot` warnings
-   (the Aave live test couldn't run: public RPCs rate-limit its 53k-account sweep).
-2. Deploy the new executor (`scripts/deploy-executor.sh`, needs the user's OK: on-chain spend),
-   `setTarget` the lending targets again, update `EXECUTOR_ADDRESS`, set `executor_flash_swaps = true`.
+1. #27 live (deploy-20261005-045515). Next PR `feat/cycle-ranking`: fair cycle cap + flash swaps on.
+   Watch the first flash-swap sends (`kind`/revert reasons) after it deploys.
+2. `deploy-executor.sh` needs a real terminal (its prompt gets EOF under `!`/no TTY).
 3. Phase 11/12: liquidation exits via the best route (≤2 hops today) incl. flash swaps.
 4. Phase 17: historical replay; Phase 18: profiling. Morpho/Fluid prediction (shadow books).
