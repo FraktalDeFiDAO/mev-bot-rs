@@ -134,6 +134,70 @@ pub struct MorphoConfig {
     pub scan_step: u64,
 }
 
+/// Priority Gas Auction (PGA) bidding on Arbitrum One: each tx sets its own priority fee, the
+/// Sequencer orders each 125 ms round by it (DECISIONS #59). Defaults are conservative.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct PgaConfig {
+    /// Bid a priority fee at all (off = every tx bids zero: last in its round).
+    pub enabled: bool,
+    /// Largest share of expected net profit spent on the tip.
+    pub max_fraction_of_net: f64,
+    /// Hard caps on tip spend, USD.
+    pub max_tip_usd_per_tx: f64,
+    pub max_tip_usd_per_minute: f64,
+    pub max_tip_usd_per_day: f64,
+    /// Tip when no competition has been observed yet, gwei per gas.
+    pub default_tip_gwei: f64,
+    /// Never bid below this, gwei per gas.
+    pub min_tip_gwei: f64,
+    /// Outbid the competition estimate by this fraction.
+    pub outbid_margin: f64,
+    /// Quantile of recently observed winning tips used as the competition estimate.
+    pub competition_quantile: f64,
+    /// Nominal PGA round (docs: 125 ms on Arbitrum One); a send slower than this from its
+    /// trigger is counted as over budget (it likely bids in a later round than its trigger).
+    pub round_ms: u64,
+    pub fast_feed: FastFeedConfig,
+}
+
+impl Default for PgaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_fraction_of_net: 0.3,
+            max_tip_usd_per_tx: 0.25,
+            max_tip_usd_per_minute: 0.5,
+            max_tip_usd_per_day: 2.0,
+            default_tip_gwei: 0.002,
+            min_tip_gwei: 0.0,
+            outbid_margin: 0.1,
+            competition_quantile: 0.75,
+            round_ms: 125,
+            fast_feed: FastFeedConfig::default(),
+        }
+    }
+}
+
+/// The paid Fast Feed (ordered txs inside the PGA round, before the block closes). Off by
+/// default: a daily ticket costs at least $17 (DECISIONS #59). The API key comes only from the
+/// environment (`<PREFIX>_FAST_FEED_KEY`), never from config files.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct FastFeedConfig {
+    pub enabled: bool,
+    pub url: String,
+}
+
+impl Default for FastFeedConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: "wss://arb1-txfeed.arbitrum.io/".into(),
+        }
+    }
+}
+
 /// Feed-driven arbitrage: simulate sequencer-feed transactions (eth_simulateV1) to learn which
 /// pools they move before their block exists.
 #[derive(Debug, Clone, Deserialize)]
@@ -215,6 +279,9 @@ pub struct ChainConfig {
     pub fluid: Option<FluidConfig>,
     #[serde(default)]
     pub presim: Option<PresimConfig>,
+    /// Arbitrum One Priority Gas Auction bidding and the optional Fast Feed. Absent = defaults.
+    #[serde(default)]
+    pub pga: PgaConfig,
 }
 
 impl ChainConfig {
@@ -284,6 +351,8 @@ pub struct Secrets {
     /// Keyed endpoints serving `eth_simulateV1` (`<PREFIX>_PRESIM_URL_1..9`), rotated together with
     /// the public `[presim] rpc_urls`.
     pub presim_urls: Vec<String>,
+    /// Fast Feed API key (`<PREFIX>_FAST_FEED_KEY`), if subscribed.
+    pub fast_feed_key: Option<String>,
 }
 
 impl Secrets {
@@ -344,6 +413,10 @@ impl Secrets {
                 .collect(),
             sweep_urls: numbered_from(prefix, "SWEEP_URL", 1),
             presim_urls: numbered_from(prefix, "PRESIM_URL", 1),
+            fast_feed_key: var("FAST_FEED_KEY")
+                .ok()
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty()),
         })
     }
 }
@@ -421,12 +494,17 @@ mod tests {
             extra_ws_urls: vec![],
             sweep_urls: vec!["https://sweep.example/keyed0123456789abcdef".into()],
             presim_urls: vec![],
+            fast_feed_key: Some("ffkey0123456789abcdef".into()),
         };
         let shown = format!("{s:?}");
         assert!(!shown.contains("deadbeef"));
         assert!(
             !shown.contains("keyed0123456789abcdef"),
             "keyed URLs never printed"
+        );
+        assert!(
+            !shown.contains("ffkey0123456789abcdef"),
+            "Fast Feed key never printed"
         );
         assert!(shown.contains("redacted"));
         assert_eq!(

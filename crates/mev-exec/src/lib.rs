@@ -87,17 +87,17 @@ impl Sender {
         Ok(self.reader.get_balance(self.address).await?)
     }
 
-    /// Send an arbitrage through the executor. `gas_price` (wei): a cached value saves a round
-    /// trip on the latency-critical path; `None` fetches one.
+    /// Send an arbitrage through the executor with `fees` (the PGA bid decided at submission
+    /// time); `None` fetches the base fee and bids nothing.
     pub async fn send(
         &self,
         opp: &Opportunity,
         min_profit: U256,
         gas_limit: u64,
-        gas_price: Option<u128>,
+        fees: Option<Fees>,
     ) -> Result<Sent> {
         let calldata = mev_bindings::arb_calldata(opp, min_profit, self.flash_swaps);
-        self.send_calldata(calldata, gas_limit, gas_price).await
+        self.send_calldata(calldata, gas_limit, fees).await
     }
 
     /// Send a liquidation (any protocol) through the executor.
@@ -107,48 +107,47 @@ impl Sender {
         hops: &[Hop],
         min_profit: U256,
         gas_limit: u64,
+        fees: Option<Fees>,
         aave_pool: Option<Address>,
     ) -> Result<TxHash> {
         let data = mev_bindings::liquidation_calldata(plan, hops, min_profit, aave_pool);
-        self.send_calldata(data, gas_limit, None)
+        self.send_calldata(data, gas_limit, fees)
             .await
             .map(|s| s.hash)
     }
 
-    /// Latency-critical liquidation (backrun): uses the caller's cached `gas_price` (wei)
-    /// instead of fetching one first.
+    /// Latency-critical liquidation (backrun): the caller's `fees` (from a cached base fee and
+    /// the bid policy), no fetch first.
     pub async fn send_liquidation_fast(
         &self,
         plan: &Plan,
         hops: &[Hop],
         min_profit: U256,
         gas_limit: u64,
-        gas_price: u128,
+        fees: Fees,
         aave_pool: Option<Address>,
     ) -> Result<Sent> {
         self.send_calldata(
             mev_bindings::liquidation_calldata(plan, hops, min_profit, aave_pool),
             gas_limit,
-            Some(gas_price),
+            Some(fees),
         )
         .await
     }
 
-    /// Sign once and broadcast the same raw tx to every endpoint; first success wins.
+    /// Sign once and broadcast the same raw tx to every endpoint; first success wins. `fees`: the
+    /// bid decided at submission time; `None` fetches the base fee and bids nothing.
     async fn send_calldata(
         &self,
         calldata: Vec<u8>,
         gas_limit: u64,
-        gas_price: Option<u128>,
+        fees: Option<Fees>,
     ) -> Result<Sent> {
-        let base_fee = match gas_price {
-            Some(g) => g,
-            None => self.reader.get_gas_price().await?,
+        let fees = match fees {
+            Some(f) => f,
+            None => Fees::no_bid(self.reader.get_gas_price().await?),
         };
-        match self
-            .sign_and_broadcast(&calldata, gas_limit, base_fee)
-            .await
-        {
+        match self.sign_and_broadcast(&calldata, gas_limit, fees).await {
             // The wallet was used outside the bot (or a tx was dropped): the cached nonce is stale.
             // Resync from the chain and re-sign once.
             Err(e) if is_nonce_error(&e) => {
@@ -159,8 +158,7 @@ impl Sender {
                     .await?;
                 warn!(resynced_nonce = n, error = %e, "stale nonce; resyncing and retrying once");
                 self.nonce.store(n, Ordering::SeqCst);
-                self.sign_and_broadcast(&calldata, gas_limit, base_fee)
-                    .await
+                self.sign_and_broadcast(&calldata, gas_limit, fees).await
             }
             other => other,
         }
@@ -170,18 +168,18 @@ impl Sender {
         &self,
         calldata: &[u8],
         gas_limit: u64,
-        base_fee: u128,
+        fees: Fees,
     ) -> Result<Sent> {
         let nonce = self.nonce.fetch_add(1, Ordering::SeqCst);
-        let tx = TransactionRequest::default()
-            .with_from(self.address)
-            .with_to(self.executor)
-            .with_input(calldata.to_vec())
-            .with_nonce(nonce)
-            .with_chain_id(self.chain_id)
-            .with_gas_limit(gas_limit)
-            .with_max_fee_per_gas(base_fee * 2)
-            .with_max_priority_fee_per_gas(0);
+        let tx = tx_request(
+            self.address,
+            self.executor,
+            calldata,
+            nonce,
+            self.chain_id,
+            gas_limit,
+            fees,
+        );
         let envelope = tx.build(&self.wallet).await.context("signing failed")?;
         let raw = envelope.encoded_2718();
         let hash = *envelope.tx_hash();
@@ -280,6 +278,55 @@ pub fn is_nonce_error(e: &anyhow::Error) -> bool {
         || s.contains("nonce too high")
         || s.contains("invalid nonce")
         || s.contains("already known")
+}
+
+/// EIP-1559 fee fields for one transaction. Under Arbitrum's PGA the Sequencer orders each round
+/// by `min(max_priority_fee_per_gas, max_fee_per_gas - base_fee)`, so both are always set
+/// explicitly and `max_fee_per_gas` always leaves room for the whole tip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fees {
+    pub max_fee_per_gas: u128,
+    pub max_priority_fee_per_gas: u128,
+}
+
+impl Fees {
+    /// No priority bid: lowest priority in its round (the anti-starvation boost still includes
+    /// it within a few blocks).
+    pub fn no_bid(base_fee: u128) -> Self {
+        Self {
+            max_fee_per_gas: base_fee.saturating_mul(2),
+            max_priority_fee_per_gas: 0,
+        }
+    }
+
+    /// The fee fields of a policy bid.
+    pub fn from_bid(b: &mev_risk::bid::Bid) -> Self {
+        Self {
+            max_fee_per_gas: b.max_fee_per_gas,
+            max_priority_fee_per_gas: b.max_priority_fee_per_gas,
+        }
+    }
+}
+
+/// The unsigned EIP-1559 transaction for `calldata` to the executor (pure, unit-tested).
+pub fn tx_request(
+    from: Address,
+    to: Address,
+    calldata: &[u8],
+    nonce: u64,
+    chain_id: u64,
+    gas_limit: u64,
+    fees: Fees,
+) -> TransactionRequest {
+    TransactionRequest::default()
+        .with_from(from)
+        .with_to(to)
+        .with_input(calldata.to_vec())
+        .with_nonce(nonce)
+        .with_chain_id(chain_id)
+        .with_gas_limit(gas_limit)
+        .with_max_fee_per_gas(fees.max_fee_per_gas.max(fees.max_priority_fee_per_gas))
+        .with_max_priority_fee_per_gas(fees.max_priority_fee_per_gas)
 }
 
 /// Executor calldata for a Balancer-funded arbitrage (pure; unit-tested against the ABI).
@@ -468,5 +515,38 @@ mod tests {
                 1
             )
         );
+    }
+
+    #[test]
+    fn every_tx_sets_both_fee_fields_and_max_fee_covers_the_tip() {
+        let (from, to) = (Address::with_last_byte(1), Address::with_last_byte(2));
+        let base = 10_000_000u128; // 0.01 gwei
+        // A policy bid: fields carried through unchanged.
+        let bid = Fees {
+            max_fee_per_gas: 2 * base + 5_000_000,
+            max_priority_fee_per_gas: 5_000_000,
+        };
+        let t = tx_request(from, to, &[0xab], 7, 42161, 900_000, bid);
+        assert_eq!(t.max_priority_fee_per_gas, Some(5_000_000));
+        assert_eq!(t.max_fee_per_gas, Some(2 * base + 5_000_000));
+        assert_eq!(
+            (t.nonce, t.gas, t.chain_id),
+            (Some(7), Some(900_000), Some(42161))
+        );
+        assert_eq!(t.input.input().map(|b| b.to_vec()), Some(vec![0xab]));
+        // No bid: explicit zero tip, 2x base fee.
+        let n = tx_request(from, to, &[], 0, 42161, 1, Fees::no_bid(base));
+        assert_eq!(
+            (n.max_priority_fee_per_gas, n.max_fee_per_gas),
+            (Some(0), Some(2 * base))
+        );
+        // A malformed bid can't make maxFee < tip (the node would reject it).
+        let bad = Fees {
+            max_fee_per_gas: 1,
+            max_priority_fee_per_gas: 9,
+        };
+        let b = tx_request(from, to, &[], 0, 42161, 1, bad);
+        assert!(b.max_fee_per_gas.unwrap() >= b.max_priority_fee_per_gas.unwrap());
+        assert_eq!((t.from, t.to), (Some(from), Some(to.into())));
     }
 }
