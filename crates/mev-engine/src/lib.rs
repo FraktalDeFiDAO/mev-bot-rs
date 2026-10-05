@@ -19,11 +19,15 @@ use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use mev_bindings::ArbExecutor;
 use mev_config::{ChainConfig, Secrets};
-use mev_exec::{Landed, Sender};
+use mev_exec::{Fees, Landed, Sender};
 use mev_lending::{AdapterRpc, LiquidationAdapter, Plan};
 use mev_liquidate::{Runner, RunnerConfig, RunnerEvent};
 use mev_metrics::Metrics;
-use mev_risk::{RiskGuard, RiskLimits, loan_cap};
+use mev_risk::{
+    RiskGuard, RiskLimits,
+    bid::{BidInput, BidPolicy, Decision, TipBook, TipBudget},
+    loan_cap,
+};
 use mev_rpc::{Backoff, Rpc, RpcMeter};
 use mev_search::{SearchParams, best_route, two_pool_arbs};
 pub use mev_sim::SimOutcome;
@@ -34,6 +38,23 @@ use race::Trigger;
 use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+
+/// Recently observed winning tips kept for the competition estimate (count, max age).
+const TIP_BOOK_CAPACITY: usize = 200;
+const TIP_BOOK_HORIZON_SECS: u64 = 3600;
+
+/// The bid policy from `[pga]` config.
+fn bid_policy(c: &mev_config::PgaConfig) -> BidPolicy {
+    let gwei = |g: f64| (g.max(0.0) * 1e9) as u128;
+    BidPolicy {
+        max_fraction_of_net: c.max_fraction_of_net,
+        max_tip_usd_per_tx: c.max_tip_usd_per_tx,
+        min_net_usd: 0.0,
+        min_tip_wei: gwei(c.min_tip_gwei),
+        default_tip_wei: gwei(c.default_tip_gwei),
+        outbid_margin: c.outbid_margin,
+    }
+}
 
 /// How long an arbitrage route is skipped after its send reverted (lost race or mispriced).
 const ROUTE_COOLDOWN: Duration = Duration::from_secs(30 * 60);
@@ -80,6 +101,10 @@ pub struct Engine {
     last_sim: HashMap<(Address, Address), Instant>,
     /// Arbitrage routes whose send reverted, and when (skipped for `ROUTE_COOLDOWN`).
     cooldown: HashMap<(Address, Address), Instant>,
+    /// PGA priority-fee bidding: policy, recently observed winning tips, tip spend caps.
+    bid_policy: BidPolicy,
+    tips: TipBook,
+    tip_budget: TipBudget,
     mode: Mode,
     liq: Option<LiqCtx>,
     presim_rx: Option<PresimRx>,
@@ -132,6 +157,8 @@ enum TxDone {
         hash: Option<TxHash>,
         error: String,
     },
+    /// A priority fee (wei/gas) seen winning ordering over us: the competition estimate's input.
+    TipSeen(u128),
 }
 
 impl Engine {
@@ -348,6 +375,9 @@ impl Engine {
             None => None,
         };
 
+        let pga_policy = bid_policy(&cfg.pga);
+        let pga_budget =
+            TipBudget::new(cfg.pga.max_tip_usd_per_minute, cfg.pga.max_tip_usd_per_day);
         Ok(Self {
             cfg,
             rpc,
@@ -363,6 +393,9 @@ impl Engine {
             metrics,
             last_sim: HashMap::new(),
             cooldown: HashMap::new(),
+            bid_policy: pga_policy,
+            tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
+            tip_budget: pga_budget,
             mode,
             liq,
             presim_rx,
@@ -592,6 +625,63 @@ impl Engine {
             .is_some_and(|t| t.elapsed() < ROUTE_COOLDOWN)
     }
 
+    /// The PGA bid for a send happening now: fee fields and the tip's USD cost, or `None` (logged)
+    /// when the policy or the tip spend caps say skip. `gas_price` is the current base fee (wei),
+    /// `native_px` USD per wei; `gross_usd` is expected profit before any gas.
+    fn pga_bid(
+        &mut self,
+        gross_usd: f64,
+        gas: u64,
+        gas_price: f64,
+        native_px: f64,
+        ev: &serde_json::Value,
+    ) -> Option<(Fees, f64)> {
+        let base_fee = gas_price.max(0.0) as u128;
+        if !self.cfg.pga.enabled {
+            return Some((Fees::no_bid(base_fee), 0.0));
+        }
+        let now = now_secs();
+        let competition = self.tips.estimate(self.cfg.pga.competition_quantile, now);
+        let input = BidInput {
+            gross_profit_usd: gross_usd,
+            gas_units: gas,
+            base_fee_wei: base_fee,
+            usd_per_wei: native_px,
+            competition_tip_wei: competition,
+        };
+        let bid = match self.bid_policy.decide(&input) {
+            Decision::Bid(b) => b,
+            Decision::Skip(why) => {
+                self.metrics.update(|c| c.bids_skipped += 1);
+                self.metrics.event(
+                    "bid_skip",
+                    json!({ "opp": ev, "reason": format!("{why:?}"), "competition_wei": competition.map(|c| c.to_string()) }),
+                );
+                return None;
+            }
+        };
+        if let Err(cap) = self.tip_budget.allow(bid.tip_cost_usd, now) {
+            self.metrics.update(|c| c.bids_skipped += 1);
+            self.metrics.event(
+                "bid_skip",
+                json!({ "opp": ev, "reason": format!("{cap:?}") }),
+            );
+            return None;
+        }
+        self.tip_budget.record(bid.tip_cost_usd, now);
+        self.metrics.update(|c| {
+            c.bids_placed += 1;
+            c.tip_usd += bid.tip_cost_usd;
+            c.bid_fraction_sum += bid.fraction_of_net;
+        });
+        self.metrics.event(
+            "bid",
+            json!({ "opp": ev, "tip_wei": bid.max_priority_fee_per_gas.to_string(), "tip_usd": bid.tip_cost_usd,
+                    "fraction_of_net": bid.fraction_of_net, "competition_wei": competition.map(|c| c.to_string()) }),
+        );
+        Some((Fees::from_bid(&bid), bid.tip_cost_usd))
+    }
+
     /// The Aave pool to flash-borrow from when the executor supports `liquidateViaAave`.
     fn aave_flash_pool(&self) -> Option<Address> {
         self.cfg
@@ -660,6 +750,13 @@ impl Engine {
             profitable = c.sim_profitable,
             liq_planned = c.liq_planned,
             liq_profitable = c.liq_profitable,
+            bids = c.bids_placed,
+            bids_skipped = c.bids_skipped,
+            bids_won = c.bids_won,
+            bids_lost = c.bids_lost,
+            tip_usd = format!("{:.4}", c.tip_usd),
+            round_within = c.round_within,
+            round_over = c.round_over,
             feed_triggers = c.feed_triggers,
             sent = c.sent,
             ok = c.landed_ok,
@@ -781,9 +878,14 @@ impl Engine {
             );
             return;
         }
-        // On-chain floor: the trade must at least pay for its gas, or it reverts.
+        // PGA bid, decided now (fresh base fee and competition), not at detection.
+        let Some((fees, tip_usd)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
+        else {
+            return;
+        };
+        // On-chain floor: the trade must pay for its gas and its bid, or it reverts.
         let min_profit = if loan_px > 0.0 {
-            U256::from((gas_usd / loan_px) as u128)
+            U256::from(((gas_usd + tip_usd) / loan_px) as u128)
         } else {
             U256::ZERO
         };
@@ -797,11 +899,9 @@ impl Engine {
         let (http, feed_log) = (self.rpc.http.clone(), self.feed_log.clone());
         let pools: Vec<Address> = opp.hops.iter().map(|h| h.pool).collect();
         let decided = Instant::now();
+        let round_ms = self.cfg.pga.round_ms;
         tokio::spawn(async move {
-            let sent = match sender
-                .send(&opp, min_profit, gas_limit, Some(gas_price as u128))
-                .await
-            {
+            let sent = match sender.send(&opp, min_profit, gas_limit, Some(fees)).await {
                 Ok(sent) => sent,
                 Err(e) => {
                     let _ = tx_done.send(TxDone::Failed {
@@ -824,6 +924,14 @@ impl Engine {
                 json!({ "hash": hash, "net_usd": net_usd, "latency_ms": latency_ms, "source": trigger.source, "endpoints": endpoints }),
             );
             info!(%hash, latency_ms, source = trigger.source, endpoints = endpoints.join(" "), "arb sent (trigger -> accepted)");
+            // Inside the PGA round its trigger was in? (Later = bidding in a later round.)
+            metrics.update(|c| {
+                if latency_ms <= round_ms as i64 {
+                    c.round_within += 1
+                } else {
+                    c.round_over += 1
+                }
+            });
             let landed = match sender.wait(hash, Duration::from_secs(30)).await {
                 Ok(l) => l,
                 Err(e) => {
@@ -861,6 +969,12 @@ impl Engine {
                 our_index = ?rep["our_index"].as_u64(),
                 "race"
             );
+            if let Some(tip) = rep["winner_tip_wei"]
+                .as_str()
+                .and_then(|t| t.parse::<u128>().ok())
+            {
+                let _ = tx_done.send(TxDone::TipSeen(tip));
+            }
             metrics.event("race", rep);
         });
     }
@@ -973,8 +1087,13 @@ impl Engine {
                 json!({ "liq": ev, "reason": format!("{block:?}") }),
             );
         }
+        let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
+        let Some((fees, tip_usd)) = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev)
+        else {
+            return;
+        };
         let min_profit = if debt_px > 0.0 {
-            U256::from((gas_usd / debt_px) as u128)
+            U256::from(((gas_usd + tip_usd) / debt_px) as u128)
         } else {
             U256::ZERO
         };
@@ -984,14 +1103,7 @@ impl Engine {
         let metrics = self.metrics.clone();
         tokio::spawn(async move {
             let sent = sender
-                .send_liquidation_fast(
-                    &plan,
-                    &hops,
-                    min_profit,
-                    BACKRUN_GAS_LIMIT,
-                    gas_price as u128,
-                    aave_pool,
-                )
+                .send_liquidation_fast(&plan, &hops, min_profit, BACKRUN_GAS_LIMIT, fees, aave_pool)
                 .await;
             let done = match sent.map(|s| s.hash) {
                 Ok(hash) => {
@@ -1074,9 +1186,13 @@ impl Engine {
                 json!({ "liq": base, "reason": format!("{block:?}") }),
             );
         }
-        // On-chain floor: at least cover gas, in debt-asset units.
+        let Some((fees, tip_usd)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
+        else {
+            return;
+        };
+        // On-chain floor: at least cover gas and the bid, in debt-asset units.
         let min_profit = if debt_px > 0.0 {
-            U256::from((gas_usd / debt_px) as u128)
+            U256::from(((gas_usd + tip_usd) / debt_px) as u128)
         } else {
             U256::ZERO
         };
@@ -1087,7 +1203,7 @@ impl Engine {
         let metrics = self.metrics.clone();
         tokio::spawn(async move {
             let done = match sender
-                .send_liquidation(&plan, &hops, min_profit, gas_limit, aave_pool)
+                .send_liquidation(&plan, &hops, min_profit, gas_limit, Some(fees), aave_pool)
                 .await
             {
                 Ok(hash) => {
@@ -1149,7 +1265,15 @@ impl Engine {
                     self.risk
                         .record_profit(est_profit_usd - gas_usd, now_secs());
                 }
+                let bidding = self.cfg.pga.enabled;
                 self.metrics.update(|c| {
+                    if bidding {
+                        if landed.success {
+                            c.bids_won += 1
+                        } else {
+                            c.bids_lost += 1
+                        }
+                    }
                     c.gas_usd += gas_usd;
                     if landed.success {
                         c.landed_ok += 1;
@@ -1165,6 +1289,7 @@ impl Engine {
                 );
                 info!(%hash, success = landed.success, gas_usd = format!("{gas_usd:.4}"), "landed");
             }
+            TxDone::TipSeen(tip) => self.tips.record(tip, now_secs()),
             TxDone::Failed { hash, error } => {
                 self.risk.record(false, 0.0, now_secs());
                 self.metrics

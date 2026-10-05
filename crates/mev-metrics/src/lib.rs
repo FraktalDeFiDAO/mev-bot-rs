@@ -29,6 +29,21 @@ pub struct Counters {
     pub liq_planned: u64,
     pub liq_profitable: u64,
     pub feed_triggers: u64,
+    /// PGA bids: placed, skipped (policy or tip caps), won (landed ok), lost (reverted).
+    pub bids_placed: u64,
+    pub bids_skipped: u64,
+    pub bids_won: u64,
+    pub bids_lost: u64,
+    /// Priority-fee spend committed at placement (USD) and the sum of bid/net fractions.
+    pub tip_usd: f64,
+    pub bid_fraction_sum: f64,
+    /// Sends accepted within / after one PGA round (125 ms) of their trigger.
+    pub round_within: u64,
+    pub round_over: u64,
+    /// Fast Feed: messages, sequence gaps, reconnects.
+    pub fast_feed_msgs: u64,
+    pub fast_feed_gaps: u64,
+    pub fast_feed_reconnects: u64,
 }
 
 pub struct Metrics {

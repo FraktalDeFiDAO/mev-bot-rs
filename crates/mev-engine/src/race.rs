@@ -77,10 +77,12 @@ pub async fn report(
     let our_feed = arrival(&sent.hash);
 
     let mut winner: Option<(TxHash, usize)> = None;
+    let mut winner_tip: Option<u128> = None;
     let (mut our_idx, mut trig_idx) = (landed.tx_index.map(|i| i as usize), None);
     if let Some(n) = landed.block
         && let Ok(Some(block)) = http.get_block_by_number(BlockNumberOrTag::Number(n)).await
     {
+        let base_fee = block.header.base_fee_per_gas.unwrap_or_default() as u128;
         let hashes: Vec<TxHash> = block.transactions.hashes().collect();
         let (o, t, between) = candidates(&hashes, sent.hash, trigger.tx);
         (our_idx, trig_idx) = (o.or(our_idx), t);
@@ -90,6 +92,8 @@ pub async fn report(
             };
             if r.inner.logs().iter().any(|l| pools.contains(&l.address())) {
                 winner = Some((hashes[i], i));
+                // What it paid for its place (PGA orders rounds by effective priority fee).
+                winner_tip = Some(effective_tip(r.effective_gas_price, base_fee));
                 break;
             }
         }
@@ -109,6 +113,7 @@ pub async fn report(
         "trigger_index": trig_idx,
         "winner": winner.map(|(h, _)| h),
         "winner_index": winner.map(|(_, i)| i),
+        "winner_tip_wei": winner_tip.map(|t| t.to_string()),
         "ms": {
             "seen": ms(t0, trigger.seen),
             "decided": ms(t0, decided),
@@ -173,5 +178,23 @@ mod tests {
         let later = t0 + Duration::from_millis(25);
         assert_eq!(ms(t0, later), 25);
         assert_eq!(ms(later, t0), -25);
+    }
+}
+
+/// The priority fee a mined tx actually paid per gas: effective gas price minus the block's base
+/// fee (= min(maxPriorityFeePerGas, maxFeePerGas - baseFee) for EIP-1559 txs).
+pub fn effective_tip(effective_gas_price: u128, base_fee: u128) -> u128 {
+    effective_gas_price.saturating_sub(base_fee)
+}
+
+#[cfg(test)]
+mod tip_tests {
+    use super::effective_tip;
+
+    #[test]
+    fn effective_tip_is_price_above_base_fee() {
+        assert_eq!(effective_tip(12_000_000, 10_000_000), 2_000_000);
+        assert_eq!(effective_tip(10_000_000, 10_000_000), 0);
+        assert_eq!(effective_tip(9, 10), 0, "never negative");
     }
 }
