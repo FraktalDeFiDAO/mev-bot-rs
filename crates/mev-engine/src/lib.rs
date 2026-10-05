@@ -1619,3 +1619,87 @@ mod feed_dedup_tests {
         assert!(r.insert(a), "evicted after capacity, so new again");
     }
 }
+
+/// Backtest of the live bidding path (policy + tip book) on synthetic PGA rounds, against the
+/// pre-PGA behaviour of always bidding zero. Synthetic: rivals tip 0.001-0.03 gwei (the range
+/// seen ahead of our reverted arbs on 2026-10-05), opportunities $0.05-$1 gross.
+#[cfg(test)]
+mod pga_replay {
+    use super::*;
+    use mev_sim::pga::{Offer, PastView, Round, Strategy, replay};
+
+    struct Live {
+        policy: BidPolicy,
+        tips: TipBook,
+        fed: usize,
+    }
+
+    impl Strategy for Live {
+        fn bid(&mut self, o: &Offer, past: &PastView) -> Option<u128> {
+            // Feed reveals exactly as the engine does from race reports (one per past round).
+            for t in &past.winning_tips()[self.fed..] {
+                self.tips.record(*t, 0);
+            }
+            self.fed = past.winning_tips().len();
+            let x = BidInput {
+                gross_profit_usd: o.gross_usd,
+                gas_units: o.gas_units,
+                base_fee_wei: o.base_fee_wei,
+                usd_per_wei: o.usd_per_wei,
+                competition_tip_wei: self.tips.estimate(0.75, 0),
+            };
+            match self.policy.decide(&x) {
+                Decision::Bid(b) => Some(b.max_priority_fee_per_gas),
+                Decision::Skip(_) => None,
+            }
+        }
+    }
+
+    struct Zero;
+    impl Strategy for Zero {
+        fn bid(&mut self, _o: &Offer, _p: &PastView) -> Option<u128> {
+            Some(0)
+        }
+    }
+
+    fn synthetic(n: usize) -> Vec<Round> {
+        // Deterministic LCG: no rand dependency.
+        let mut s = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 33) as f64 / (1u64 << 31) as f64
+        };
+        (0..n)
+            .map(|_| Round {
+                gross_usd: 0.05 + next() * 0.95,
+                gas_units: 330_000,
+                base_fee_wei: 10_000_000,
+                usd_per_wei: 3000.0 / 1e18,
+                competitor_tips: vec![(1_000_000.0 + next() * 29_000_000.0) as u128],
+                competitor_first: next() < 0.5,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bidding_beats_the_zero_tip_baseline_and_never_loses_money_per_win() {
+        let rounds = synthetic(500);
+        let zero = replay(&rounds, &mut Zero);
+        let mut live = Live {
+            policy: bid_policy(&mev_config::PgaConfig::default()),
+            tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
+            fed: 0,
+        };
+        let bid = replay(&rounds, &mut live);
+        assert_eq!(zero.wins, 0, "a zero tip loses every contested round");
+        assert!(zero.net_usd < 0.0);
+        assert!(
+            bid.wins > 0 && bid.net_usd > zero.net_usd,
+            "{bid:?} vs {zero:?}"
+        );
+        // Default caps: no single tip above $0.25.
+        assert!(bid.tips_paid_usd <= 0.25 * bid.bids as f64 + 1e-9);
+    }
+}

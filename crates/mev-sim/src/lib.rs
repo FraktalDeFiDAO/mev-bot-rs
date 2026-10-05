@@ -1,5 +1,7 @@
 //! Exact simulation of an opportunity by calling the deployed executor against live state.
 
+pub mod pga;
+
 use alloy::{
     primitives::{Address, U256},
     providers::{DynProvider, Provider},
