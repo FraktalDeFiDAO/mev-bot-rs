@@ -5,29 +5,29 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
 ---
 
 **Updated:** 2026-10-05
-**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot` (t3.small, DECISIONS #44). Contabo stopped
-(rollback only). Deploy: `scripts/deploy.sh live --yes` (defaults to Ohio, builds locally, gate first).
-Merge PRs only after all 6 CI checks report and pass.
-**Executor:** `0xc0B4BA513359979793B9aaa8C74b526aD644AF8D`. Hot wallet ~0.007 ETH.
+**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot` (t3.small, DECISIONS #44), still on the
+pre-#27 build. Contabo stopped (rollback only). Deploy: `scripts/deploy.sh live --yes` (defaults to
+Ohio, builds locally, gate first). The user merges PRs (merging is blocked for the agent); wait for
+all 6 CI checks.
+**Executor:** `0xc0B4BA513359979793B9aaa8C74b526aD644AF8D` (no `executeFlashSwap`). Hot wallet ~0.007 ETH.
 
 ## Where we are
 
-Simulation-engine program (`docs/planning/SIM_ENGINE.md`): Phase 0 audit done; **Phase 2 in progress**
-on branch `feat/localsim` (not merged, not live):
-- `mev-localsim`: revm 43 over a state cache fed by **dRPC per-block prestate diffs**
-  (`debug_traceBlockByNumber`, diffMode; 0 rate limits, p50 ~170 ms, lag 0–1 block).
-- Accuracy (probe on Ohio): with complete state and truth on the same block, **124/124 real
-  pool-moving swaps exact**, local sim p50 0.4 ms. First sight vs latest: 2/12 — the gap is the 0–1
-  block diff lag. ~2% false movers (unclassified).
+PR #27 (`feat/localsim`, CI green, awaiting the user's merge), simulation-engine phases 2, 5–8, 13, 15:
+- **Live once deployed:** triangular arbs (`mev_search::cycles`); wrapped price feeds (SVR/CAPO)
+  resolved via access lists; aggregator answers by direct `eth_call`; Compound backrun prediction.
+- **Off (flags):** `presim.local` (REVM worker: exact where complete, ~7 % live coverage on free RPC,
+  DECISIONS #45); `executor_flash_swaps` (needs the new executor deployed, #46).
+- Findings: `docs/planning/SIM_ENGINE.md`; decisions #45–47.
 
-Race telemetry (live): we land in the same feed batch as winners, 5–7 positions behind; trigger→send
-18 ms (best, presim) to ~120 ms (block logs); free-RPC eth_simulateV1 averages ~70 ms.
+RPC budget lesson: the host IP shares free limits with the live bot. Probes must not use arb1
+(presim primary); never poll at block rate.
 
 ## Next
 
-1. Phase 2 step 2: speculative overlay (simulate every feed tx locally in sequencer order on top of
-   the last applied block; reset when its diff lands) + pre-warm watched pools/routers; re-measure
-   first-sight accuracy vs latest (target ≥95 %).
-2. Classify the ~2% false movers (timestamps, Arbitrum precompiles).
-3. Phase 3: persistent revm workers; then wire local sim into the arb path (presim as fallback).
-4. Liquidations: extend oracle backrun to Compound/Morpho.
+1. User merges #27 → `scripts/deploy.sh live --yes`; watch for `prediction snapshot` warnings
+   (the Aave live test couldn't run: public RPCs rate-limit its 53k-account sweep).
+2. Deploy the new executor (`scripts/deploy-executor.sh`, needs the user's OK: on-chain spend),
+   `setTarget` the lending targets again, update `EXECUTOR_ADDRESS`, set `executor_flash_swaps = true`.
+3. Phase 11/12: liquidation exits via the best route (≤2 hops today) incl. flash swaps.
+4. Phase 17: historical replay; Phase 18: profiling. Morpho/Fluid prediction (shadow books).
