@@ -695,7 +695,9 @@ impl Engine {
 
         // Live without pre-simulation: trust the local model and save the eth_call round trip
         // (the race is decided in ~100s of ms). Shadow always simulates to keep measuring it.
-        let presimulate = self.mode != Mode::Live || self.cfg.risk.arb_presimulate;
+        // Live sends on the model only when it is exact for this route (no V3 tick crossed);
+        // otherwise the executor eth_call confirms it first (a crossed tick can mean less output).
+        let presimulate = self.mode != Mode::Live || self.cfg.risk.arb_presimulate || !opp.exact;
         let (profit_usd, gas) = if presimulate {
             self.metrics.update(|c| c.simulated += 1);
             let outcome = match sim.simulate_fast(&opp, U256::ZERO).await {

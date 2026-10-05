@@ -63,6 +63,7 @@ pub fn two_pool_arbs(
                     est_profit_usd: profit_usd,
                     buy_pool: buy.info.address,
                     sell_pool: sell.info.address,
+                    exact: exact_path(&[(buy, loan), (sell, other)], amount),
                 });
             }
         }
@@ -107,6 +108,19 @@ pub fn best_route(
         }
     }
     best
+}
+
+/// Does `amount` through `path` ((pool, token in) per hop) stay where the model is exact (every V3
+/// hop inside its tick-spacing bucket)?
+pub(crate) fn exact_path(path: &[(&Pool, Address)], amount: f64) -> bool {
+    let mut x = amount;
+    for (p, tin) in path {
+        if x > p.max_exact_in(*tin) {
+            return false;
+        }
+        x = p.amount_out(*tin, x);
+    }
+    true
 }
 
 pub(crate) fn hop(pool: &Pool, token_in: Address, token_out: Address) -> Hop {
