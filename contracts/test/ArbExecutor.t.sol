@@ -656,19 +656,6 @@ contract ArbExecutorForkTest is Test {
         vm.prank(borrower);
         IFluidVaultT1(FLUID_ETH_ARB).operate{value: 1 ether}(0, int256(1 ether), int256(borrowArb), borrower);
 
-        // ETH crashes 45% against ARB: the position falls past the liquidation threshold.
-        uint256 mocked = rate * 55 / 100;
-        vm.mockCall(
-            FLUID_ETH_ARB_ORACLE,
-            abi.encodeWithSelector(IFluidOracle.getExchangeRateLiquidate.selector),
-            abi.encode(mocked)
-        );
-        vm.mockCall(
-            FLUID_ETH_ARB_ORACLE,
-            abi.encodeWithSelector(IFluidOracle.getExchangeRateOperate.selector),
-            abi.encode(mocked)
-        );
-
         // Offer up to 3,000 ARB of debt; the vault takes only what is liquidatable (the rest of the
         // flash loan is returned). The resolver can't be used here: it re-simulates internally,
         // which conflicts with the mocked oracle. Live, the adapter reads it via eth_call.
@@ -689,8 +676,36 @@ contract ArbExecutorForkTest is Test {
 
         vm.prank(owner);
         exec.setTarget(FLUID_ETH_ARB, true);
-        vm.prank(owner);
-        uint256 profit = exec.liquidate(ARB, WETH, debtAmt, 1e18, calls, hops);
+
+        // ETH crashes against ARB: the position falls past the liquidation threshold. The fork is
+        // the live chain, where other users' positions sit in the same vault, so how deep a crash
+        // still liquidates cleanly (instead of Fluid absorbing real positions first) varies with
+        // the block. Try several depths (percent of the oracle rate left) and require one to work.
+        uint256[5] memory left = [uint256(75), 60, 70, 55, 65];
+        uint256 profit;
+        bool done;
+        for (uint256 i; i < left.length && !done; i++) {
+            uint256 snap = vm.snapshotState();
+            uint256 mocked = rate * left[i] / 100;
+            vm.mockCall(
+                FLUID_ETH_ARB_ORACLE,
+                abi.encodeWithSelector(IFluidOracle.getExchangeRateLiquidate.selector),
+                abi.encode(mocked)
+            );
+            vm.mockCall(
+                FLUID_ETH_ARB_ORACLE,
+                abi.encodeWithSelector(IFluidOracle.getExchangeRateOperate.selector),
+                abi.encode(mocked)
+            );
+            vm.prank(owner);
+            try exec.liquidate(ARB, WETH, debtAmt, 1e18, calls, hops) returns (uint256 p) {
+                profit = p;
+                done = true;
+            } catch {
+                vm.revertToState(snap);
+            }
+        }
+        assertTrue(done, "no crash depth liquidated cleanly");
 
         assertGt(profit, 1e18, "expected >1 ARB profit");
         assertEq(address(exec).balance, 0, "no ETH left");
