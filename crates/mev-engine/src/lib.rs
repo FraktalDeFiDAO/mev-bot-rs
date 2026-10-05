@@ -56,6 +56,10 @@ fn bid_policy(c: &mev_config::PgaConfig) -> BidPolicy {
     }
 }
 
+/// A pool claimed by an in-flight arbitrage is free again after this even without a receipt (the
+/// sender waits at most 30 s for one).
+const BUSY_TTL: Duration = Duration::from_secs(30);
+
 /// How long an arbitrage route is skipped after its send reverted (lost race or mispriced).
 const ROUTE_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 
@@ -101,6 +105,9 @@ pub struct Engine {
     last_sim: HashMap<(Address, Address), Instant>,
     /// Arbitrage routes whose send reverted, and when (skipped for `ROUTE_COOLDOWN`).
     cooldown: HashMap<(Address, Address), Instant>,
+    /// Pools touched by in-flight arbitrages (claimed at send) and each route's pools.
+    busy_pools: HashMap<Address, Instant>,
+    busy_routes: HashMap<(Address, Address), Vec<Address>>,
     /// PGA priority-fee bidding: policy, recently observed winning tips, tip spend caps.
     bid_policy: BidPolicy,
     /// Fast Feed counters when the paid feed is enabled and keyed.
@@ -265,7 +272,8 @@ impl Engine {
                 .unwrap_or(cfg.risk.max_gas_usd_per_day * 2.0 / 3.0),
         };
         let metrics = Arc::new(Metrics::new(data_dir.clone())?);
-        let risk = RiskGuard::new(limits, data_dir.join("STOP"));
+        let risk = RiskGuard::new(limits, data_dir.join("STOP"))
+            .with_max_in_flight(cfg.risk.max_concurrent_sends);
         info!(pools = store.len(), kill_switch = %data_dir.join("STOP").display(), "ready");
 
         // Sequencer feed, shared by the liquidation runner (price-feed triggers, backruns) and the
@@ -416,6 +424,8 @@ impl Engine {
             metrics,
             last_sim: HashMap::new(),
             cooldown: HashMap::new(),
+            busy_pools: HashMap::new(),
+            busy_routes: HashMap::new(),
             bid_policy: pga_policy,
             fast_feed_stats,
             tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
@@ -640,6 +650,33 @@ impl Engine {
             });
         }
         wei
+    }
+
+    /// Is any of `pools` used by an in-flight arbitrage (claims expire after `BUSY_TTL`)?
+    fn pools_busy(&self, pools: &[Address]) -> bool {
+        pools.iter().any(|p| {
+            self.busy_pools
+                .get(p)
+                .is_some_and(|t| t.elapsed() < BUSY_TTL)
+        })
+    }
+
+    fn claim_pools(&mut self, route: (Address, Address), pools: &[Address]) {
+        let now = Instant::now();
+        self.busy_pools.retain(|_, t| t.elapsed() < BUSY_TTL);
+        for p in pools {
+            self.busy_pools.insert(*p, now);
+        }
+        self.busy_routes.insert(route, pools.to_vec());
+    }
+
+    /// The arbitrage on `route` landed: its pools are free again.
+    fn release_pools(&mut self, route: (Address, Address)) {
+        if let Some(ps) = self.busy_routes.remove(&route) {
+            for p in ps {
+                self.busy_pools.remove(&p);
+            }
+        }
     }
 
     /// Did a send on `o`'s route revert within `ROUTE_COOLDOWN`?
@@ -928,6 +965,12 @@ impl Engine {
             );
             return;
         }
+        // Concurrent sends must not touch the same pool (they would race each other).
+        let route_pools: Vec<Address> = opp.hops.iter().map(|h| h.pool).collect();
+        if self.pools_busy(&route_pools) {
+            self.metrics.event("pool_busy", json!({ "opp": base }));
+            return;
+        }
         // PGA bid, decided now (fresh base fee and competition), not at detection.
         let Some((fees, tip_usd)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
         else {
@@ -947,7 +990,8 @@ impl Engine {
         let tx_done = tx_done.clone();
         let metrics = self.metrics.clone();
         let (http, feed_log) = (self.rpc.http.clone(), self.feed_log.clone());
-        let pools: Vec<Address> = opp.hops.iter().map(|h| h.pool).collect();
+        let pools = route_pools;
+        self.claim_pools((opp.buy_pool, opp.sell_pool), &pools);
         let decided = Instant::now();
         let round_ms = self.cfg.pga.round_ms;
         tokio::spawn(async move {
@@ -1300,6 +1344,9 @@ impl Engine {
                 landed,
                 route,
             } => {
+                if let Some(r) = route {
+                    self.release_pools(r);
+                }
                 if let (false, Some(r)) = (landed.success, route) {
                     // Lost race or mispriced: the next attempt on this route likely fails the same
                     // way. Spend gas on uncontested (long-tail) routes instead.
