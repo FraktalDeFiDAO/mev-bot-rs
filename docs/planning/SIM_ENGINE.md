@@ -7,8 +7,12 @@ arbitrage strategies) → candidates → REVM as the execution authority → pro
 
 - **No own node; $200 capital; ~$20/mo host** (AWS us-east-2 t3.small, 2 GB RAM, 2 vCPU). Anything
   needing a node or a big box is out until the bot earns.
-- **Arbitrum ordering is FCFS + Timeboost**: non-express txs wait ~200 ms, then are ordered by
-  arrival. Priority fees do not buy position; the "PGA" lever is the express lane (paid auction).
+- **Arbitrum ordering is the Priority Gas Auction (PGA)** (DECISIONS #59): each 125 ms round (two
+  per 250 ms block) is ordered by `min(maxPriorityFeePerGas, maxFeePerGas - baseFee)`, ties by
+  arrival, private mempool; no express lane, no 200 ms delay. Confirmed live from block data (tips
+  ordered 3:1 at end of September vs 0.9:1 in mid-September); exact activation date unverified.
+  This doc was first written for FCFS + Timeboost; conclusions that "priority fees buy nothing"
+  no longer hold. The bot now bids (`mev_risk::bid`).
 - **Measured race position (race reports, 2026-10-04/05):** we land in the *same feed batch* as the
   winner, 5–7 positions behind. Winners reach the sequencer ~5–15 ms after the trigger; we take
   18 ms (best, feed presim) to ~120 ms (block-log path). Trigger→send latency decides the race.
@@ -139,8 +143,10 @@ learned from two sweeps where the answer moved ≥ 0.05 %; unknown links are nev
 A real two-hop arbitrage: 314 399 L2 gas, of which 570 for L1 data (548 calldata bytes, ~1 gas per
 byte, 0.2 %), at 0.0201 gwei. The per-hop estimate (`arb_gas_estimate`: 100k + 115k × hops) is
 calibrated on live receipts; the L1 component is below its error and isn't modelled per trade.
-Priority fees don't reorder non-express transactions (FCFS after the Timeboost delay), so the
-competition budget is latency, not gas bidding.
+Under Timeboost, priority fees did not reorder non-express transactions (FCFS after the delay), so
+the competition budget was latency, not gas bidding. Under PGA a tip sets priority within a round
+(ties go to the earlier arrival), so the budget is latency plus a tip bid: implemented as
+`mev_risk::bid` and modelled in `mev_sim::pga` (DECISIONS #59).
 
 ## Phase 2 result: off on free infrastructure (2026-10-05)
 

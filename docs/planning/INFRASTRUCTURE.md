@@ -92,7 +92,7 @@ sequencer feed / Flashblocks directly. Paying more beyond that buys capacity and
 | Chainstack **Unlimited Node** (shared) | from $149/mo | Unlimited requests at fixed RPS — removes quota worries, not a latency upgrade |
 | bloXroute **Base Flashblocks** stream | $250/mo ($300 parsed, $500 statediff) | Faster delivery of the same data as the free Flashblocks stream — only worth it if shadow logs show we're late |
 | bloXroute **Base Speed Boost** | $1,000/mo | Faster tx routing to the Base sequencer. Late-stage only |
-| bloXroute | — | **No Arbitrum products** — on Arbitrum the paid speed tool is Timeboost's express lane auction instead |
+| bloXroute | — | **No Arbitrum products** — on Arbitrum the paid speed tools were Timeboost's express lane auction, now replaced (live by end of September 2026) by per-tx priority-fee auctions (PGA) plus the paid Fast Feed (≥ $17/day; off for us, DECISIONS #59) |
 
 ### Option C: rent bare metal and run the node ourselves (cheapest per unit of speed)
 

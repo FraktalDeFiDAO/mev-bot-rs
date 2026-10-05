@@ -19,11 +19,15 @@ use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use mev_bindings::ArbExecutor;
 use mev_config::{ChainConfig, Secrets};
-use mev_exec::{Landed, Sender};
+use mev_exec::{Fees, Landed, Sender};
 use mev_lending::{AdapterRpc, LiquidationAdapter, Plan};
 use mev_liquidate::{Runner, RunnerConfig, RunnerEvent};
 use mev_metrics::Metrics;
-use mev_risk::{RiskGuard, RiskLimits, loan_cap};
+use mev_risk::{
+    RiskGuard, RiskLimits,
+    bid::{BidInput, BidPolicy, Decision, TipBook, TipBudget},
+    loan_cap,
+};
 use mev_rpc::{Backoff, Rpc, RpcMeter};
 use mev_search::{SearchParams, best_route, two_pool_arbs};
 pub use mev_sim::SimOutcome;
@@ -34,6 +38,23 @@ use race::Trigger;
 use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
+
+/// Recently observed winning tips kept for the competition estimate (count, max age).
+const TIP_BOOK_CAPACITY: usize = 200;
+const TIP_BOOK_HORIZON_SECS: u64 = 3600;
+
+/// The bid policy from `[pga]` config.
+fn bid_policy(c: &mev_config::PgaConfig) -> BidPolicy {
+    let gwei = |g: f64| (g.max(0.0) * 1e9) as u128;
+    BidPolicy {
+        max_fraction_of_net: c.max_fraction_of_net,
+        max_tip_usd_per_tx: c.max_tip_usd_per_tx,
+        min_net_usd: 0.0,
+        min_tip_wei: gwei(c.min_tip_gwei),
+        default_tip_wei: gwei(c.default_tip_gwei),
+        outbid_margin: c.outbid_margin,
+    }
+}
 
 /// How long an arbitrage route is skipped after its send reverted (lost race or mispriced).
 const ROUTE_COOLDOWN: Duration = Duration::from_secs(30 * 60);
@@ -80,6 +101,12 @@ pub struct Engine {
     last_sim: HashMap<(Address, Address), Instant>,
     /// Arbitrage routes whose send reverted, and when (skipped for `ROUTE_COOLDOWN`).
     cooldown: HashMap<(Address, Address), Instant>,
+    /// PGA priority-fee bidding: policy, recently observed winning tips, tip spend caps.
+    bid_policy: BidPolicy,
+    /// Fast Feed counters when the paid feed is enabled and keyed.
+    fast_feed_stats: Option<Arc<mev_ingest::fast_feed::FastFeedStats>>,
+    tips: TipBook,
+    tip_budget: TipBudget,
     mode: Mode,
     liq: Option<LiqCtx>,
     presim_rx: Option<PresimRx>,
@@ -132,6 +159,8 @@ enum TxDone {
         hash: Option<TxHash>,
         error: String,
     },
+    /// A priority fee (wei/gas) seen winning ordering over us: the competition estimate's input.
+    TipSeen(u128),
 }
 
 impl Engine {
@@ -246,16 +275,37 @@ impl Engine {
             .clone()
             .filter(|p| p.enabled && !p.rpc_urls.is_empty());
         let feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>> = Default::default();
+        let fast_feed_stats = (cfg.pga.fast_feed.enabled && secrets.fast_feed_key.is_some())
+            .then(|| Arc::new(mev_ingest::fast_feed::FastFeedStats::default()));
+        if cfg.pga.fast_feed.enabled && secrets.fast_feed_key.is_none() {
+            warn!(
+                "pga.fast_feed enabled but ARBITRUM_FAST_FEED_KEY is not set: using the public feed only"
+            );
+        }
         let (liq_feed, presim_feed) = match cfg.sequencer_feed.clone() {
             Some(url) => {
                 let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<mev_sequencer::SequencedTx>();
+                // Optional paid Fast Feed: same txs, earlier (inside the PGA round). Merged into
+                // the same stream; the fan-out below drops whichever copy arrives second.
+                if let Some(stats) = &fast_feed_stats {
+                    spawn_fast_feed(
+                        cfg.pga.fast_feed.url.clone(),
+                        secrets.fast_feed_key.clone().unwrap_or_default(),
+                        raw_tx.clone(),
+                        stats.clone(),
+                    );
+                }
                 tokio::spawn(mev_sequencer::run(url, raw_tx));
                 let (liq_tx, liq_rx) = mpsc::unbounded_channel();
                 let (pre_tx, pre_rx) = mpsc::unbounded_channel();
                 let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
                 let log = feed_log.clone();
                 tokio::spawn(async move {
+                    let mut seen = RecentHashes::new(FEED_DEDUP);
                     while let Some(st) = raw_rx.recv().await {
+                        if !seen.insert(st.hash) {
+                            continue; // already delivered by the other feed
+                        }
                         log.lock().unwrap().record(&st);
                         if want_pre {
                             let _ = pre_tx.send(st.clone());
@@ -348,6 +398,9 @@ impl Engine {
             None => None,
         };
 
+        let pga_policy = bid_policy(&cfg.pga);
+        let pga_budget =
+            TipBudget::new(cfg.pga.max_tip_usd_per_minute, cfg.pga.max_tip_usd_per_day);
         Ok(Self {
             cfg,
             rpc,
@@ -363,6 +416,10 @@ impl Engine {
             metrics,
             last_sim: HashMap::new(),
             cooldown: HashMap::new(),
+            bid_policy: pga_policy,
+            fast_feed_stats,
+            tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
+            tip_budget: pga_budget,
             mode,
             liq,
             presim_rx,
@@ -592,6 +649,63 @@ impl Engine {
             .is_some_and(|t| t.elapsed() < ROUTE_COOLDOWN)
     }
 
+    /// The PGA bid for a send happening now: fee fields and the tip's USD cost, or `None` (logged)
+    /// when the policy or the tip spend caps say skip. `gas_price` is the current base fee (wei),
+    /// `native_px` USD per wei; `gross_usd` is expected profit before any gas.
+    fn pga_bid(
+        &mut self,
+        gross_usd: f64,
+        gas: u64,
+        gas_price: f64,
+        native_px: f64,
+        ev: &serde_json::Value,
+    ) -> Option<(Fees, f64)> {
+        let base_fee = gas_price.max(0.0) as u128;
+        if !self.cfg.pga.enabled {
+            return Some((Fees::no_bid(base_fee), 0.0));
+        }
+        let now = now_secs();
+        let competition = self.tips.estimate(self.cfg.pga.competition_quantile, now);
+        let input = BidInput {
+            gross_profit_usd: gross_usd,
+            gas_units: gas,
+            base_fee_wei: base_fee,
+            usd_per_wei: native_px,
+            competition_tip_wei: competition,
+        };
+        let bid = match self.bid_policy.decide(&input) {
+            Decision::Bid(b) => b,
+            Decision::Skip(why) => {
+                self.metrics.update(|c| c.bids_skipped += 1);
+                self.metrics.event(
+                    "bid_skip",
+                    json!({ "opp": ev, "reason": format!("{why:?}"), "competition_wei": competition.map(|c| c.to_string()) }),
+                );
+                return None;
+            }
+        };
+        if let Err(cap) = self.tip_budget.allow(bid.tip_cost_usd, now) {
+            self.metrics.update(|c| c.bids_skipped += 1);
+            self.metrics.event(
+                "bid_skip",
+                json!({ "opp": ev, "reason": format!("{cap:?}") }),
+            );
+            return None;
+        }
+        self.tip_budget.record(bid.tip_cost_usd, now);
+        self.metrics.update(|c| {
+            c.bids_placed += 1;
+            c.tip_usd += bid.tip_cost_usd;
+            c.bid_fraction_sum += bid.fraction_of_net;
+        });
+        self.metrics.event(
+            "bid",
+            json!({ "opp": ev, "tip_wei": bid.max_priority_fee_per_gas.to_string(), "tip_usd": bid.tip_cost_usd,
+                    "fraction_of_net": bid.fraction_of_net, "competition_wei": competition.map(|c| c.to_string()) }),
+        );
+        Some((Fees::from_bid(&bid), bid.tip_cost_usd))
+    }
+
     /// The Aave pool to flash-borrow from when the executor supports `liquidateViaAave`.
     fn aave_flash_pool(&self) -> Option<Address> {
         self.cfg
@@ -622,6 +736,30 @@ impl Engine {
 
     fn log_summary(&self) {
         self.metrics.heartbeat();
+        if let Some(ff) = &self.fast_feed_stats {
+            use std::sync::atomic::Ordering::Relaxed;
+            let msgs = ff.msgs.swap(0, Relaxed);
+            let (gaps, missing) = (ff.gaps.swap(0, Relaxed), ff.missing.swap(0, Relaxed));
+            let lag = ff
+                .lag_ms_total
+                .swap(0, Relaxed)
+                .checked_div(msgs)
+                .unwrap_or(0);
+            let reconnects = ff.reconnects.load(Relaxed);
+            self.metrics.update(|c| {
+                c.fast_feed_msgs += msgs;
+                c.fast_feed_gaps += gaps;
+                c.fast_feed_reconnects = reconnects;
+            });
+            info!(
+                msgs,
+                gaps,
+                missing,
+                reconnects,
+                mean_lag_ms = lag,
+                "fast feed (last minute)"
+            );
+        }
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
             info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
             if self.cfg.presim.as_ref().is_some_and(|p| p.local) {
@@ -660,6 +798,13 @@ impl Engine {
             profitable = c.sim_profitable,
             liq_planned = c.liq_planned,
             liq_profitable = c.liq_profitable,
+            bids = c.bids_placed,
+            bids_skipped = c.bids_skipped,
+            bids_won = c.bids_won,
+            bids_lost = c.bids_lost,
+            tip_usd = format!("{:.4}", c.tip_usd),
+            round_within = c.round_within,
+            round_over = c.round_over,
             feed_triggers = c.feed_triggers,
             sent = c.sent,
             ok = c.landed_ok,
@@ -769,6 +914,8 @@ impl Engine {
         );
 
         if self.mode != Mode::Live {
+            // Shadow: log the PGA bid this would have placed (nothing is sent).
+            let _ = self.pga_bid(profit_usd, gas, gas_price, native_px, &base);
             return;
         }
         let Some(sender) = self.sender.clone() else {
@@ -781,9 +928,14 @@ impl Engine {
             );
             return;
         }
-        // On-chain floor: the trade must at least pay for its gas, or it reverts.
+        // PGA bid, decided now (fresh base fee and competition), not at detection.
+        let Some((fees, tip_usd)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
+        else {
+            return;
+        };
+        // On-chain floor: the trade must pay for its gas and its bid, or it reverts.
         let min_profit = if loan_px > 0.0 {
-            U256::from((gas_usd / loan_px) as u128)
+            U256::from(((gas_usd + tip_usd) / loan_px) as u128)
         } else {
             U256::ZERO
         };
@@ -797,11 +949,9 @@ impl Engine {
         let (http, feed_log) = (self.rpc.http.clone(), self.feed_log.clone());
         let pools: Vec<Address> = opp.hops.iter().map(|h| h.pool).collect();
         let decided = Instant::now();
+        let round_ms = self.cfg.pga.round_ms;
         tokio::spawn(async move {
-            let sent = match sender
-                .send(&opp, min_profit, gas_limit, Some(gas_price as u128))
-                .await
-            {
+            let sent = match sender.send(&opp, min_profit, gas_limit, Some(fees)).await {
                 Ok(sent) => sent,
                 Err(e) => {
                     let _ = tx_done.send(TxDone::Failed {
@@ -824,6 +974,14 @@ impl Engine {
                 json!({ "hash": hash, "net_usd": net_usd, "latency_ms": latency_ms, "source": trigger.source, "endpoints": endpoints }),
             );
             info!(%hash, latency_ms, source = trigger.source, endpoints = endpoints.join(" "), "arb sent (trigger -> accepted)");
+            // Inside the PGA round its trigger was in? (Later = bidding in a later round.)
+            metrics.update(|c| {
+                if latency_ms <= round_ms as i64 {
+                    c.round_within += 1
+                } else {
+                    c.round_over += 1
+                }
+            });
             let landed = match sender.wait(hash, Duration::from_secs(30)).await {
                 Ok(l) => l,
                 Err(e) => {
@@ -861,6 +1019,12 @@ impl Engine {
                 our_index = ?rep["our_index"].as_u64(),
                 "race"
             );
+            if let Some(tip) = rep["winner_tip_wei"]
+                .as_str()
+                .and_then(|t| t.parse::<u128>().ok())
+            {
+                let _ = tx_done.send(TxDone::TipSeen(tip));
+            }
             metrics.event("race", rep);
         });
     }
@@ -962,6 +1126,9 @@ impl Engine {
         self.metrics.update(|c| c.liq_profitable += 1);
         self.metrics.event("liq_backrun", ev.clone());
         if self.mode != Mode::Live {
+            // Shadow: log the PGA bid this would have placed (nothing is sent).
+            let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
+            let _ = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev);
             return;
         }
         let Some(sender) = self.sender.clone() else {
@@ -973,8 +1140,13 @@ impl Engine {
                 json!({ "liq": ev, "reason": format!("{block:?}") }),
             );
         }
+        let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
+        let Some((fees, tip_usd)) = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev)
+        else {
+            return;
+        };
         let min_profit = if debt_px > 0.0 {
-            U256::from((gas_usd / debt_px) as u128)
+            U256::from(((gas_usd + tip_usd) / debt_px) as u128)
         } else {
             U256::ZERO
         };
@@ -984,14 +1156,7 @@ impl Engine {
         let metrics = self.metrics.clone();
         tokio::spawn(async move {
             let sent = sender
-                .send_liquidation_fast(
-                    &plan,
-                    &hops,
-                    min_profit,
-                    BACKRUN_GAS_LIMIT,
-                    gas_price as u128,
-                    aave_pool,
-                )
+                .send_liquidation_fast(&plan, &hops, min_profit, BACKRUN_GAS_LIMIT, fees, aave_pool)
                 .await;
             let done = match sent.map(|s| s.hash) {
                 Ok(hash) => {
@@ -1063,6 +1228,8 @@ impl Engine {
               gas_usd = format!("{gas_usd:.4}"), net_usd = format!("{net_usd:.4}"), "simulated liquidation");
 
         if self.mode != Mode::Live {
+            // Shadow: log the PGA bid this would have placed (nothing is sent).
+            let _ = self.pga_bid(profit_usd, gas, gas_price, native_px, &base);
             return;
         }
         let Some(sender) = self.sender.clone() else {
@@ -1074,9 +1241,13 @@ impl Engine {
                 json!({ "liq": base, "reason": format!("{block:?}") }),
             );
         }
-        // On-chain floor: at least cover gas, in debt-asset units.
+        let Some((fees, tip_usd)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
+        else {
+            return;
+        };
+        // On-chain floor: at least cover gas and the bid, in debt-asset units.
         let min_profit = if debt_px > 0.0 {
-            U256::from((gas_usd / debt_px) as u128)
+            U256::from(((gas_usd + tip_usd) / debt_px) as u128)
         } else {
             U256::ZERO
         };
@@ -1087,7 +1258,7 @@ impl Engine {
         let metrics = self.metrics.clone();
         tokio::spawn(async move {
             let done = match sender
-                .send_liquidation(&plan, &hops, min_profit, gas_limit, aave_pool)
+                .send_liquidation(&plan, &hops, min_profit, gas_limit, Some(fees), aave_pool)
                 .await
             {
                 Ok(hash) => {
@@ -1149,7 +1320,15 @@ impl Engine {
                     self.risk
                         .record_profit(est_profit_usd - gas_usd, now_secs());
                 }
+                let bidding = self.cfg.pga.enabled;
                 self.metrics.update(|c| {
+                    if bidding {
+                        if landed.success {
+                            c.bids_won += 1
+                        } else {
+                            c.bids_lost += 1
+                        }
+                    }
                     c.gas_usd += gas_usd;
                     if landed.success {
                         c.landed_ok += 1;
@@ -1165,6 +1344,7 @@ impl Engine {
                 );
                 info!(%hash, success = landed.success, gas_usd = format!("{gas_usd:.4}"), "landed");
             }
+            TxDone::TipSeen(tip) => self.tips.record(tip, now_secs()),
             TxDone::Failed { hash, error } => {
                 self.risk.record(false, 0.0, now_secs());
                 self.metrics
@@ -1364,4 +1544,169 @@ async fn fetch_gas_price(http: &alloy::providers::DynProvider) -> f64 {
         .await
         .map(|g| g as f64)
         .unwrap_or(10_000_000.0)
+}
+
+/// Hashes seen recently, bounded (oldest evicted): drops a tx delivered by both feeds.
+struct RecentHashes {
+    set: std::collections::HashSet<TxHash>,
+    order: std::collections::VecDeque<TxHash>,
+    cap: usize,
+}
+
+impl RecentHashes {
+    fn new(cap: usize) -> Self {
+        Self {
+            set: Default::default(),
+            order: Default::default(),
+            cap,
+        }
+    }
+
+    /// True if `h` is new.
+    fn insert(&mut self, h: TxHash) -> bool {
+        if !self.set.insert(h) {
+            return false;
+        }
+        self.order.push_back(h);
+        if self.order.len() > self.cap
+            && let Some(old) = self.order.pop_front()
+        {
+            self.set.remove(&old);
+        }
+        true
+    }
+}
+
+/// Recent tx hashes remembered for de-duplicating the two feeds (~a minute of Arbitrum traffic).
+const FEED_DEDUP: usize = 20_000;
+
+/// Run the Fast Feed client and forward its txs as `SequencedTx` (block-derived `seq`).
+fn spawn_fast_feed(
+    url: String,
+    key: String,
+    out: mpsc::UnboundedSender<mev_sequencer::SequencedTx>,
+    stats: Arc<mev_ingest::fast_feed::FastFeedStats>,
+) {
+    use alloy::consensus::Transaction as _;
+    let (ff_tx, mut ff_rx) = mpsc::unbounded_channel::<mev_ingest::fast_feed::FastFeedTx>();
+    tokio::spawn(mev_ingest::fast_feed::run(url, key, ff_tx, stats));
+    tokio::spawn(async move {
+        while let Some(f) = ff_rx.recv().await {
+            let st = mev_sequencer::SequencedTx {
+                seq: f
+                    .block_number
+                    .saturating_sub(mev_sequencer::ARB_ONE_GENESIS_BLOCK),
+                received: f.received,
+                hash: f.hash,
+                to: f.tx.to(),
+                input: f.tx.input().clone(),
+                tx: f.tx,
+            };
+            if out.send(st).is_err() {
+                return;
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod feed_dedup_tests {
+    use super::*;
+
+    #[test]
+    fn recent_hashes_drop_repeats_and_stay_bounded() {
+        let mut r = RecentHashes::new(2);
+        let (a, b, c) = (
+            TxHash::repeat_byte(1),
+            TxHash::repeat_byte(2),
+            TxHash::repeat_byte(3),
+        );
+        assert!(r.insert(a) && !r.insert(a));
+        assert!(r.insert(b) && r.insert(c));
+        assert!(r.insert(a), "evicted after capacity, so new again");
+    }
+}
+
+/// Backtest of the live bidding path (policy + tip book) on synthetic PGA rounds, against the
+/// pre-PGA behaviour of always bidding zero. Synthetic: rivals tip 0.001-0.03 gwei (the range
+/// seen ahead of our reverted arbs on 2026-10-05), opportunities $0.05-$1 gross.
+#[cfg(test)]
+mod pga_replay {
+    use super::*;
+    use mev_sim::pga::{Offer, PastView, Round, Strategy, replay};
+
+    struct Live {
+        policy: BidPolicy,
+        tips: TipBook,
+        fed: usize,
+    }
+
+    impl Strategy for Live {
+        fn bid(&mut self, o: &Offer, past: &PastView) -> Option<u128> {
+            // Feed reveals exactly as the engine does from race reports (one per past round).
+            for t in &past.winning_tips()[self.fed..] {
+                self.tips.record(*t, 0);
+            }
+            self.fed = past.winning_tips().len();
+            let x = BidInput {
+                gross_profit_usd: o.gross_usd,
+                gas_units: o.gas_units,
+                base_fee_wei: o.base_fee_wei,
+                usd_per_wei: o.usd_per_wei,
+                competition_tip_wei: self.tips.estimate(0.75, 0),
+            };
+            match self.policy.decide(&x) {
+                Decision::Bid(b) => Some(b.max_priority_fee_per_gas),
+                Decision::Skip(_) => None,
+            }
+        }
+    }
+
+    struct Zero;
+    impl Strategy for Zero {
+        fn bid(&mut self, _o: &Offer, _p: &PastView) -> Option<u128> {
+            Some(0)
+        }
+    }
+
+    fn synthetic(n: usize) -> Vec<Round> {
+        // Deterministic LCG: no rand dependency.
+        let mut s = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 33) as f64 / (1u64 << 31) as f64
+        };
+        (0..n)
+            .map(|_| Round {
+                gross_usd: 0.05 + next() * 0.95,
+                gas_units: 330_000,
+                base_fee_wei: 10_000_000,
+                usd_per_wei: 3000.0 / 1e18,
+                competitor_tips: vec![(1_000_000.0 + next() * 29_000_000.0) as u128],
+                competitor_first: next() < 0.5,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bidding_beats_the_zero_tip_baseline_and_never_loses_money_per_win() {
+        let rounds = synthetic(500);
+        let zero = replay(&rounds, &mut Zero);
+        let mut live = Live {
+            policy: bid_policy(&mev_config::PgaConfig::default()),
+            tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
+            fed: 0,
+        };
+        let bid = replay(&rounds, &mut live);
+        assert_eq!(zero.wins, 0, "a zero tip loses every contested round");
+        assert!(zero.net_usd < 0.0);
+        assert!(
+            bid.wins > 0 && bid.net_usd > zero.net_usd,
+            "{bid:?} vs {zero:?}"
+        );
+        // Default caps: no single tip above $0.25.
+        assert!(bid.tips_paid_usd <= 0.25 * bid.bids as f64 + 1e-9);
+    }
 }

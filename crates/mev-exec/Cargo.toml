@@ -13,5 +13,6 @@ tokio = { workspace = true }
 futures = { workspace = true }
 mev-types = { workspace = true }
 mev-bindings = { workspace = true }
+mev-risk = { workspace = true }
 mev-rpc = { workspace = true }
 mev-lending = { workspace = true }

@@ -1,6 +1,7 @@
 //! Market analytics over the pool store: how far each pair is from a profitable round trip.
 
 pub mod audit;
+pub mod pnl;
 
 use mev_dex::Pool;
 use mev_state::PoolStore;

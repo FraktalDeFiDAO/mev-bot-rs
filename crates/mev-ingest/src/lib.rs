@@ -1,5 +1,7 @@
 //! Live event ingestion: WebSocket log subscriptions for pool state changes.
 
+pub mod fast_feed;
+
 use alloy::{
     primitives::Address,
     providers::{DynProvider, Provider},
