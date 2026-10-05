@@ -1,6 +1,6 @@
 # Simulation engine: audit (Phase 0) and roadmap
 
-Status: Phase 0 complete (2026-10-05). Target design: one opportunity engine (liquidation +
+Status: Phase 0 complete; Phase 2 in progress (2026-10-05). Target design: one opportunity engine (liquidation +
 arbitrage strategies) → candidates → REVM as the execution authority → profit → competition → submit.
 
 ## Constraints that shape everything
@@ -69,7 +69,7 @@ R replay tested · B benchmarked · Doc documented.
 |---|---|---|---|---|---|---|---|---|---|
 | 0 Audit + map | ✔ | ✔ | – | – | – | – | – | – | ✔ |
 | 1 REVM correctness baseline | ✔ | ✔ | ✔ (probe) | ✔ | ✔ | ✔ (live probe) | | ✔ (p50/p90/p99) | ✔ |
-| 2 Hot-state DB: block diffs + snapshot + overlays | ✔ | ✔ | | | | | | | |
+| 2 Hot-state DB: block diffs + snapshot + overlays | ✔ | ✔ | partial (diff-fed cache) | ✔ | ✔ | ✔ (live probe: 124/124 same-block) | | ✔ (diff p50 ~170 ms, sim p50 0.4 ms) | ✔ |
 | 3 Persistent parallel workers | ✔ | | | | | | | | |
 | 4 DEX adapters + full-path REVM | ✔ | | | | | | | | |
 | 5 Two-pool / triangular / multi-hop | ✔ | | | | | | | | |
@@ -96,3 +96,16 @@ R replay tested · B benchmarked · Doc documented.
 4. **Phases 6–8, 10–12**: funding abstraction (Aave `flashLoanSimple`, V3 flash swap, own capital),
    flash liquidation with optimized exits, combined routes.
 5. **Phase 15** fee/competition model, **17** replay, **18** profiling throughout.
+
+## Phase 2 findings (measured on the us-east-2 host)
+
+| Run | Result |
+|---|---|
+| dRPC block-diff follower, 6 min | 1,273/1,278 blocks, 0 rate limits, 5 "unknown block" (retried), p50 159–236 ms, lag p50 0 / p90 1 / max 4 blocks, ~64 changes/block |
+| TTL cache (20 blocks) vs latest | 0/30 real swaps exact, 27 false movers |
+| Diff-fed, re-simulated after fill, truth **same block** | 853 compared, 98 % exact, **124/124 real swaps exact**, ~2 % false movers |
+| Diff-fed, first sight, truth **latest** | 2/12 real swaps exact (0–1 block lag) |
+| Local simulate latency | p50 0.36–0.43 ms, p90 0.69–0.72 ms, p99 0.94–1.7 ms |
+
+revm execution is correct on complete, same-block state. Remaining gap: freshness (the last block)
+and completeness (first sight). Step 2: speculative overlay of feed txs + pre-warming.
