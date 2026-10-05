@@ -1,0 +1,118 @@
+# Inventory of every server and external service the mev-bot project uses.
+# Facts as of 2026-10-05. NO secrets here (keys/URLs with keys live only in the git-ignored
+# `.env`, one copy per host). Update this file when a host changes; STATE.md points here.
+
+[meta]
+updated = "2026-10-05"
+aws_account = "659648171648"      # profile `mev-bot`, role AccountFullAccessRole
+aws_region = "us-east-2"          # Ohio, next to the Arbitrum sequencer; org policy allows EC2 only here
+aws_standard_vcpu_quota = 8       # L-1216C47A; increase to 16 requested (case 179121121800173, open)
+
+# ---------------------------------------------------------------- bot hosts
+
+[servers.contabo-bot]
+role = "bot (CURRENT): arbitrage + liquidations, runs the Rust bot in podman"
+status = "running (shadow mode since 2026-10-05, build 28e718e)"
+provider = "Contabo VPS, Lauterbourg FR"
+ssh = "administrator@194.163.145.241"
+ip = "194.163.145.241"
+os = "Linux, podman 4.9 + podman-compose 1.0.6"
+resources = "4 vCPU, ~8 GB RAM, 145 GB disk (82% used)"
+checkout = "/home/administrator/src/mev-bot-v3"
+container = "mev-bot-arbitrum (read-only, caps dropped, host network)"
+shared_with = "gmx-bot-* containers (live/paper/dashboard): not ours, do not touch"
+sequencer_rtt_ms = 110
+deploy = "SERVER=administrator@194.163.145.241 REMOTE_DIR=/home/administrator/src/mev-bot-v3 scripts/deploy.sh shadow|live --yes"
+env_file = "/home/administrator/src/mev-bot-v3/.env (chmod 600; previous copies .env.bak-*)"
+notes = "Moved back here 2026-10-05 so the AWS vCPU quota goes to the Nitro node (DECISIONS #38 host)."
+
+[servers.mev-bot-ohio]
+role = "bot (PREFERRED once quota allows): same bot, ~ms from the sequencer"
+status = "STOPPED (stopped by the user 2026-10-05 15:44 UTC to free vCPUs); cannot start until quota > 8 or the node shrinks"
+provider = "AWS EC2 us-east-2a"
+instance_id = "i-0acc917f9a4d5f83b"
+instance_type = "t3.small (2 vCPU, 2 GB)"
+ssh = "ubuntu@77.112.246.114 (alias mev-ohio, key ~/.ssh/mev-ohio)"
+elastic_ip = "77.112.246.114 (eipalloc-04c2c89e0807fa946)"
+private_ip = "172.31.3.121"
+os = "Ubuntu 24.04 x86_64, podman"
+ami = "ami-0fa99aa8f97f9e30b"
+vpc = "vpc-08dbd5b8e59a22075"
+subnet = "subnet-04d6a191844b19956"
+security_group = "sg-05f70c045a95b73b9"
+root_volume = "vol-00a71760a446948a3 (20 GiB gp3, encrypted, delete-on-termination)"
+imds = "v2 required"
+checkout = "/home/ubuntu/src/mev-bot"
+deploy = "scripts/deploy.sh shadow|live --yes   (default SERVER=mev-ohio)"
+notes = "Last live build 9d952c0 (zero-tip). Recovery metadata: arbitrum-old-bot-recovery.json. DECISIONS #44."
+
+# ---------------------------------------------------------------- RPC node
+
+[servers.arbitrum-one-node]
+role = "own Arbitrum One Nitro full (pruned) node = private RPC; NOT the bot"
+status = "running since 2026-10-05 15:51 UTC (initial snapshot download/sync)"
+provider = "AWS EC2 us-east-2a"
+instance_id = "i-0245433f99336c72b"
+instance_type = "r7i.2xlarge (8 vCPU, 64 GiB), On-Demand"
+ssh = "ubuntu@18.188.52.82 (key ~/.ssh/mev-ohio) or SSM: aws --profile mev-bot --region us-east-2 ssm start-session --target i-0245433f99336c72b"
+public_ip = "18.188.52.82"
+private_ip = "172.31.6.41"
+ami = "ami-0fa99aa8f97f9e30b"
+vpc = "vpc-08dbd5b8e59a22075"
+subnet = "subnet-04d6a191844b19956"
+security_group = "sg-0dc3c9134c05ac28b (SSH from admin /32 only; no RPC/feed port open)"
+iam_instance_profile = "arbitrum-one-node-ssm-profile"
+root_volume = "vol-0b69aeba963729070 (50 GiB gp3, encrypted, delete-on-termination)"
+data_volumes = [
+  "vol-0e85eb2e15297fafe (6144 GiB gp3, 16000 IOPS, 1000 MiB/s, encrypted, KEPT on termination) /dev/sdf",
+  "vol-0c04188add3a6a538 (4096 GiB gp3, 16000 IOPS, 1000 MiB/s, encrypted, KEPT on termination) /dev/sdg",
+]
+nitro = "offchainlabs/nitro-node:v3.12.1-70fa99a, HashDB, latest pruned snapshot"
+endpoints = "HTTP 127.0.0.1:8547, WS 127.0.0.1:8548 (loopback only on the node)"
+cost = "provisioning estimate $985.49/month for the 6 TiB layout, ~$0.53/h instance alone; a stopped instance still bills its volumes"
+docs = "ARBITRUM-NODE.md; scripts provision-/teardown-arbitrum-node.sh; resource ids in arbitrum-node-resources.env"
+notes = "Holds the whole 8 vCPU quota, which is why mev-bot-ohio cannot start. The user said the node belongs in another AWS account ('Identity Delegated Admin'): not yet moved, no profile for that account is configured. Second 4 TiB volume looks like the extra snapshot-staging volume: confirm before keeping it."
+
+# ---------------------------------------------------------------- dev machine
+
+[servers.dev-workstation]
+role = "development, tests, image builds (BUILD=local streams the image to the bot host)"
+hostname = "hp17-fraktal-02"
+os = "Linux (CachyOS)"
+resources = "4 vCPU, 29 GB RAM"
+repo = "/home/admministrator/projects/mev-bot (private GitHub FraktalDeFiDAO/mev-bot-rs; PR-only, user merges)"
+tooling = "scripts/dev.sh (podman Rust+Foundry container), scripts/check.sh, graphify, Obsidian vault"
+
+# ---------------------------------------------------------------- RPC providers (primary first)
+
+[providers.chainstack_primary]
+role = "PRIMARY RPC (reads, WS logs/subscriptions, tx broadcast)"
+plan = "Chainstack $49/month, enough for rigorous testing"
+ws_env = "ARBITRUM_WS_URL"         # value in .env on every host (key is in the URL path)
+http_env = "ARBITRUM_HTTP_URL"     # same host, https scheme
+host = "arbitrum-mainnet.core.chainstack.com"
+notes = "Former primary(ies) kept as ARBITRUM_HTTP_URL_2.. / ARBITRUM_WS_URL_2.. fail-over. Key is a secret: never commit."
+
+[providers.chainstack_keyed_extras]
+role = "heavy sweeps / presim (eth_simulateV1) / WS fallbacks"
+env = "ARBITRUM_SWEEP_URL_n, ARBITRUM_PRESIM_URL_n, ARBITRUM_WS_FALLBACK_n"
+
+[providers.sequencer_feed]
+role = "real-time tx feed (free, our biggest edge)"
+url = "wss://arb1.arbitrum.io/feed"
+
+[providers.public_fallbacks]
+role = "health sweeps / log backfill / last resort"
+endpoints = ["PublicNode", "dRPC free", "BlastAPI", "arb1.arbitrum.io/rpc (historical logs, rate-limits our IP)"]
+
+[providers.github]
+role = "deploy source: servers fetch with a read-only deploy key (ssh alias github-mev-bot)"
+repo = "FraktalDeFiDAO/mev-bot-rs"
+
+# ---------------------------------------------------------------- on-chain
+
+[onchain.executor]
+address = "0xb793f66e4e3D1fFfd7c095E3AC2D863BfBB336A2"
+chain = "Arbitrum One (42161)"
+features = "flash swaps, liquidateViaAave; 8 lending targets"
+hot_wallet_balance_eth = "~0.006 (2026-10-05)"
