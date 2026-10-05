@@ -5,15 +5,17 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
 ---
 
 **Updated:** 2026-10-05
-**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot`, build 9d952c0 (main through #33). It
-still sends **zero-tip** transactions: PGA bidding lives on branch
-`claude/arbitrum-timeboost-successor-cihu0f` (not merged, no PR yet, nothing deployed from it).
-**Executor:** `0xb793f66e4e3D1fFfd7c095E3AC2D863BfBB336A2` (flash swaps + `liquidateViaAave`; 8
-lending targets). PR #34 (enable `executor_aave_flash`) open. Hot wallet ~0.006 ETH.
-**Deploy:** `scripts/deploy.sh live --yes` builds from the working tree: don't switch branches while
-it runs. The user merges PRs and runs `deploy-executor.sh` in a real terminal (it prompts).
-**RPC:** keyed Chainstack endpoints in `.env` (`ARBITRUM_SWEEP_URL_n`, `_PRESIM_URL_n`,
-`_WS_FALLBACK_n`).
+**Running:** SHADOW on Contabo `administrator@194.163.145.241:~/src/mev-bot-v3`, build 28e718e
+(deploy-20261005-181023). Moved back 2026-10-05 so the AWS vCPU quota (8) goes to the Nitro node
+(`i-0245433f99336c72b`, r7i.2xlarge); AWS bot `i-0acc917f9a4d5f83b` is stopped (quota increase to 16
+pending, case 179121121800173). Deploy with
+`SERVER=administrator@194.163.145.241 REMOTE_DIR=/home/administrator/src/mev-bot-v3 scripts/deploy.sh shadow`.
+Contabo is shared (gmx bots). Latency to the sequencer ~110 ms vs ~ms from Ohio. Not live yet.
+**Servers:** full inventory in `config/servers.toml`. Primary RPC = Chainstack $49 plan (`ARBITRUM_WS_URL`/`_HTTP_URL` in each host's `.env`; old primaries moved to `_2`).
+**Executor:** `0xb793f66e4e3D1fFfd7c095E3AC2D863BfBB336A2`. Hot wallet ~0.006 ETH.
+**Deploy:** start instance (user's call), then `scripts/deploy.sh live --yes` (builds from the working
+tree; don't switch branches). The user runs `deploy-executor.sh` in a real terminal.
+**RPC:** keyed Chainstack endpoints in `.env` (`ARBITRUM_SWEEP_URL_n`, `_PRESIM_URL_n`, `_WS_FALLBACK_n`).
 
 ## Ordering: Priority Gas Auction (DECISIONS #59)
 
@@ -35,8 +37,7 @@ Calm days have ~no liquidations; crash days are large (DECISIONS #51).
 
 ## Next
 
-1. User: review the PGA branch; PR when asked. Then shadow-run it (default mode stays shadow),
-   compare bid/skip counts, then live.
+1. Start the instance, deploy main in shadow, compare bid/skip counts, then live.
 2. Tune from data: win rate vs tip (`winner_tip_wei` in race reports); round latency (sends take
    ~150–250 ms from trigger: usually over one round).
 3. #34 merge → deploy (Aave-funded liquidations).
