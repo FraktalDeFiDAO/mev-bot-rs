@@ -109,6 +109,14 @@ sol! {
         function latestAnswer() external view returns (int256);
     }
 
+    /// Uniswap V4 PoolManager: storage reads and the events that move pool state.
+    #[sol(rpc)]
+    interface IPoolManager {
+        function extsload(bytes32 slot) external view returns (bytes32 value);
+        event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick);
+        event Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee);
+    }
+
     #[sol(rpc)]
     interface IMulticall3 {
         struct Call3 { address target; bool allowFailure; bytes callData; }
@@ -145,9 +153,15 @@ pub const MULTICALL3: alloy::primitives::Address =
     alloy::primitives::address!("cA11bde05977b3631167028862bE2a173976CA11");
 
 pub fn to_sol_hop(h: &mev_types::Hop) -> ArbExecutor::Hop {
+    // A V4 hop names its pool by tick spacing (the executor rebuilds the key); others by address.
+    let pool = if matches!(h.kind, 3 | 4) {
+        alloy::primitives::Address::from(alloy::primitives::aliases::U160::from(h.spacing))
+    } else {
+        h.pool
+    };
     ArbExecutor::Hop {
         kind: h.kind,
-        pool: h.pool,
+        pool,
         tokenIn: h.token_in,
         tokenOut: h.token_out,
         zeroForOne: h.zero_for_one,
@@ -197,6 +211,41 @@ pub fn arb_calldata(
         }
         .abi_encode()
     }
+}
+
+/// Storage slot of a V4 pool's `Pool.State` (`_pools` is the manager's storage slot 6).
+pub fn v4_state_slot(id: alloy::primitives::B256) -> alloy::primitives::B256 {
+    let mut buf = [0u8; 64];
+    buf[..32].copy_from_slice(id.as_slice());
+    buf[63] = 6;
+    alloy::primitives::keccak256(buf)
+}
+
+/// `Pool.State` slot `base + n` (slot0 = 0, liquidity = 3).
+pub fn v4_slot_plus(base: alloy::primitives::B256, n: u64) -> alloy::primitives::B256 {
+    alloy::primitives::B256::from(
+        alloy::primitives::U256::from_be_bytes(base.0) + alloy::primitives::U256::from(n),
+    )
+}
+
+/// A V4 pool's `slot0` word unpacked: (sqrtPriceX96, tick, protocolFee, lpFee). `protocolFee` packs two
+/// 12-bit fees: zeroForOne in the low bits, oneForZero in the high bits.
+pub fn decode_v4_slot0(word: alloy::primitives::B256) -> (alloy::primitives::U256, i32, u32, u32) {
+    let w = alloy::primitives::U256::from_be_bytes(word.0);
+    let mask24 = alloy::primitives::U256::from(0xff_ffffu32);
+    let sqrt =
+        w & ((alloy::primitives::U256::from(1u8) << 160) - alloy::primitives::U256::from(1u8));
+    let tick_raw = u32::try_from((w >> 160) & mask24).unwrap_or(0);
+    let tick = ((tick_raw << 8) as i32) >> 8; // sign-extend 24 bits
+    let protocol = u32::try_from((w >> 184) & mask24).unwrap_or(0);
+    let lp = u32::try_from((w >> 208) & mask24).unwrap_or(0);
+    (sqrt, tick, protocol, lp)
+}
+
+/// Total swap fee (hundredths of a bip) for one direction: protocol fee and LP fee compounded,
+/// `p + l - p*l/1e6` (the manager's `calculateSwapFee`).
+pub fn v4_swap_fee(protocol_fee: u32, lp_fee: u32) -> u32 {
+    protocol_fee + lp_fee - ((protocol_fee as u64 * lp_fee as u64) / 1_000_000) as u32
 }
 
 /// Most trades one executor `batch` call carries (`ArbExecutor.MAX_BATCH`).
@@ -290,6 +339,7 @@ mod tests {
             token_out: Address::with_last_byte(3),
             zero_for_one: true,
             fee_bps: 30,
+            spacing: 0,
         };
         let s = to_sol_hop(&h);
         assert_eq!(
@@ -334,6 +384,71 @@ mod tests {
         let decoded = ArbExecutor::liquidateCall::abi_decode(&call.abi_encode()).unwrap();
         assert_eq!(decoded.debt, call.debt);
         assert_eq!(decoded.flashAmount, call.flashAmount);
+    }
+
+    /// A 32-byte word from hex given in chunks (public on-chain test vectors).
+    fn word(parts: &[&str]) -> alloy::primitives::B256 {
+        format!("0x{}", parts.concat()).parse().unwrap()
+    }
+
+    #[test]
+    fn v4_slot0_decodes_the_live_eth_usdc_pool_word() {
+        // Read from the Arbitrum PoolManager for the ETH/USDC 0.05 % pool (2026-10-06).
+        let slot0 = word(&[
+            "0000000001f407d0",
+            "7dfcfd2a00000000",
+            "00000000000366c3",
+            "dc93f45fa0004f31",
+        ]);
+        let (sqrt, tick, protocol, lp) = decode_v4_slot0(slot0);
+        assert_eq!(sqrt.to_string(), "4112071849507166162538289");
+        assert_eq!(tick, -197334);
+        assert_eq!((protocol & 0xfff, protocol >> 12, lp), (125, 125, 500));
+        // Protocol fee compounds with the LP fee: 125 + 500 - 125*500/1e6 (rounds down to 0).
+        assert_eq!(v4_swap_fee(125, 500), 625);
+        assert_eq!(v4_swap_fee(1000, 3000), 3997);
+    }
+
+    #[test]
+    fn v4_state_slot_matches_the_manager_layout() {
+        let id = word(&[
+            "864abca0a6202dba",
+            "5b8868772308da95",
+            "3ff125b0f95015ad",
+            "bf89aaf579e903a8",
+        ]);
+        // keccak(id ++ 6): the slot read on-chain for this pool (ETH/USDC 0.05 %) above.
+        let slot = v4_state_slot(id);
+        let expected = |last: &'static str| {
+            word(&[
+                "07987b1980b45d4b",
+                "fabc174b7412cf7d",
+                "817b6209bcd40ae6",
+                last,
+            ])
+        };
+        assert_eq!(slot, expected("0ee33776fe7c1e3a"));
+        assert_eq!(v4_slot_plus(slot, 3), expected("0ee33776fe7c1e3d"));
+    }
+
+    #[test]
+    fn a_v4_hop_names_its_pool_by_tick_spacing() {
+        let h = mev_types::Hop {
+            kind: 4,
+            pool: Address::with_last_byte(0x99), // stand-in id address: never sent
+            token_in: Address::with_last_byte(2),
+            token_out: Address::with_last_byte(3),
+            zero_for_one: true,
+            fee_bps: 500,
+            spacing: 10,
+        };
+        assert_eq!(to_sol_hop(&h).pool, Address::with_last_byte(10));
+        let v3 = mev_types::Hop {
+            kind: 2,
+            spacing: 0,
+            ..h
+        };
+        assert_eq!(to_sol_hop(&v3).pool, Address::with_last_byte(0x99));
     }
 
     #[test]

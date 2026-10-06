@@ -16,6 +16,25 @@ pub enum PoolKind {
     PancakeV3 { fee: u32 },
     /// Algebra (Camelot V3): one pool per pair, dynamic directional fees from `globalState()`.
     AlgebraV3,
+    /// Uniswap V4 hookless pool: one pool inside the singleton `manager`, identified by `id` (the
+    /// hash of its key). `fee` is the pool's LP fee (hundredths of a bip), `tick_spacing` its spacing.
+    /// A native-ETH pool is represented with WETH as the ETH side (`native`). `flipped`: our
+    /// token0/token1 order is the reverse of the pool's currency order (the native side mapped to WETH
+    /// sorted after the other currency), so price and fees are mirrored. The pool's `PoolInfo.address`
+    /// is a stand-in derived from `id` (`v4_pool_address`), not a contract.
+    UniV4 {
+        fee: u32,
+        tick_spacing: u32,
+        native: bool,
+        flipped: bool,
+        id: B256,
+        manager: Address,
+    },
+}
+
+/// The stand-in address under which a V4 pool is stored: the last 20 bytes of its id.
+pub fn v4_pool_address(id: B256) -> Address {
+    Address::from_slice(&id[12..])
 }
 
 impl PoolKind {
@@ -26,6 +45,9 @@ impl PoolKind {
             PoolKind::CamelotV2 => 1,
             // All V3-style pools share the executor's swap() path; only the callback name differs.
             PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. } | PoolKind::AlgebraV3 => 2,
+            // V4 hops carry the pool's tick spacing instead of an address; native pools unwrap WETH.
+            PoolKind::UniV4 { native: false, .. } => 3,
+            PoolKind::UniV4 { native: true, .. } => 4,
         }
     }
 }
@@ -62,6 +84,10 @@ pub struct Hop {
     pub token_out: Address,
     pub zero_for_one: bool,
     pub fee_bps: u16,
+    /// V4 only: the pool's tick spacing, sent to the executor in the hop's `pool` field (the stored
+    /// `pool` is a stand-in id address). 0 for every other kind.
+    #[serde(default)]
+    pub spacing: u32,
 }
 
 /// A candidate arbitrage found by the search, before simulation.

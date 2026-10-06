@@ -9,6 +9,7 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
 still sends **zero-tip** transactions: PGA bidding lives on branch
 `claude/arbitrum-timeboost-successor-cihu0f` (not merged, no PR yet, nothing deployed from it).
 **Built, not enabled:** batching (`ArbExecutor.batch`, `[batch]`, needs executor redeploy + `executor_batch = true`) and the Atlas solver (`[atlas]`, runbook `docs/research/ATLAS.md`, observing since 2026-10-06).
+**Built, awaiting executor redeploy:** Uniswap V4 hops (`executor_v4`, `[uniswap_v4]`; routes are only logged as `v4_candidate` until then) together with `batch`. Redeploy with `scripts/deploy-executor.sh --redeploy`, then set `executor_batch = true` and `executor_v4 = true`.
 **Executor:** `0xb793f66e4e3D1fFfd7c095E3AC2D863BfBB336A2` (flash swaps + `liquidateViaAave`; 8
 lending targets). PR #34 (enable `executor_aave_flash`) open. Hot wallet ~0.006 ETH.
 **Deploy:** `scripts/deploy.sh live --yes` builds from the working tree: don't switch branches while

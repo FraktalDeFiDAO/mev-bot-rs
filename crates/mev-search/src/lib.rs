@@ -181,6 +181,12 @@ pub(crate) fn hop(pool: &Pool, token_in: Address, token_out: Address) -> Hop {
         zero_for_one: token_in == pool.info.token0,
         fee_bps: match pool.info.kind {
             PoolKind::UniV2 { fee_bps } => fee_bps,
+            // The executor rebuilds a V4 pool key from the LP fee and the spacing.
+            PoolKind::UniV4 { fee, .. } => u16::try_from(fee).unwrap_or(0),
+            _ => 0,
+        },
+        spacing: match pool.info.kind {
+            PoolKind::UniV4 { tick_spacing, .. } => tick_spacing,
             _ => 0,
         },
     }

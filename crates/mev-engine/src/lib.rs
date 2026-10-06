@@ -253,7 +253,12 @@ impl Engine {
             }
         }
 
-        let infos = mev_discovery::discover_pools(&rpc, &cfg, &pairs).await?;
+        let mut infos = mev_discovery::discover_pools(&rpc, &cfg, &pairs).await?;
+        if let Some(v4) = cfg.uniswap_v4.as_ref().filter(|v| v.enabled) {
+            infos.extend(
+                mev_discovery::v4::discover(&cfg, v4, &data_dir.join("v4_pools.json")).await,
+            );
+        }
         let pools = mev_discovery::load_pools(&rpc, infos).await?;
         let tokens: Vec<Address> = pools
             .iter()
@@ -554,7 +559,7 @@ impl Engine {
             // Never exit on network trouble: resubscribe, and if the WS provider itself is dead
             // (alloy gave up reconnecting), replace it — with backoff so outages don't spin.
             let mut logs = loop {
-                match mev_ingest::pool_logs(&self.rpc.ws, self.store.addresses()).await {
+                match mev_ingest::pool_logs(&self.rpc.ws, self.store.log_addresses()).await {
                     Ok(stream) => break Box::pin(stream),
                     Err(e) => {
                         let d = backoff.next_delay();
@@ -1005,6 +1010,7 @@ impl Engine {
             round_over = c.round_over,
             feed_triggers = c.feed_triggers,
             gate_skipped = c.gate_skipped,
+            v4_candidates = c.v4_candidates,
             sent = c.sent,
             ok = c.landed_ok,
             reverted = c.landed_reverted,
@@ -1052,6 +1058,13 @@ impl Engine {
             "loan": self.cfg.symbol(opp.loan_token), "amount": opp.amount_in.to_string(),
             "est_profit_usd": opp.est_profit_usd, "buy": opp.buy_pool, "sell": opp.sell_pool,
         });
+        // A route through a Uniswap V4 pool needs an executor with V4 hops. Until one is deployed
+        // (`executor_v4`), record what V4 would have offered and move on.
+        if !self.cfg.executor_v4 && opp.hops.iter().any(|h| matches!(h.kind, 3 | 4)) {
+            self.metrics.update(|c| c.v4_candidates += 1);
+            self.metrics.event("v4_candidate", base);
+            return;
+        }
         let Some(sim) = &self.sim else {
             self.metrics.event("candidate", base);
             return;
@@ -1841,6 +1854,7 @@ fn watchlist(store: &PoolStore) -> std::collections::HashSet<[u8; 20]> {
     store
         .pools()
         .flat_map(|p| [p.info.address, p.info.token0, p.info.token1])
+        .chain(store.log_addresses())
         .map(|a| a.0.0)
         .collect()
 }
