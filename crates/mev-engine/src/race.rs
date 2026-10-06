@@ -8,11 +8,13 @@ use std::{
     time::Instant,
 };
 
+use alloy::sol_types::SolEvent;
 use alloy::{
     eips::BlockNumberOrTag,
-    primitives::{Address, TxHash},
+    primitives::{Address, B256, TxHash},
     providers::{DynProvider, Provider},
 };
+use mev_bindings::IPoolManager;
 use mev_exec::{Landed, Sent};
 use mev_sequencer::FeedLog;
 use serde_json::{Value, json};
@@ -60,6 +62,27 @@ pub fn ms(t0: Instant, t: Instant) -> i64 {
     }
 }
 
+/// Does this log show a swap on one of the route's pools? A pool's own logs carry its address; a
+/// Uniswap V4 pool is a stand-in address (the last 20 bytes of its id) and its swaps are logged by
+/// the shared PoolManager with the id as topic 1.
+pub fn touches_route(
+    emitter: Address,
+    topic0: Option<B256>,
+    topic1: Option<B256>,
+    pools: &[Address],
+    v4_manager: Option<Address>,
+) -> bool {
+    if pools.contains(&emitter) {
+        return true;
+    }
+    let (Some(manager), Some(t0), Some(t1)) = (v4_manager, topic0, topic1) else {
+        return false;
+    };
+    emitter == manager
+        && t0 == IPoolManager::Swap::SIGNATURE_HASH
+        && pools.contains(&Address::from_slice(&t1[12..]))
+}
+
 /// Build the race report for a landed attempt. Network errors leave fields null.
 #[allow(clippy::too_many_arguments)]
 pub async fn report(
@@ -70,6 +93,7 @@ pub async fn report(
     sent: Sent,
     landed: &Landed,
     pools: &[Address],
+    v4_manager: Option<Address>,
     est_profit_usd: f64,
 ) -> Value {
     let arrival = |h: &TxHash| feed.lock().unwrap().get(h).map(|(t, _)| t);
@@ -90,7 +114,15 @@ pub async fn report(
             let Ok(Some(r)) = http.get_transaction_receipt(hashes[i]).await else {
                 continue;
             };
-            if r.inner.logs().iter().any(|l| pools.contains(&l.address())) {
+            if r.inner.logs().iter().any(|l| {
+                touches_route(
+                    l.address(),
+                    l.topic0().copied(),
+                    l.topics().get(1).copied(),
+                    pools,
+                    v4_manager,
+                )
+            }) {
                 winner = Some((hashes[i], i));
                 // What it paid for its place (PGA orders rounds by effective priority fee).
                 winner_tip = Some(effective_tip(r.effective_gas_price, base_fee));
@@ -189,12 +221,60 @@ pub fn effective_tip(effective_gas_price: u128, base_fee: u128) -> u128 {
 
 #[cfg(test)]
 mod tip_tests {
-    use super::effective_tip;
+    use super::*;
 
     #[test]
     fn effective_tip_is_price_above_base_fee() {
         assert_eq!(effective_tip(12_000_000, 10_000_000), 2_000_000);
         assert_eq!(effective_tip(10_000_000, 10_000_000), 0);
         assert_eq!(effective_tip(9, 10), 0, "never negative");
+    }
+
+    #[test]
+    fn a_v4_swap_logged_by_the_manager_counts_for_the_pool_it_names() {
+        let manager = Address::with_last_byte(0x36);
+        let id = B256::repeat_byte(0x44);
+        let stand_in = Address::from_slice(&id[12..]);
+        let pools = [Address::with_last_byte(1), stand_in];
+        let swap = Some(IPoolManager::Swap::SIGNATURE_HASH);
+        // The manager's Swap for our pool's id: yes.
+        assert!(touches_route(
+            manager,
+            swap,
+            Some(id),
+            &pools,
+            Some(manager)
+        ));
+        // The same event for another pool, from another emitter, or another event: no.
+        assert!(!touches_route(
+            manager,
+            swap,
+            Some(B256::repeat_byte(9)),
+            &pools,
+            Some(manager)
+        ));
+        assert!(!touches_route(
+            Address::with_last_byte(0x99),
+            swap,
+            Some(id),
+            &pools,
+            Some(manager)
+        ));
+        assert!(!touches_route(
+            manager,
+            Some(B256::ZERO),
+            Some(id),
+            &pools,
+            Some(manager)
+        ));
+        // Without V4 configured only the pool addresses themselves match (the old behaviour).
+        assert!(!touches_route(manager, swap, Some(id), &pools, None));
+        assert!(touches_route(
+            Address::with_last_byte(1),
+            None,
+            None,
+            &pools,
+            None
+        ));
     }
 }

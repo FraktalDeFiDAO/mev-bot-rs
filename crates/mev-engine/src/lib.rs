@@ -42,6 +42,8 @@ use tracing::{error, info, warn};
 /// Recently observed winning tips kept for the competition estimate (count, max age).
 const TIP_BOOK_CAPACITY: usize = 200;
 const TIP_BOOK_HORIZON_SECS: u64 = 3600;
+/// Winning tips remembered per route.
+const ROUTE_TIP_CAPACITY: usize = 20;
 /// Tips paid by contract calls seen in the sequencer feed (what competing bots bid right now).
 const FEED_TIP_CAPACITY: usize = 500;
 const FEED_TIP_HORIZON_SECS: u64 = 120;
@@ -150,6 +152,9 @@ pub struct Engine {
     /// Fast Feed counters when the paid feed is enabled and keyed.
     fast_feed_stats: Option<Arc<mev_ingest::fast_feed::FastFeedStats>>,
     tips: TipBook,
+    /// What the winners on each route paid for their place: a route's own history sharpens the bid
+    /// (the global estimate averages cheap and expensive routes together).
+    route_tips: HashMap<(Address, Address), TipBook>,
     /// Priority fees of contract calls in the feed: the live competition for ordering.
     feed_tips: Arc<std::sync::Mutex<TipBook>>,
     /// Optional Atlas/SVR solver (None unless `[atlas] enabled`).
@@ -233,7 +238,10 @@ enum TxDone {
         error: String,
     },
     /// A priority fee (wei/gas) seen winning ordering over us: the competition estimate's input.
-    TipSeen(u128),
+    TipSeen {
+        tip: u128,
+        route: Option<(Address, Address)>,
+    },
 }
 
 impl Engine {
@@ -535,6 +543,7 @@ impl Engine {
             batch: Default::default(),
             fast_feed_stats,
             tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
+            route_tips: HashMap::new(),
             tip_budget: pga_budget,
             mode,
             liq,
@@ -874,6 +883,19 @@ impl Engine {
         native_px: f64,
         ev: &serde_json::Value,
     ) -> Option<(Fees, f64)> {
+        self.pga_bid_for(None, gross_usd, gas, gas_price, native_px, ev)
+    }
+
+    /// `pga_bid` for an arbitrage route: that route's own winners' tips raise the competition estimate.
+    fn pga_bid_for(
+        &mut self,
+        route: Option<(Address, Address)>,
+        gross_usd: f64,
+        gas: u64,
+        gas_price: f64,
+        native_px: f64,
+        ev: &serde_json::Value,
+    ) -> Option<(Fees, f64)> {
         let base_fee = gas_price.max(0.0) as u128;
         if !self.cfg.pga.enabled {
             return Some((Fees::no_bid(base_fee), 0.0));
@@ -885,7 +907,10 @@ impl Engine {
             .lock()
             .unwrap()
             .estimate(self.cfg.pga.feed_quantile, now);
-        let competition = mev_risk::bid::strongest(self.tips.estimate(q, now), from_feed);
+        let mut competition = mev_risk::bid::strongest(self.tips.estimate(q, now), from_feed);
+        if let Some(book) = route.and_then(|r| self.route_tips.get_mut(&r)) {
+            competition = mev_risk::bid::strongest(competition, book.estimate(q, now));
+        }
         let input = BidInput {
             gross_profit_usd: gross_usd,
             gas_units: gas,
@@ -1217,8 +1242,14 @@ impl Engine {
             return self.enqueue(item, tx_done).await;
         }
         // PGA bid, decided now (fresh base fee and competition), not at detection.
-        let Some((fees, tip_usd)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
-        else {
+        let Some((fees, tip_usd)) = self.pga_bid_for(
+            Some((opp.buy_pool, opp.sell_pool)),
+            profit_usd,
+            gas,
+            gas_price,
+            native_px,
+            &base,
+        ) else {
             return;
         };
         // On-chain floor: the trade must pay for its gas and its bid, or it reverts.
@@ -1239,6 +1270,12 @@ impl Engine {
         self.claim_pools((opp.buy_pool, opp.sell_pool), &pools);
         let decided = Instant::now();
         let round_ms = self.cfg.pga.round_ms;
+        let v4_manager = self
+            .cfg
+            .uniswap_v4
+            .as_ref()
+            .filter(|v| v.enabled)
+            .map(|v| v.pool_manager);
         tokio::spawn(async move {
             let sent = match sender.send(&opp, min_profit, gas_limit, Some(fees)).await {
                 Ok(sent) => sent,
@@ -1300,6 +1337,7 @@ impl Engine {
                 sent,
                 &landed,
                 &pools,
+                v4_manager,
                 opp.est_profit_usd,
             )
             .await;
@@ -1315,7 +1353,10 @@ impl Engine {
                 .as_str()
                 .and_then(|t| t.parse::<u128>().ok())
             {
-                let _ = tx_done.send(TxDone::TipSeen(tip));
+                let _ = tx_done.send(TxDone::TipSeen {
+                    tip,
+                    route: Some((opp.buy_pool, opp.sell_pool)),
+                });
             }
             metrics.event("race", rep);
         });
@@ -1691,7 +1732,15 @@ impl Engine {
                 items,
             } => self.on_batch_landed(hash, landed, items),
             TxDone::BatchFailed { hash, items, error } => self.on_batch_failed(hash, items, error),
-            TxDone::TipSeen(tip) => self.tips.record(tip, now_secs()),
+            TxDone::TipSeen { tip, route } => {
+                self.tips.record(tip, now_secs());
+                if let Some(r) = route {
+                    self.route_tips
+                        .entry(r)
+                        .or_insert_with(|| TipBook::new(ROUTE_TIP_CAPACITY, TIP_BOOK_HORIZON_SECS))
+                        .record(tip, now_secs());
+                }
+            }
             TxDone::Failed { hash, error } => {
                 self.risk.record(false, 0.0, now_secs());
                 self.metrics
