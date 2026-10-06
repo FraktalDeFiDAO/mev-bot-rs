@@ -119,6 +119,44 @@ pub fn select<'a>(
     ranked.into_iter().map(|(p, _)| p).collect()
 }
 
+/// A rate limit (HTTP 429): wait and retry the same request, never narrow it.
+fn is_rate_limit(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("429") || m.contains("too many requests") || m.contains("rate limit")
+}
+
+/// The endpoint refused the block range itself: narrow the request.
+fn is_range_error(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("range")
+        || m.contains("span")
+        || m.contains("too large")
+        || m.contains("limit exceeded")
+}
+
+/// `get_logs` that waits out rate limits (1, 2, 4, 8, 16 s) before giving up.
+async fn get_logs_retry(
+    p: &DynProvider,
+    filter: &Filter,
+) -> Result<Vec<alloy::rpc::types::Log>, String> {
+    let mut wait = 1;
+    for attempt in 0..6 {
+        match p.get_logs(filter).await {
+            Ok(logs) => return Ok(logs),
+            Err(e) => {
+                let msg = e.to_string();
+                if attempt < 5 && is_rate_limit(&msg) {
+                    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                    wait *= 2;
+                } else {
+                    return Err(msg);
+                }
+            }
+        }
+    }
+    Err("rate limited".into())
+}
+
 fn logs_provider(url: &str) -> Result<DynProvider> {
     Ok(ProviderBuilder::new()
         .connect_http(url.parse().context("invalid uniswap_v4.log_rpc")?)
@@ -141,7 +179,7 @@ async fn scan_initialize(
             .event_signature(IPoolManager::Initialize::SIGNATURE_HASH)
             .from_block(start)
             .to_block(end);
-        match p.get_logs(&filter).await {
+        match get_logs_retry(p, &filter).await {
             Ok(logs) => {
                 for l in logs {
                     let Ok(ev) = IPoolManager::Initialize::decode_log_data(l.data()) else {
@@ -161,12 +199,12 @@ async fn scan_initialize(
                 registry.last_block = end;
                 start = end + 1;
             }
-            Err(e) if span > 100_000 => {
+            Err(e) if span > 100_000 && is_range_error(&e) => {
                 // Too wide for this endpoint: narrow the range and retry.
                 warn!(error = %e, span, "v4 initialize scan chunk failed; narrowing");
                 span /= 4;
             }
-            Err(e) => return Err(e).context("v4 initialize scan"),
+            Err(e) => anyhow::bail!("v4 initialize scan: {e}"),
         }
     }
     Ok(())
@@ -183,7 +221,7 @@ async fn swap_activity(p: &DynProvider, v4: &UniswapV4Config, head: u64) -> Hash
             .event_signature(IPoolManager::Swap::SIGNATURE_HASH)
             .from_block(start)
             .to_block(end);
-        match p.get_logs(&filter).await {
+        match get_logs_retry(p, &filter).await {
             Ok(logs) => {
                 for l in logs {
                     if let Some(id) = l.topics().get(1) {
@@ -261,6 +299,15 @@ mod tests {
             fee,
             tick_spacing: ts,
         }
+    }
+
+    #[test]
+    fn rate_limits_are_retried_and_range_errors_narrow_the_request() {
+        let limited = "server returned an error response: error code 429: Too Many Requests";
+        assert!(is_rate_limit(limited) && !is_range_error(limited));
+        let range = "query spans 1000000 blocks (1 to 1000000), limit is 100000";
+        assert!(is_range_error(range) && !is_rate_limit(range));
+        assert!(!is_rate_limit("connection reset") && !is_range_error("connection reset"));
     }
 
     #[test]
