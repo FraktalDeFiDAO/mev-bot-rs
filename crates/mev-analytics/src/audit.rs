@@ -4,7 +4,10 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use alloy::primitives::Address;
+use alloy::primitives::{Address, address};
+
+/// Atlas v1.6.4 on Arbitrum One (Chainlink SVR: oracle update + solver liquidation in one tx).
+pub const ATLAS: Address = address!("8ad1ae9d97c79aa68a0a151e83ff3942f68f86c1");
 
 /// One on-chain liquidation (a competitor's or ours).
 #[derive(Debug, Clone)]
@@ -121,6 +124,9 @@ fn addresses_in(s: &str) -> HashSet<Address> {
 pub enum Verdict {
     /// Our executor or wallet did it.
     Won,
+    /// Sent to the Atlas contract: the liquidation was won in the off-chain SVR auction and
+    /// bundled with the oracle update, so there was no speed race a send of ours could win.
+    AtlasAuction,
     /// The bot wasn't running.
     BotDown,
     /// Borrower not in our account index (discovery gap).
@@ -139,6 +145,9 @@ pub const RACE_SECS: i64 = 2;
 pub fn classify(l: &Liquidation, log: &BotLog, indexed: bool, ours: &HashSet<Address>) -> Verdict {
     if ours.contains(&l.sender) || l.to.is_some_and(|t| ours.contains(&t)) {
         return Verdict::Won;
+    }
+    if l.to == Some(ATLAS) {
+        return Verdict::AtlasAuction;
     }
     if !log.up_at(l.ts) {
         return Verdict::BotDown;
@@ -237,6 +246,26 @@ not json
         let long = format!("0x{}", "ab".repeat(32)); // bytes32, not an address
         assert!(addresses_in(&long).is_empty());
         assert_eq!(addresses_in(&format!("x 0x{} y", "11".repeat(20))).len(), 1);
+    }
+
+    #[test]
+    fn atlas_bundles_are_auctions_not_races() {
+        let log = BotLog::parse(LOG.lines());
+        let other = addr("0x00000000000000000000000000000000000000bb");
+        let me = addr("0x00000000000000000000000000000000000000aa");
+        let mut l = liq(other, other, t("10:01:00"));
+        l.to = Some(ATLAS);
+        // Even with the bot down at that time, an Atlas bundle is an auction win, not a miss.
+        assert_eq!(
+            classify(&l, &log, true, &HashSet::new()),
+            Verdict::AtlasAuction
+        );
+        // Ours still wins the classification first.
+        assert_eq!(
+            classify(&l, &log, true, &HashSet::from([other])),
+            Verdict::Won
+        );
+        let _ = me;
     }
 
     #[test]
