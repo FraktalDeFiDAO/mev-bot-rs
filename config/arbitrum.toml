@@ -113,10 +113,10 @@ feed_quantile = 0.9            # of bot-like feed tips
 min_tip_gwei = 0.01            # never bid below this (a 1-wei bid is a zero bid)
 
 [atlas]
-# Optional Chainlink SVR / FastLane Atlas solver (docs/research/ATLAS.md). OFF: nothing connects.
+# Optional Chainlink SVR / FastLane Atlas solver (docs/research/ATLAS.md). Observing only: bids are off.
 # enabled = true  -> listen to the auction feed and log the auctions on this chain (free, no funds)
 # bid     = true  -> also submit solver operations (needs the steps in scripts/atlas-solver.sh)
-enabled = false
+enabled = true     # observe only: log the auctions on this chain (no funds, no bids)
 bid = false
 # solver = "0x..."           # the deployed AtlasSolver (scripts/atlas-solver.sh deploy)
 bid_fraction = 0.7           # share of a liquidation's expected net profit offered as the bid
