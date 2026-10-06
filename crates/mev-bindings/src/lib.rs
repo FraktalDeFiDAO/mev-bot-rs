@@ -122,6 +122,8 @@ sol! {
         function executeFlashSwap(uint256 amount, uint256 minProfit, Hop[] calldata hops) external returns (uint256 profit);
         function liquidate(address debt, address collateral, uint256 flashAmount, uint256 minProfit, ProtocolCall[] calldata calls, Hop[] calldata hops) external returns (uint256 profit);
         function liquidateViaAave(address aavePool, address debt, address collateral, uint256 flashAmount, uint256 minProfit, ProtocolCall[] calldata calls, Hop[] calldata hops) external returns (uint256 profit);
+        function batch(bytes[] calldata calls) external returns (bool[] memory ok);
+        event BatchItem(uint256 indexed index, bytes4 indexed selector, bool ok);
         function setTarget(address target, bool allowed) external;
         function allowedTarget(address target) external view returns (bool);
         error TargetNotAllowed(address target);
@@ -132,6 +134,8 @@ sol! {
         error NotProfitable(uint256 balance, uint256 required);
         error BadRoute();
         error TransferFailed();
+        error NothingExecuted();
+        error BatchTooLarge();
     }
 }
 
@@ -191,6 +195,36 @@ pub fn arb_calldata(
         }
         .abi_encode()
     }
+}
+
+/// Most trades one executor `batch` call carries (`ArbExecutor.MAX_BATCH`).
+pub const MAX_BATCH: usize = 8;
+
+/// Executor calldata running `items` (each ready-made `execute` / `executeFlashSwap` /
+/// `liquidate` / `liquidateViaAave` calldata) in one transaction via `batch`.
+pub fn batch_calldata(items: Vec<Vec<u8>>) -> Vec<u8> {
+    use alloy::sol_types::SolCall;
+    ArbExecutor::batchCall {
+        calls: items.into_iter().map(Into::into).collect(),
+    }
+    .abi_encode()
+}
+
+/// Per-item results of a `batch` transaction, in item order, from the executor's `BatchItem`
+/// events. Empty when the receipt has none (not a batch).
+pub fn batch_outcomes(
+    logs: &[alloy::rpc::types::Log],
+    executor: alloy::primitives::Address,
+) -> Vec<bool> {
+    use alloy::sol_types::SolEvent;
+    let mut out: Vec<(usize, bool)> = logs
+        .iter()
+        .filter(|l| l.address() == executor)
+        .filter_map(|l| ArbExecutor::BatchItem::decode_log(&l.inner).ok())
+        .map(|e| (e.index.try_into().unwrap_or(usize::MAX), e.ok))
+        .collect();
+    out.sort_by_key(|(i, _)| *i);
+    out.into_iter().map(|(_, ok)| ok).collect()
 }
 
 /// Executor calldata for a liquidation: funded by Balancer (`liquidate`), or by an Aave V3 flash
@@ -298,5 +332,70 @@ mod tests {
         let decoded = ArbExecutor::liquidateCall::abi_decode(&call.abi_encode()).unwrap();
         assert_eq!(decoded.debt, call.debt);
         assert_eq!(decoded.flashAmount, call.flashAmount);
+    }
+
+    #[test]
+    fn batch_calldata_carries_each_item_unchanged_and_in_order() {
+        let a = ArbExecutor::liquidateCall {
+            debt: Address::with_last_byte(1),
+            collateral: Address::with_last_byte(2),
+            flashAmount: U256::from(1_000),
+            minProfit: U256::from(5),
+            calls: vec![],
+            hops: vec![],
+        }
+        .abi_encode();
+        let b = ArbExecutor::executeCall {
+            token: Address::with_last_byte(3),
+            amount: U256::from(9),
+            minProfit: U256::ZERO,
+            hops: vec![],
+        }
+        .abi_encode();
+        let encoded = batch_calldata(vec![a.clone(), b.clone()]);
+        let decoded = ArbExecutor::batchCall::abi_decode(&encoded).unwrap();
+        let items: Vec<Vec<u8>> = decoded.calls.iter().map(|c| c.to_vec()).collect();
+        assert_eq!(items, vec![a, b]);
+        assert_eq!(&encoded[..4], ArbExecutor::batchCall::SELECTOR);
+    }
+
+    #[test]
+    fn batch_outcomes_are_read_from_the_executors_events_in_item_order() {
+        use alloy::{
+            primitives::{B256, FixedBytes, Log as PrimLog, LogData},
+            rpc::types::Log,
+            sol_types::SolEvent,
+        };
+        let exec = Address::with_last_byte(0xee);
+        let mk = |addr: Address, idx: u64, ok: bool| {
+            let ev = ArbExecutor::BatchItem {
+                index: U256::from(idx),
+                selector: FixedBytes::from([1, 2, 3, 4]),
+                ok,
+            };
+            Log {
+                inner: PrimLog {
+                    address: addr,
+                    data: ev.encode_log_data(),
+                },
+                ..Default::default()
+            }
+        };
+        // Out of order, plus a lookalike event from another contract and an unrelated log.
+        let other = Log {
+            inner: PrimLog {
+                address: exec,
+                data: LogData::new_unchecked(vec![B256::ZERO], Default::default()),
+            },
+            ..Default::default()
+        };
+        let logs = vec![
+            mk(exec, 1, false),
+            mk(Address::with_last_byte(1), 0, false),
+            other,
+            mk(exec, 0, true),
+        ];
+        assert_eq!(batch_outcomes(&logs, exec), vec![true, false]);
+        assert!(batch_outcomes(&[], exec).is_empty());
     }
 }
