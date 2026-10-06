@@ -14,8 +14,8 @@ executor_flash_swaps = true
 # Executor 0xb793f66e4e3D1fFfd7c095E3AC2D863BfBB336A2 (2026-10-05) adds liquidateViaAave: liquidations above
 # the Balancer cap borrow from the Aave pool (5 bps). DECISIONS #51.
 executor_aave_flash = true
-executor_batch = false   # the deployed executor has `batch` (redeploy first); see [batch]
-executor_v4 = false      # the deployed executor has Uniswap V4 hops and its PoolManager set (redeploy first); see [uniswap_v4]
+executor_batch = true    # the deployed executor (0x17357E33..., 2026-10-06) has `batch`; see [batch]
+executor_v4 = true       # the deployed executor has Uniswap V4 hops and its PoolManager set; see [uniswap_v4]
 loan_tokens = ["WETH", "USDC", "USDT", "WBTC", "ARB", "DAI", "USDC.e"]
 usd_token = "USDC"
 native_token = "WETH"
