@@ -325,6 +325,24 @@ pub async fn active_tokens(
 }
 
 /// Configured pairs plus (active token × `pair_with`) pairs when auto-discovery is enabled.
+/// Long-tail X/Y pairs: the `n` most active tokens that aren't base partners, paired with each
+/// other (a triangle L -> X -> Y -> L needs the X/Y pool). `tokens` is most active first.
+pub fn cross_pairs(tokens: &[Address], bases: &[Address], n: usize) -> Vec<(Address, Address)> {
+    let top: Vec<Address> = tokens
+        .iter()
+        .copied()
+        .filter(|t| !bases.contains(t))
+        .take(n)
+        .collect();
+    let mut out = Vec::new();
+    for i in 0..top.len() {
+        for j in i + 1..top.len() {
+            out.push((top[i], top[j]));
+        }
+    }
+    out
+}
+
 pub async fn candidate_pairs(rpc: &Rpc, cfg: &ChainConfig) -> Result<Vec<(Address, Address)>> {
     let mut pairs: Vec<(Address, Address)> = cfg.pair_addresses()?;
     if let Some(ad) = cfg.auto_discovery.as_ref().filter(|a| a.enabled) {
@@ -335,6 +353,7 @@ pub async fn candidate_pairs(rpc: &Rpc, cfg: &ChainConfig) -> Result<Vec<(Addres
             .collect::<Result<_>>()?;
         match active_tokens(rpc, cfg, ad).await {
             Ok(tokens) => {
+                pairs.extend(cross_pairs(&tokens, &partners, ad.cross_pairs));
                 for t in tokens {
                     for &p in &partners {
                         pairs.push((t, p));
@@ -467,5 +486,26 @@ mod tests {
         let mut kept: Vec<u8> = store.addresses().iter().map(|a| a.as_slice()[19]).collect();
         kept.sort();
         assert_eq!(kept, vec![1, 2]);
+    }
+}
+
+#[cfg(test)]
+mod cross_pair_tests {
+    use super::*;
+
+    fn a(n: u8) -> Address {
+        Address::with_last_byte(n)
+    }
+
+    #[test]
+    fn cross_pairs_skip_bases_and_take_the_most_active_first() {
+        let tokens = [a(1), a(9), a(2), a(3), a(4)]; // most active first; a(1) is a base
+        let pairs = cross_pairs(&tokens, &[a(1)], 3);
+        assert_eq!(pairs, vec![(a(9), a(2)), (a(9), a(3)), (a(2), a(3))]);
+        assert!(cross_pairs(&tokens, &[a(1)], 0).is_empty());
+        assert!(
+            cross_pairs(&tokens, &[a(1)], 1).is_empty(),
+            "one token makes no pair"
+        );
     }
 }

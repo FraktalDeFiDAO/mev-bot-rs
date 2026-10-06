@@ -68,6 +68,10 @@ pub struct AutoDiscovery {
     pub pair_with: Vec<String>,
     /// Cap on active tokens taken from the scan (most active first).
     pub max_tokens: usize,
+    /// Also pair the most active non-partner tokens with each other (X/Y pools), so triangles
+    /// between two long-tail tokens (L -> X -> Y -> L) can form. 0 = off.
+    #[serde(default)]
+    pub cross_pairs: usize,
 }
 
 /// Settings shared by all liquidation adapters.
@@ -189,6 +193,41 @@ impl Default for PgaConfig {
     }
 }
 
+/// Per-route win-rate gate for arbitrage sends (`mev_risk::gate`, DECISIONS #54): a route is sent
+/// only while `p_win × net − (1 − p_win) × cost > 0`; losing streaks back a route off.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct GateConfig {
+    pub enabled: bool,
+    /// Tries every route gets before it is judged.
+    pub min_attempts: u32,
+    /// Weight of the global win rate when smoothing a route's own (pseudo-attempts).
+    pub prior_strength: f64,
+    /// Floor on the global win rate used as the prior.
+    pub prior_floor: f64,
+    /// Consecutive losses that trigger a back-off, its first length and cap (seconds).
+    pub backoff_after: u32,
+    pub backoff_secs: u64,
+    pub backoff_max_secs: u64,
+    /// Results older than this are forgotten (seconds).
+    pub memory_secs: u64,
+}
+
+impl Default for GateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_attempts: 3,
+            prior_strength: 5.0,
+            prior_floor: 0.02,
+            backoff_after: 3,
+            backoff_secs: 600,
+            backoff_max_secs: 6 * 3600,
+            memory_secs: 24 * 3600,
+        }
+    }
+}
+
 /// Chainlink SVR / FastLane Atlas solver (docs/research/ATLAS.md). Optional and off: the bot only
 /// listens to auctions when `enabled`, and only bids when `bid` is also set, a deployed
 /// `AtlasSolver` is named, the owner's ETH is bonded on Atlas and the solver's `maxBid` is set.
@@ -269,6 +308,10 @@ pub struct PresimConfig {
     pub fill_rpc_urls: Vec<String>,
 }
 
+fn default_max_cycles() -> usize {
+    20_000
+}
+
 fn default_presim_in_flight() -> usize {
     16
 }
@@ -296,6 +339,9 @@ pub struct ChainConfig {
     /// Extra endpoint that receives raw txs directly (Arbitrum sequencer).
     pub sequencer_rpc: Option<String>,
     pub min_pool_liquidity_usd: f64,
+    /// Most triangular cycles kept in the index (deepest first; thin long-tail cycles rank last).
+    #[serde(default = "default_max_cycles")]
+    pub max_cycles: usize,
     pub gas_limit_estimate: u64,
     /// The deployed executor has `executeFlashSwap`: routes starting on a V3-style pool run
     /// without a lender (no fee, no lender-balance cap). Only set after deploying that executor.
@@ -331,6 +377,9 @@ pub struct ChainConfig {
     /// Optional Atlas/SVR solver (off by default).
     #[serde(default)]
     pub atlas: AtlasConfig,
+    /// Per-route win-rate gate for arbitrage sends.
+    #[serde(default)]
+    pub gate: GateConfig,
 }
 
 impl ChainConfig {
@@ -514,6 +563,8 @@ mod tests {
         assert_eq!(c.pair_addresses().unwrap().len(), c.pairs.len());
         assert_eq!(c.pga.max_tip_usd_per_tx, 1.0);
         assert!(c.pga.feed_min_bot_tip_gwei >= 0.02);
+        assert!(c.max_cycles > 20_000, "long-tail cycles need headroom");
+        assert!(c.auto_discovery.as_ref().is_some_and(|a| a.cross_pairs > 0));
         assert!(!c.atlas.bid, "bidding needs a funded solver: it ships off");
         assert!(
             c.atlas.solver.is_none(),
