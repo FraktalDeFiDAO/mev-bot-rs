@@ -514,9 +514,10 @@ mod tests {
         assert_eq!(c.pair_addresses().unwrap().len(), c.pairs.len());
         assert_eq!(c.pga.max_tip_usd_per_tx, 1.0);
         assert!(c.pga.feed_min_bot_tip_gwei >= 0.02);
+        assert!(!c.atlas.bid, "bidding needs a funded solver: it ships off");
         assert!(
-            !c.atlas.enabled && !c.atlas.bid,
-            "the Atlas solver ships off"
+            c.atlas.solver.is_none(),
+            "no solver address ships in the repo"
         );
     }
 
