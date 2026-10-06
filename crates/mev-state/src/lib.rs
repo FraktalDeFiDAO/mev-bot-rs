@@ -3,14 +3,17 @@
 use std::collections::HashMap;
 
 use alloy::{rpc::types::Log, sol_types::SolEvent};
-use mev_bindings::{IPancakeV3Pool, IUniswapV2Pair, IUniswapV3Pool};
+use mev_bindings::{IPancakeV3Pool, IPoolManager, IUniswapV2Pair, IUniswapV3Pool};
 use mev_dex::{Pool, PoolState, sqrt_price_from_x96};
-use mev_types::{Address, B256};
+use mev_types::{Address, B256, PoolKind};
 
 #[derive(Default)]
 pub struct PoolStore {
     pools: HashMap<Address, Pool>,
     by_pair: HashMap<(Address, Address), Vec<Address>>,
+    /// Uniswap V4 pool id -> the stand-in address it is stored under (their events come from the
+    /// shared PoolManager and name the pool only by id).
+    v4: HashMap<B256, Address>,
 }
 
 fn pair_key(a: Address, b: Address) -> (Address, Address) {
@@ -21,6 +24,9 @@ impl PoolStore {
     pub fn insert(&mut self, pool: Pool) {
         let key = pair_key(pool.info.token0, pool.info.token1);
         let addr = pool.info.address;
+        if let PoolKind::UniV4 { id, .. } = pool.info.kind {
+            self.v4.insert(id, addr);
+        }
         if self.pools.insert(addr, pool).is_none() {
             self.by_pair.entry(key).or_default().push(addr);
         }
@@ -40,6 +46,22 @@ impl PoolStore {
 
     pub fn addresses(&self) -> Vec<Address> {
         self.pools.keys().copied().collect()
+    }
+
+    /// The contracts whose logs move our pools: each pool's own address, and for Uniswap V4 pools the
+    /// shared PoolManager (once).
+    pub fn log_addresses(&self) -> Vec<Address> {
+        let mut out: Vec<Address> = self
+            .pools
+            .values()
+            .map(|p| match p.info.kind {
+                PoolKind::UniV4 { manager, .. } => manager,
+                _ => p.info.address,
+            })
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
     pub fn pools(&self) -> impl Iterator<Item = &Pool> {
@@ -74,10 +96,49 @@ impl PoolStore {
         }
     }
 
+    /// A V4 `Swap` from the PoolManager: new price and active liquidity, and the fee that swap paid
+    /// (protocol + LP) for its direction. Pools we don't track are ignored.
+    fn apply_v4_swap(&mut self, log: &Log) -> Option<Address> {
+        let id = *log.topics().get(1)?;
+        let addr = *self.v4.get(&id)?;
+        let pool = self.pools.get_mut(&addr)?;
+        let PoolKind::UniV4 {
+            manager, flipped, ..
+        } = pool.info.kind
+        else {
+            return None;
+        };
+        if manager != log.address() {
+            return None;
+        }
+        let ev = IPoolManager::Swap::decode_log_data(log.data()).ok()?;
+        let sqrt = sqrt_price_from_x96(f64::from(ev.sqrtPriceX96));
+        if sqrt <= 0.0 {
+            return None;
+        }
+        pool.state = PoolState::V3 {
+            // Flipped pools store the mirrored price (token order reversed).
+            sqrt_price: if flipped { 1.0 / sqrt } else { sqrt },
+            liquidity: ev.liquidity as f64,
+        };
+        // amount0 < 0: the swapper paid currency0, i.e. a zeroForOne swap; its fee is that
+        // direction's. Mirrored when our token order is flipped.
+        let fee = ev.fee.to::<u32>() as f64 / 1_000_000.0;
+        if ev.amount0.is_negative() != flipped {
+            pool.fee0 = fee;
+        } else {
+            pool.fee1 = fee;
+        }
+        Some(addr)
+    }
+
     /// Apply a V2 `Sync` or V3 `Swap` log. Returns the pool address if state changed.
     pub fn apply_log(&mut self, log: &Log) -> Option<Address> {
         let addr = log.address();
         let topic0: B256 = *log.topic0()?;
+        if topic0 == IPoolManager::Swap::SIGNATURE_HASH {
+            return self.apply_v4_swap(log);
+        }
         let pool = self.pools.get_mut(&addr)?;
         if topic0 == IUniswapV2Pair::Sync::SIGNATURE_HASH {
             let ev = IUniswapV2Pair::Sync::decode_log_data(log.data()).ok()?;
@@ -367,5 +428,150 @@ mod tests {
         let usd_per_b = s.usd_per_raw_unit(B, USD, 6, A).unwrap();
         assert!((usd_per_b * 1e18 - 1_000.0).abs() < 1e-6);
         assert!((s.usd_per_raw_unit(USD, USD, 6, A).unwrap() - 1e-6).abs() < 1e-18);
+    }
+
+    fn v4_pool(flipped: bool) -> Pool {
+        let id = B256::repeat_byte(0x44);
+        pool_with_addr(
+            mev_types::v4_pool_address(id),
+            PoolKind::UniV4 {
+                fee: 500,
+                tick_spacing: 10,
+                native: false,
+                flipped,
+                id,
+                manager: Address::with_last_byte(0x77),
+            },
+            A,
+            B,
+            PoolState::V3 {
+                sqrt_price: 1.0,
+                liquidity: 1.0,
+            },
+        )
+    }
+
+    fn pool_with_addr(
+        addr: Address,
+        kind: PoolKind,
+        t0: Address,
+        t1: Address,
+        state: PoolState,
+    ) -> Pool {
+        Pool::new(
+            PoolInfo {
+                address: addr,
+                dex: "uniswap_v4".into(),
+                kind,
+                token0: t0,
+                token1: t1,
+            },
+            state,
+        )
+    }
+
+    fn v4_swap_log(id: B256, manager: Address, amount0: i128, fee: u32) -> Log {
+        use alloy::sol_types::SolEvent;
+        let ev = IPoolManager::Swap {
+            id,
+            sender: Address::with_last_byte(1),
+            amount0,
+            amount1: -amount0,
+            sqrtPriceX96: U160::from(2u128 << 96), // sqrt price 2
+            liquidity: 5_000,
+            tick: I24::unchecked_from(0),
+            fee: alloy::primitives::aliases::U24::from(fee),
+        };
+        rpc_log(manager, ev.encode_log_data())
+    }
+
+    #[test]
+    fn a_v4_swap_event_updates_the_pool_it_names_and_the_fee_of_its_direction() {
+        let mut s = PoolStore::default();
+        let p = v4_pool(false);
+        let (addr, id) = (p.info.address, B256::repeat_byte(0x44));
+        s.insert(p);
+        // currency0 paid (amount0 < 0): a zeroForOne swap that paid a 0.0625 % total fee.
+        let changed = s.apply_log(&v4_swap_log(id, Address::with_last_byte(0x77), -100, 625));
+        assert_eq!(changed, Some(addr));
+        let p = s.get(&addr).unwrap();
+        assert_eq!(
+            p.state,
+            PoolState::V3 {
+                sqrt_price: 2.0,
+                liquidity: 5_000.0
+            }
+        );
+        assert!(
+            (p.fee0 - 0.000625).abs() < 1e-12,
+            "zeroForOne fee is token0's"
+        );
+        assert!(
+            (p.fee1 - 0.0005).abs() < 1e-12,
+            "the other direction is untouched"
+        );
+        // oneForZero updates the other fee.
+        s.apply_log(&v4_swap_log(id, Address::with_last_byte(0x77), 100, 700));
+        assert!((s.get(&addr).unwrap().fee1 - 0.0007).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_flipped_v4_pool_stores_the_mirrored_price_and_fees() {
+        let mut s = PoolStore::default();
+        let p = v4_pool(true);
+        let (addr, id) = (p.info.address, B256::repeat_byte(0x44));
+        s.insert(p);
+        s.apply_log(&v4_swap_log(id, Address::with_last_byte(0x77), -100, 625));
+        let p = s.get(&addr).unwrap();
+        assert_eq!(
+            p.state,
+            PoolState::V3 {
+                sqrt_price: 0.5,
+                liquidity: 5_000.0
+            }
+        );
+        // A zeroForOne swap on the pool's currencies pays with our token1 when flipped.
+        assert!((p.fee1 - 0.000625).abs() < 1e-12);
+    }
+
+    #[test]
+    fn v4_events_for_other_pools_or_other_emitters_are_ignored() {
+        let mut s = PoolStore::default();
+        s.insert(v4_pool(false));
+        let id = B256::repeat_byte(0x44);
+        assert_eq!(
+            s.apply_log(&v4_swap_log(
+                B256::repeat_byte(1),
+                Address::with_last_byte(0x77),
+                -1,
+                500
+            )),
+            None
+        );
+        assert_eq!(
+            s.apply_log(&v4_swap_log(id, Address::with_last_byte(0x88), -1, 500)),
+            None,
+            "not the manager"
+        );
+    }
+
+    #[test]
+    fn v4_pools_are_watched_through_their_manager() {
+        let mut s = PoolStore::default();
+        s.insert(v4_pool(false));
+        s.insert(pool(
+            3,
+            PoolKind::UniV3 { fee: 500 },
+            A,
+            B,
+            PoolState::V3 {
+                sqrt_price: 1.0,
+                liquidity: 1.0,
+            },
+        ));
+        let logs = s.log_addresses();
+        assert_eq!(logs.len(), 2, "one V3 pool plus the single manager");
+        assert!(logs.contains(&Address::with_last_byte(0x77)));
+        assert!(!logs.contains(&mev_types::v4_pool_address(B256::repeat_byte(0x44))));
     }
 }

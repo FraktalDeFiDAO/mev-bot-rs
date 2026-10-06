@@ -15,6 +15,7 @@ executor_flash_swaps = true
 # the Balancer cap borrow from the Aave pool (5 bps). DECISIONS #51.
 executor_aave_flash = true
 executor_batch = false   # the deployed executor has `batch` (redeploy first); see [batch]
+executor_v4 = false      # the deployed executor has Uniswap V4 hops and its PoolManager set (redeploy first); see [uniswap_v4]
 loan_tokens = ["WETH", "USDC", "USDT", "WBTC", "ARB", "DAI", "USDC.e"]
 usd_token = "USDC"
 native_token = "WETH"
@@ -114,6 +115,21 @@ competition_quantile = 0.9     # of recent race-winner tips (was 0.75)
 feed_min_bot_tip_gwei = 0.02   # ignore feed txs tipping less: ordinary wallets (~0.01 gwei), not bots
 feed_quantile = 0.9            # of bot-like feed tips
 min_tip_gwei = 0.01            # never bid below this (a 1-wei bid is a zero bid)
+
+[uniswap_v4]
+# Hookless Uniswap V4 pools (95 % of V4 swap activity; half of it on native-ETH pools, which the
+# executor unwraps). Found from the PoolManager's Initialize events (cached in data/arbitrum/v4_pools.json)
+# and ranked by recent swaps. Routes through them are only SENT once the deployed executor has V4 hops
+# (`executor_v4 = true` at the top, after `scripts/deploy-executor.sh --redeploy`); until then they are
+# logged as `v4_candidate` events, which measures what V4 would offer.
+enabled = true
+pool_manager = "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32"
+log_rpc = "https://arb1.arbitrum.io/rpc"
+first_block = 250000000   # before the manager's deployment (first pool: block 298,076,243)
+blocks = 12000            # swap-activity window (~50 min)
+step = 500
+min_swaps = 3             # swaps in the window to be tracked
+max_pools = 150
 
 [gate]
 # Per-route win-rate gate for arbitrage sends (DECISIONS #54). A loss costs gas plus a tip, so a route

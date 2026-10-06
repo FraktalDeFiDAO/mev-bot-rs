@@ -10,6 +10,7 @@ export PATH="$HOME/.foundry/bin:$PATH"
 VAULT=0xBA12222222228d8Ba445958a75a0704d566BF2C8
 AAVE_POOL=0x794a61358D6845594F94dc1DB02A252b5b4814aD
 WETH=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
+POOL_MANAGER=0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32   # Uniswap V4 PoolManager (Arbitrum One)
 
 DEPLOYER=$(cast wallet address --private-key "$PRIVATE_KEY")
 BAL=$(cast balance "$DEPLOYER" --rpc-url "$ARBITRUM_HTTP_URL" --ether)
@@ -37,5 +38,9 @@ fi
 echo "EXECUTOR_ADDRESS=$ADDR" >> .env
 echo "deployed: $ADDR   tx: $TX"
 echo "verify owner: $(cast call "$ADDR" 'owner()(address)' --rpc-url "$ARBITRUM_HTTP_URL")"
+# Uniswap V4 hops need the PoolManager set (owner-only, one tx).
+cast send "$ADDR" 'setPoolManager(address)' "$POOL_MANAGER" --private-key "$PRIVATE_KEY" --rpc-url "$ARBITRUM_HTTP_URL" >/dev/null
+echo "pool manager: $(cast call "$ADDR" 'poolManager()(address)' --rpc-url "$ARBITRUM_HTTP_URL")"
+echo "next: set executor_batch = true and executor_v4 = true in config/arbitrum.toml (this executor has batch + V4 hops), then deploy the bot"
 # Allowlist the liquidation targets configured by default (Aave v3 pool).
 scripts/allow-targets.sh "$AAVE_POOL"

@@ -34,6 +34,8 @@ pub struct Counters {
     pub feed_triggers: u64,
     /// Arbitrage sends held back by the per-route win-rate gate.
     pub gate_skipped: u64,
+    /// Arbitrage candidates through a Uniswap V4 pool, logged but not sent until the executor has V4 hops.
+    pub v4_candidates: u64,
     /// PGA bids: placed, skipped (policy or tip caps), won (landed ok), lost (reverted).
     pub bids_placed: u64,
     pub bids_skipped: u64,

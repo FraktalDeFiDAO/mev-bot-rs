@@ -10,9 +10,10 @@ use alloy::{
 };
 use anyhow::{Context, Result};
 use futures::Stream;
-use mev_bindings::{IPancakeV3Pool, IUniswapV2Pair, IUniswapV3Pool};
+use mev_bindings::{IPancakeV3Pool, IPoolManager, IUniswapV2Pair, IUniswapV3Pool};
 
-/// Stream of V2 `Sync`, V3/Algebra `Swap` and PancakeV3 `Swap` logs for `pools`. The stream ends if the WS connection drops;
+/// Stream of V2 `Sync`, V3/Algebra `Swap`, PancakeV3 `Swap` and Uniswap V4 `Swap` logs for `pools`
+/// (for V4, the PoolManager's address; see `PoolStore::log_addresses`). The stream ends if the WS connection drops;
 /// callers should resubscribe and resync state.
 pub async fn pool_logs(
     ws: &DynProvider,
@@ -22,6 +23,7 @@ pub async fn pool_logs(
         IUniswapV2Pair::Sync::SIGNATURE_HASH,
         IUniswapV3Pool::Swap::SIGNATURE_HASH,
         IPancakeV3Pool::Swap::SIGNATURE_HASH,
+        IPoolManager::Swap::SIGNATURE_HASH,
     ]);
     let sub = ws
         .subscribe_logs(&filter)

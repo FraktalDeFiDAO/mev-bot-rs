@@ -384,6 +384,7 @@ mod tests {
             token_out: Address::with_last_byte(3),
             zero_for_one: false,
             fee_bps: 0,
+            spacing: 0,
         }
     }
 
@@ -429,6 +430,7 @@ mod tests {
             token_out: Address::with_last_byte(2),
             zero_for_one: true,
             fee_bps: 30,
+            spacing: 0,
         };
         Opportunity {
             loan_token: Address::with_last_byte(2),

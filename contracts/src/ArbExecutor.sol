@@ -27,6 +27,33 @@ interface IAaveFlashPool {
 
 interface IWETH {
     function deposit() external payable;
+    function withdraw(uint256 wad) external;
+}
+
+/// Uniswap V4 PoolManager (singleton). Currencies are plain addresses on the wire (address(0) =
+/// native ETH); `BalanceDelta` is an int256 with amount0 in the upper and amount1 in the lower 128 bits.
+interface IPoolManager {
+    struct PoolKey {
+        address currency0;
+        address currency1;
+        uint24 fee;
+        int24 tickSpacing;
+        address hooks;
+    }
+
+    struct SwapParams {
+        bool zeroForOne;
+        int256 amountSpecified; // negative = exact input
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function unlock(bytes calldata data) external returns (bytes memory);
+    function swap(PoolKey memory key, SwapParams memory params, bytes calldata hookData)
+        external
+        returns (int256 swapDelta);
+    function sync(address currency) external;
+    function settle() external payable returns (uint256 paid);
+    function take(address currency, address to, uint256 amount) external;
 }
 
 interface IUniV2Pair {
@@ -62,6 +89,12 @@ contract ArbExecutor {
     uint8 internal constant UNI_V2 = 0; // Uniswap V2 / Sushi V2 style pair with fixed fee `feeBps`
     uint8 internal constant CAMELOT_V2 = 1; // Camelot V2 pair (directional fees, uses pair.getAmountOut)
     uint8 internal constant UNI_V3 = 2; // Uniswap V3 / Sushi V3 / PancakeSwap V3 / Algebra (Camelot V3) pools
+    /// Uniswap V4 hookless pool, both currencies ERC20. The hop's `pool` field carries the pool's tick
+    /// spacing (1..32767) instead of an address; the key is rebuilt from the tokens, `feeBps` (the pool
+    /// fee, hundredths of a bip) and that spacing, so a wrong hop reverts with PoolNotInitialized.
+    uint8 internal constant UNI_V4 = 3;
+    /// Same, for a pool whose currency is native ETH: the hop's WETH side is unwrapped / wrapped here.
+    uint8 internal constant UNI_V4_NATIVE = 4;
 
     /// Flash-loan modes (first field of the vault userData).
     uint8 internal constant MODE_ARB = 0;
@@ -109,6 +142,10 @@ contract ArbExecutor {
     address transient aaveFlashPool;
     /// True only while `batch` runs its items: lets each item's self-call start its trade.
     bool transient batching;
+    /// True only while a V4 hop runs: the only time the PoolManager may call back and ETH may arrive.
+    bool transient v4Active;
+    /// Uniswap V4 PoolManager (address(0) = V4 hops disabled). Owner-set; V4 hops hand it tokens.
+    address public poolManager;
 
     error NotOwner();
     error Unauthorized();
@@ -120,6 +157,7 @@ contract ArbExecutor {
     error BatchTooLarge();
 
     event TargetSet(address indexed target, bool allowed);
+    event PoolManagerSet(address indexed poolManager);
     /// One item of a `batch`: its position, selector and whether it executed.
     event BatchItem(uint256 indexed index, bytes4 indexed selector, bool ok);
 
@@ -133,13 +171,20 @@ contract ArbExecutor {
     /// @dev Protocols that pay seized collateral in native ETH (e.g. Fluid ETH vaults). Rejected
     /// outside a liquidation so ETH can't be parked here.
     receive() external payable virtual {
-        if (!liquidating) revert Unauthorized();
+        if (!liquidating && !v4Active) revert Unauthorized();
     }
 
     /// @dev Who may start a liquidation: the owner. A subclass can additionally admit itself
     /// during a call it authenticated (see `AtlasSolver`).
     function _isOperator() internal view virtual returns (bool) {
         return msg.sender == owner || (msg.sender == address(this) && batching);
+    }
+
+    /// @notice Set the Uniswap V4 PoolManager V4 hops use (address(0) disables them).
+    function setPoolManager(address pm) external {
+        if (msg.sender != owner) revert NotOwner();
+        poolManager = pm;
+        emit PoolManagerSet(pm);
     }
 
     /// @notice Allow or revoke a liquidation call target / approval spender.
@@ -433,6 +478,82 @@ contract ArbExecutor {
         _transfer(token, profitReceiver, IERC20(token).balanceOf(address(this)));
     }
 
+    /// One V4 swap, as carried through `unlock` to `unlockCallback`.
+    struct V4Swap {
+        uint8 kind;
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        int24 tickSpacing;
+        uint256 amountIn;
+    }
+
+    /// Swap `amountIn` of `hop.tokenIn` through a Uniswap V4 pool: unlock the manager, swap, settle
+    /// the input, take the output (flash accounting nets to zero or the unlock reverts).
+    function _swapV4(Hop memory hop, uint256 amountIn) internal returns (uint256 amountOut) {
+        address pm = poolManager;
+        uint160 spacing = uint160(hop.pool);
+        if (pm == address(0) || spacing == 0 || spacing > 32767) revert BadRoute();
+        v4Active = true;
+        bytes memory ret = IPoolManager(pm)
+            .unlock(
+                abi.encode(V4Swap(hop.kind, hop.tokenIn, hop.tokenOut, hop.feeBps, int24(uint24(spacing)), amountIn))
+            );
+        v4Active = false;
+        amountOut = abi.decode(ret, (uint256));
+    }
+
+    /// @notice PoolManager callback for `_swapV4`: only from the manager, only while our own V4 hop runs.
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        if (msg.sender != poolManager || !v4Active) revert Unauthorized();
+        return abi.encode(_v4Execute(IPoolManager(msg.sender), abi.decode(data, (V4Swap))));
+    }
+
+    /// A native pool's ETH side is addressed as WETH everywhere else; in the pool it is currency 0.
+    function _v4Currencies(V4Swap memory a) internal view returns (address cIn, address cOut) {
+        address w = address(weth);
+        bool native = a.kind == UNI_V4_NATIVE;
+        cIn = (native && a.tokenIn == w) ? address(0) : a.tokenIn;
+        cOut = (native && a.tokenOut == w) ? address(0) : a.tokenOut;
+        if (cIn == cOut) revert BadRoute();
+    }
+
+    /// Exact-input swap; returns what we owe the pool (`owed`) and what it owes us (`got`).
+    function _v4Swap(IPoolManager pm, V4Swap memory a, address cIn, address cOut)
+        internal
+        returns (uint256 owed, uint256 got)
+    {
+        bool zeroForOne = cIn < cOut;
+        int256 delta = pm.swap(
+            IPoolManager.PoolKey(zeroForOne ? cIn : cOut, zeroForOne ? cOut : cIn, a.fee, a.tickSpacing, address(0)),
+            IPoolManager.SwapParams(
+                zeroForOne, -int256(a.amountIn), zeroForOne ? MIN_SQRT_RATIO_PLUS_ONE : MAX_SQRT_RATIO_MINUS_ONE
+            ),
+            ""
+        );
+        (int128 inDelta, int128 outDelta) =
+            zeroForOne ? (int128(delta >> 128), int128(delta)) : (int128(delta), int128(delta >> 128));
+        if (inDelta > 0 || outDelta < 0) revert BadRoute();
+        owed = uint256(uint128(-inDelta));
+        got = uint256(uint128(outDelta));
+    }
+
+    function _v4Execute(IPoolManager pm, V4Swap memory a) internal returns (uint256 got) {
+        (address cIn, address cOut) = _v4Currencies(a);
+        uint256 owed;
+        (owed, got) = _v4Swap(pm, a, cIn, cOut);
+        if (cIn == address(0)) {
+            weth.withdraw(owed);
+            pm.settle{value: owed}();
+        } else {
+            pm.sync(cIn);
+            _transfer(cIn, address(pm), owed);
+            pm.settle();
+        }
+        pm.take(cOut, address(this), got);
+        if (cOut == address(0)) weth.deposit{value: got}();
+    }
+
     function _swap(Hop memory hop, uint256 amountIn) internal returns (uint256 amountOut) {
         if (hop.kind == UNI_V3) {
             expectedPool = hop.pool;
@@ -448,6 +569,8 @@ contract ArbExecutor {
                 );
             if (expectedPool != address(0)) revert Unauthorized(); // callback must have run
             amountOut = uint256(-(hop.zeroForOne ? a1 : a0));
+        } else if (hop.kind == UNI_V4 || hop.kind == UNI_V4_NATIVE) {
+            amountOut = _swapV4(hop, amountIn);
         } else {
             if (hop.kind == CAMELOT_V2) {
                 amountOut = ICamelotPair(hop.pool).getAmountOut(amountIn, hop.tokenIn);

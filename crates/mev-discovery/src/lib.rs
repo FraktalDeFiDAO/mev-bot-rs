@@ -2,7 +2,10 @@
 //!
 //! Pools are only ever taken from the configured factories, so the executor never routes through
 //! an arbitrary (possibly malicious) contract. Auto-discovery only uses on-chain activity to pick
-//! *which tokens* to look up; the pools themselves still come from the factories.
+//! *which tokens* to look up; the pools themselves still come from the factories. Uniswap V4 pools
+//! live inside the one PoolManager (`v4`), hookless ones only.
+
+pub mod v4;
 
 use std::collections::{HashMap, HashSet};
 
@@ -14,7 +17,7 @@ use alloy::{
 };
 use anyhow::{Context, Result};
 use mev_bindings::{
-    IAlgebraFactory, IAlgebraPool, ICamelotPair, IERC20, IPancakeV3Pool, IPoolMeta,
+    IAlgebraFactory, IAlgebraPool, ICamelotPair, IERC20, IPancakeV3Pool, IPoolManager, IPoolMeta,
     IUniswapV2Factory, IUniswapV2Pair, IUniswapV3Factory, IUniswapV3Pool,
 };
 use mev_config::{AutoDiscovery, ChainConfig, DexType};
@@ -138,6 +141,19 @@ fn calls_for(p: &PoolInfo) -> Vec<(Address, alloy::primitives::Bytes)> {
             call(p.address, IAlgebraPool::globalStateCall {}),
             call(p.address, IUniswapV3Pool::liquidityCall {}),
         ],
+        // V4: the pool's slot0 and liquidity words, read from the manager's storage.
+        PoolKind::UniV4 { id, manager, .. } => {
+            let base = mev_bindings::v4_state_slot(id);
+            vec![
+                call(manager, IPoolManager::extsloadCall { slot: base }),
+                call(
+                    manager,
+                    IPoolManager::extsloadCall {
+                        slot: mev_bindings::v4_slot_plus(base, 3),
+                    },
+                ),
+            ]
+        }
         PoolKind::UniV2 { .. } => vec![call(p.address, IUniswapV2Pair::getReservesCall {})],
         PoolKind::CamelotV2 => vec![
             call(p.address, IUniswapV2Pair::getReservesCall {}),
@@ -195,6 +211,15 @@ pub async fn load_pools(rpc: &Rpc, infos: Vec<PoolInfo>) -> Result<Vec<Pool>> {
                     _ => None,
                 }
             }
+            PoolKind::UniV4 { flipped, .. } => {
+                match (
+                    decode::<IPoolManager::extsloadCall>(&r[0]),
+                    decode::<IPoolManager::extsloadCall>(&r[1]),
+                ) {
+                    (Some(slot0), Some(liq)) => v4_pool(info, slot0, liq, flipped),
+                    _ => None,
+                }
+            }
             PoolKind::UniV2 { .. } => decode::<IUniswapV2Pair::getReservesCall>(&r[0]).map(|x| {
                 Pool::new(
                     info,
@@ -235,6 +260,36 @@ pub async fn load_pools(rpc: &Rpc, infos: Vec<PoolInfo>) -> Result<Vec<Pool>> {
 }
 
 /// Re-read state (and Algebra/Camelot fees) for every pool in the store.
+/// A V4 pool from its storage words. Directional fees are the manager's: protocol fee (a pair of
+/// 12-bit fees, one per direction) compounded with the LP fee. Mirrored when our token order is the
+/// reverse of the pool's currency order.
+fn v4_pool(
+    info: PoolInfo,
+    slot0: alloy::primitives::B256,
+    liquidity: alloy::primitives::B256,
+    flipped: bool,
+) -> Option<Pool> {
+    let (sqrt, _tick, protocol, lp) = mev_bindings::decode_v4_slot0(slot0);
+    let liq = u128::try_from(alloy::primitives::U256::from_be_bytes(liquidity.0)).ok()?;
+    let sqrt = sqrt_price_from_x96(f64::from(sqrt));
+    if sqrt <= 0.0 || liq == 0 {
+        return None; // uninitialized or empty
+    }
+    // `protocol`: zeroForOne fee in the low 12 bits, oneForZero in the high 12.
+    let zero_for_one = mev_bindings::v4_swap_fee(protocol & 0xfff, lp) as f64 / V3_FEE_DENOM;
+    let one_for_zero = mev_bindings::v4_swap_fee(protocol >> 12, lp) as f64 / V3_FEE_DENOM;
+    let (fee0, fee1) = if flipped {
+        (one_for_zero, zero_for_one)
+    } else {
+        (zero_for_one, one_for_zero)
+    };
+    let state = PoolState::V3 {
+        sqrt_price: if flipped { 1.0 / sqrt } else { sqrt },
+        liquidity: liq as f64,
+    };
+    Some(Pool::new(info, state).with_directional_fees(fee0, fee1))
+}
+
 pub async fn refresh(rpc: &Rpc, store: &mut PoolStore) -> Result<()> {
     let infos: Vec<PoolInfo> = store.pools().map(|p| p.info.clone()).collect();
     for p in load_pools(rpc, infos).await? {

@@ -216,6 +216,47 @@ impl Default for BatchConfig {
     }
 }
 
+/// Uniswap V4 (hookless pools only; hooked pools can change a swap's outcome in ways we can't model).
+/// Pools are found from the PoolManager's `Initialize` events (cached on disk and extended
+/// incrementally) and ranked by recent swap activity. Routes through V4 pools are only sent when the
+/// deployed executor supports them (`executor_v4`); until then they are logged as `v4_candidate`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UniswapV4Config {
+    pub enabled: bool,
+    pub pool_manager: Address,
+    /// RPC for the wide `getLogs` scans (must allow wide ranges: the official Arbitrum RPC does).
+    pub log_rpc: String,
+    /// First block to scan for pool creation (the PoolManager's deployment is after this).
+    #[serde(default = "default_v4_first_block")]
+    pub first_block: u64,
+    /// Recent blocks scanned for swap activity, and blocks per `getLogs` request.
+    #[serde(default = "default_v4_blocks")]
+    pub blocks: u64,
+    #[serde(default = "default_v4_step")]
+    pub step: u64,
+    /// A pool needs this many swaps in the window to be tracked; at most `max_pools` are (most active first).
+    #[serde(default = "default_v4_min_swaps")]
+    pub min_swaps: u64,
+    #[serde(default = "default_v4_max_pools")]
+    pub max_pools: usize,
+}
+
+fn default_v4_first_block() -> u64 {
+    250_000_000
+}
+fn default_v4_blocks() -> u64 {
+    12_000
+}
+fn default_v4_step() -> u64 {
+    500
+}
+fn default_v4_min_swaps() -> u64 {
+    3
+}
+fn default_v4_max_pools() -> usize {
+    150
+}
+
 /// Per-route win-rate gate for arbitrage sends (`mev_risk::gate`, DECISIONS #54): a route is sent
 /// only while `p_win × net − (1 − p_win) × cost > 0`; losing streaks back a route off.
 #[derive(Debug, Clone, Deserialize)]
@@ -373,6 +414,13 @@ pub struct ChainConfig {
     /// The deployed executor has `batch`. Only set after deploying that executor.
     #[serde(default)]
     pub executor_batch: bool,
+    /// The deployed executor has Uniswap V4 hops (and its PoolManager is set). Only set after
+    /// deploying that executor; until then V4 routes are logged, never sent.
+    #[serde(default)]
+    pub executor_v4: bool,
+    /// Uniswap V4 pool discovery (off unless configured).
+    #[serde(default)]
+    pub uniswap_v4: Option<UniswapV4Config>,
     /// Send ready trades together as one transaction (needs `executor_batch`). Off by default.
     #[serde(default)]
     pub batch: BatchConfig,
@@ -598,6 +646,15 @@ mod tests {
         );
         assert!(c.max_cycles > 20_000, "long-tail cycles need headroom");
         assert!(c.auto_discovery.as_ref().is_some_and(|a| a.cross_pairs > 0));
+        assert!(
+            c.uniswap_v4
+                .as_ref()
+                .is_some_and(|v| v.enabled && !v.pool_manager.is_zero())
+        );
+        assert!(
+            !c.executor_v4,
+            "V4 routes are only sent once the executor with V4 hops is deployed"
+        );
         assert!(!c.atlas.bid, "bidding needs a funded solver: it ships off");
         assert!(
             c.atlas.solver.is_none(),

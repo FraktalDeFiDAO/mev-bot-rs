@@ -50,7 +50,7 @@ contract AtlasSolver is ArbExecutor {
     }
 
     receive() external payable override {
-        if (!liquidating && !atlasActive) revert Unauthorized();
+        if (!liquidating && !atlasActive && !v4Active) revert Unauthorized();
     }
 
     function setMaxBid(uint256 cap) external {

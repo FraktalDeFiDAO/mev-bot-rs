@@ -30,6 +30,7 @@ impl Pool {
         let fee = match info.kind {
             PoolKind::UniV2 { fee_bps } => fee_bps as f64 / 10_000.0,
             PoolKind::UniV3 { fee } | PoolKind::PancakeV3 { fee } => fee as f64 / 1_000_000.0,
+            PoolKind::UniV4 { fee, .. } => fee as f64 / 1_000_000.0,
             PoolKind::CamelotV2 => 0.003,
             // Real fees come from globalState() via `with_directional_fees`.
             PoolKind::AlgebraV3 => 0.003,
@@ -162,6 +163,7 @@ pub fn tick_spacing(kind: &PoolKind) -> u32 {
             f => (f / 50).max(1),
         },
         PoolKind::AlgebraV3 => 60,
+        PoolKind::UniV4 { tick_spacing, .. } => tick_spacing.max(1),
         PoolKind::UniV2 { .. } | PoolKind::CamelotV2 => 1,
     }
 }

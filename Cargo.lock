@@ -3095,6 +3095,10 @@ dependencies = [
  "mev-rpc",
  "mev-state",
  "mev-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "tracing",
 ]
 
