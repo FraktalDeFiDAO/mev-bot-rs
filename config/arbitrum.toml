@@ -104,6 +104,8 @@ arb_presimulate = false       # live arbs send on the local model; executor minP
 max_tip_usd_per_tx = 0.25      # one bid
 max_tip_usd_per_minute = 5.00  # rolling minute
 max_tip_usd_per_day = 25.00    # per UTC day
+default_tip_gwei = 0.05        # bid when no competition is observed (was 0.005: lost to 0-3 gwei winners)
+min_tip_gwei = 0.01            # never bid below this (a 1-wei bid is a zero bid)
 
 [tokens]
 WETH = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"

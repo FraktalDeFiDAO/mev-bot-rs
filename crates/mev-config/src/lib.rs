@@ -158,8 +158,8 @@ pub struct PgaConfig {
     pub outbid_margin: f64,
     /// Quantile of recently observed winning tips used as the competition estimate.
     pub competition_quantile: f64,
-    /// Nominal PGA round (docs: 125 ms on Arbitrum One); a send slower than this from its
-    /// trigger is counted as over budget (it likely bids in a later round than its trigger).
+    /// Nominal PGA round (docs: 125 ms on Arbitrum One); a send signed later than this after its
+    /// trigger is counted as over (it likely bids in a later round than its trigger).
     pub round_ms: u64,
     pub fast_feed: FastFeedConfig,
 }
@@ -172,8 +172,8 @@ impl Default for PgaConfig {
             max_tip_usd_per_tx: 0.25,
             max_tip_usd_per_minute: 0.5,
             max_tip_usd_per_day: 2.0,
-            default_tip_gwei: 0.005,
-            min_tip_gwei: 0.0,
+            default_tip_gwei: 0.05,
+            min_tip_gwei: 0.01,
             outbid_margin: 0.1,
             competition_quantile: 0.75,
             round_ms: 125,

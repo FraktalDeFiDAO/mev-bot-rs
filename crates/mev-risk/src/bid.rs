@@ -125,6 +125,15 @@ impl BidPolicy {
     }
 }
 
+/// The higher of two optional competition estimates (None if neither is known): bid against the
+/// strongest evidence of what ordering costs.
+pub fn strongest(a: Option<u128>, b: Option<u128>) -> Option<u128> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.max(y)),
+        (x, y) => x.or(y),
+    }
+}
+
 /// Recently observed winning priority fees (wei/gas), for the competition estimate. Entries
 /// older than `horizon_secs` or beyond `capacity` are dropped.
 #[derive(Debug, Clone)]
@@ -378,5 +387,13 @@ mod tests {
         assert!(matches!(b.allow(0.5, t0 + 200), Err(TipCap::PerDay { .. })));
         // Next UTC day resets.
         assert!(b.allow(0.5, t0 + 86_400).is_ok());
+    }
+
+    #[test]
+    fn strongest_takes_the_higher_estimate() {
+        assert_eq!(strongest(Some(3), Some(9)), Some(9));
+        assert_eq!(strongest(None, Some(9)), Some(9));
+        assert_eq!(strongest(Some(3), None), Some(3));
+        assert_eq!(strongest(None, None), None);
     }
 }

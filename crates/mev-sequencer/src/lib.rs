@@ -58,6 +58,20 @@ impl SequencedTx {
     pub fn selector(&self) -> Option<[u8; 4]> {
         self.input.get(..4).map(|s| [s[0], s[1], s[2], s[3]])
     }
+
+    /// The priority fee (wei/gas) this contract call bids, if it bids one: an EIP-1559 call with
+    /// a non-zero `maxPriorityFeePerGas` (capped by `maxFeePerGas`, an upper bound on what it
+    /// pays). Plain transfers and legacy txs (whose tip needs the base fee) give `None`. Under PGA
+    /// this is what competing bots pay for ordering.
+    pub fn bid_tip_wei(&self) -> Option<u128> {
+        use alloy::consensus::Transaction;
+        if self.input.len() < 4 {
+            return None;
+        }
+        let prio = self.tx.max_priority_fee_per_gas()?;
+        let tip = prio.min(self.tx.max_fee_per_gas());
+        (tip > 0).then_some(tip)
+    }
 }
 
 #[derive(Deserialize)]
@@ -291,6 +305,43 @@ mod tests {
         };
         let sig = signer.sign_transaction_sync(&mut tx).unwrap();
         TxEnvelope::Eip1559(tx.into_signed(sig))
+    }
+
+    #[test]
+    fn bid_tip_is_the_priority_fee_of_contract_calls_only() {
+        let signer = PrivateKeySigner::random();
+        let mk = |prio: u128, max: u128, input: Vec<u8>| {
+            let mut tx = TxEip1559 {
+                chain_id: 42161,
+                nonce: 0,
+                gas_limit: 300_000,
+                max_fee_per_gas: max,
+                max_priority_fee_per_gas: prio,
+                to: TxKind::Call(address!("00000000000000000000000000000000000000aa")),
+                input: input.into(),
+                ..Default::default()
+            };
+            let sig = signer.sign_transaction_sync(&mut tx).unwrap();
+            let env = TxEnvelope::Eip1559(tx.into_signed(sig));
+            SequencedTx {
+                seq: 1,
+                received: Instant::now(),
+                hash: *env.tx_hash(),
+                to: env.to(),
+                input: env.input().clone(),
+                tx: env,
+            }
+        };
+        let call = vec![1, 2, 3, 4, 5];
+        assert_eq!(
+            mk(3_000_000_000, 5_000_000_000, call.clone()).bid_tip_wei(),
+            Some(3_000_000_000)
+        );
+        // Capped by maxFeePerGas.
+        assert_eq!(mk(9, 4, call.clone()).bid_tip_wei(), Some(4));
+        // No tip, or a plain transfer: no bid.
+        assert_eq!(mk(0, 5, call).bid_tip_wei(), None);
+        assert_eq!(mk(7, 9, vec![]).bid_tip_wei(), None);
     }
 
     fn signed_msg(t: &TxEnvelope) -> Vec<u8> {
