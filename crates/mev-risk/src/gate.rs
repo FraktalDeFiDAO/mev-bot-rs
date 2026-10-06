@@ -178,6 +178,45 @@ impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
     }
 }
 
+/// Short-lived "don't retry this yet" marks (for example a route whose pre-send simulation just
+/// reverted). Pure: callers pass the clock.
+#[derive(Debug, Default)]
+pub struct Cooldowns<K: std::hash::Hash + Eq + Copy> {
+    marked: HashMap<K, u64>,
+}
+
+impl<K: std::hash::Hash + Eq + Copy> Cooldowns<K> {
+    pub fn new() -> Self {
+        Self {
+            marked: HashMap::new(),
+        }
+    }
+
+    pub fn mark(&mut self, key: K, now: u64) {
+        self.marked.insert(key, now);
+    }
+
+    /// Was `key` marked less than `ttl_secs` ago?
+    pub fn active(&self, key: &K, now: u64, ttl_secs: u64) -> bool {
+        self.marked
+            .get(key)
+            .is_some_and(|t| now.saturating_sub(*t) < ttl_secs)
+    }
+
+    /// Forget marks older than `ttl_secs`.
+    pub fn prune(&mut self, now: u64, ttl_secs: u64) {
+        self.marked.retain(|_, t| now.saturating_sub(*t) < ttl_secs);
+    }
+
+    pub fn len(&self) -> usize {
+        self.marked.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.marked.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +225,20 @@ mod tests {
 
     fn cfg() -> GateConfig {
         GateConfig::default()
+    }
+
+    #[test]
+    fn cooldowns_expire_and_prune() {
+        let mut c = Cooldowns::<u8>::new();
+        assert!(!c.active(&1, 100, 120));
+        c.mark(1, 100);
+        assert!(c.active(&1, 100, 120));
+        assert!(c.active(&1, 219, 120));
+        assert!(!c.active(&1, 220, 120), "expired exactly at the ttl");
+        assert!(!c.active(&2, 100, 120), "other keys are unaffected");
+        c.mark(2, 300);
+        c.prune(330, 120);
+        assert_eq!(c.len(), 1, "the old mark is dropped, the new one stays");
     }
 
     #[test]

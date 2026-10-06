@@ -49,6 +49,22 @@ async fn main() -> Result<()> {
             r.sell,
             outcome
         );
+        // The route itself: kind (0/1 V2, 2 V3-style, 3/4 Uniswap V4 ERC20/native) and tokens.
+        let hops: Vec<String> = r
+            .opp
+            .hops
+            .iter()
+            .map(|h| {
+                format!(
+                    "k{} {}->{} {}",
+                    h.kind,
+                    &h.token_in.to_string()[..8],
+                    &h.token_out.to_string()[..8],
+                    &h.pool.to_string()[..8]
+                )
+            })
+            .collect();
+        println!("            route: {}", hops.join(" | "));
     }
     Ok(())
 }
