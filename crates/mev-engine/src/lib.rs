@@ -323,6 +323,7 @@ impl Engine {
                 let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
                 let log = feed_log.clone();
                 let tip_book = feed_tips.clone();
+                let bot_floor = (cfg.pga.feed_min_bot_tip_gwei.max(0.0) * 1e9) as u128;
                 tokio::spawn(async move {
                     let mut seen = RecentHashes::new(FEED_DEDUP);
                     while let Some(st) = raw_rx.recv().await {
@@ -330,7 +331,7 @@ impl Engine {
                             continue; // already delivered by the other feed
                         }
                         log.lock().unwrap().record(&st);
-                        if let Some(t) = st.bid_tip_wei() {
+                        if let Some(t) = st.bid_tip_wei().filter(|t| *t >= bot_floor) {
                             tip_book.lock().unwrap().record(t, now_secs());
                         }
                         if want_pre {
@@ -771,7 +772,11 @@ impl Engine {
         }
         let now = now_secs();
         let q = self.cfg.pga.competition_quantile;
-        let from_feed = self.feed_tips.lock().unwrap().estimate(q, now);
+        let from_feed = self
+            .feed_tips
+            .lock()
+            .unwrap()
+            .estimate(self.cfg.pga.feed_quantile, now);
         let competition = mev_risk::bid::strongest(self.tips.estimate(q, now), from_feed);
         let input = BidInput {
             gross_profit_usd: gross_usd,
