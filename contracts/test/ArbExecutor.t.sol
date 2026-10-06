@@ -232,6 +232,30 @@ contract ArbExecutorForkTest is Test {
         emit log_named_decimal_uint("profit USDC", profit, 6);
     }
 
+    /// A batch against real Balancer and Uniswap state: the first item takes the arb, the second
+    /// (an absurd minProfit) fails alone and does not undo it; nothing is left in the executor.
+    function test_batchRunsARealArbAndIsolatesAFailingItem() public {
+        _createArb(30 ether);
+        uint256 before = IERC20Full(USDC).balanceOf(receiver);
+        bytes[] memory calls = new bytes[](2);
+        calls[0] = abi.encodeCall(ArbExecutor.execute, (USDC, 5_000e6, 1e6, _route()));
+        calls[1] = abi.encodeCall(ArbExecutor.execute, (USDC, 5_000e6, 1_000_000e6, _route()));
+        vm.prank(owner);
+        bool[] memory ok = exec.batch(calls);
+        assertTrue(ok[0], "the real arb executed");
+        assertFalse(ok[1], "the impossible minProfit failed on its own");
+        assertGt(IERC20Full(USDC).balanceOf(receiver) - before, 1e6, "profit reached the receiver");
+        assertEq(IERC20Full(USDC).balanceOf(address(exec)), 0, "executor holds no USDC");
+        assertEq(IERC20Full(WETH).balanceOf(address(exec)), 0, "executor holds no WETH");
+    }
+
+    function test_batchOnlyOwner() public {
+        bytes[] memory calls = new bytes[](1);
+        calls[0] = abi.encodeCall(ArbExecutor.execute, (USDC, 1e6, 0, _route()));
+        vm.expectRevert(ArbExecutor.NotOwner.selector);
+        exec.batch(calls);
+    }
+
     function test_minProfitEnforced() public {
         _createArb(30 ether);
         ArbExecutor.Hop[] memory hops = _route();

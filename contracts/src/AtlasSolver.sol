@@ -60,7 +60,7 @@ contract AtlasSolver is ArbExecutor {
     }
 
     function _isOperator() internal view override returns (bool) {
-        return msg.sender == owner || (msg.sender == address(this) && atlasActive);
+        return super._isOperator() || (msg.sender == address(this) && atlasActive);
     }
 
     /// @notice Atlas solver entry point (ISolverContract). `solverOpData` is the ABI-encoded

@@ -1,9 +1,6 @@
 //! Transaction building, signing, broadcast (to several endpoints at once), and receipt tracking.
 
-use std::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
+use std::time::Duration;
 
 use alloy::{
     eips::eip2718::Encodable2718,
@@ -18,6 +15,8 @@ use mev_lending::Plan;
 use mev_types::{Hop, Opportunity};
 use tracing::warn;
 
+mod nonce;
+
 pub struct Sender {
     wallet: EthereumWallet,
     pub address: Address,
@@ -26,7 +25,7 @@ pub struct Sender {
     broadcast: Vec<(String, DynProvider)>,
     executor: Address,
     chain_id: u64,
-    nonce: AtomicU64,
+    nonce: nonce::NonceManager,
     /// The deployed executor has `executeFlashSwap` (V3-first routes then need no lender).
     pub flash_swaps: bool,
 }
@@ -39,6 +38,8 @@ pub struct Landed {
     pub block: Option<u64>,
     /// Position in the block (race telemetry: who was ahead of us).
     pub tx_index: Option<u64>,
+    /// For a `batch` transaction: whether each item executed (empty otherwise).
+    pub batch_ok: Vec<bool>,
 }
 
 /// A broadcast transaction and its timing.
@@ -78,7 +79,7 @@ impl Sender {
             broadcast,
             executor,
             chain_id,
-            nonce: AtomicU64::new(nonce),
+            nonce: nonce::NonceManager::new(nonce),
             flash_swaps: false,
         })
     }
@@ -135,6 +136,33 @@ impl Sender {
         .await
     }
 
+    /// Send ready-made executor calldata (a single trade built by the caller).
+    pub async fn send_prebuilt(
+        &self,
+        calldata: Vec<u8>,
+        gas_limit: u64,
+        fees: Fees,
+    ) -> Result<Sent> {
+        self.send_calldata(calldata, gas_limit, Some(fees)).await
+    }
+
+    /// Several trades in one transaction through the executor's `batch` (each item is ready-made
+    /// calldata; each succeeds or fails on its own). Needs an executor that has `batch`.
+    pub async fn send_batch(
+        &self,
+        items: Vec<Vec<u8>>,
+        gas_limit: u64,
+        fees: Fees,
+    ) -> Result<Sent> {
+        anyhow::ensure!(
+            !items.is_empty() && items.len() <= mev_bindings::MAX_BATCH,
+            "a batch carries 1..={} trades",
+            mev_bindings::MAX_BATCH
+        );
+        self.send_calldata(mev_bindings::batch_calldata(items), gas_limit, Some(fees))
+            .await
+    }
+
     /// Sign once and broadcast the same raw tx to every endpoint; first success wins. `fees`: the
     /// bid decided at submission time; `None` fetches the base fee and bids nothing.
     async fn send_calldata(
@@ -157,7 +185,7 @@ impl Sender {
                     .pending()
                     .await?;
                 warn!(resynced_nonce = n, error = %e, "stale nonce; resyncing and retrying once");
-                self.nonce.store(n, Ordering::SeqCst);
+                self.nonce.reset(n);
                 self.sign_and_broadcast(&calldata, gas_limit, fees).await
             }
             other => other,
@@ -170,7 +198,7 @@ impl Sender {
         gas_limit: u64,
         fees: Fees,
     ) -> Result<Sent> {
-        let nonce = self.nonce.fetch_add(1, Ordering::SeqCst);
+        let nonce = self.nonce.take();
         let tx = tx_request(
             self.address,
             self.executor,
@@ -215,8 +243,9 @@ impl Sender {
             .collect();
         let results: Vec<_> = timed.into_iter().map(|(r, _)| r).collect();
         if results.iter().all(|r| r.is_err()) {
-            // Nothing accepted it — give the nonce back.
-            self.nonce.fetch_sub(1, Ordering::SeqCst);
+            // Nothing accepted it: release the nonce (refilled before any new one, so a concurrent
+            // send's nonce is never reused and no gap stalls the ones queued behind it).
+            self.nonce.release(nonce);
             bail!(
                 "all broadcasts failed: {:?}",
                 results.into_iter().filter_map(|r| r.err()).next()
@@ -249,6 +278,7 @@ impl Sender {
                     effective_gas_price: r.effective_gas_price,
                     block: r.block_number,
                     tx_index: r.transaction_index,
+                    batch_ok: mev_bindings::batch_outcomes(r.inner.logs(), self.executor),
                 });
             }
             if start.elapsed() > timeout {
@@ -258,7 +288,7 @@ impl Sender {
                     .get_transaction_count(self.address)
                     .pending()
                     .await?;
-                self.nonce.store(n, Ordering::SeqCst);
+                self.nonce.reset(n);
                 bail!("receipt timeout for {hash}");
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
