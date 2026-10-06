@@ -652,8 +652,8 @@ mod tests {
                 .is_some_and(|v| v.enabled && !v.pool_manager.is_zero())
         );
         assert!(
-            !c.executor_v4,
-            "V4 routes are only sent once the executor with V4 hops is deployed"
+            c.executor_v4 && c.executor_batch,
+            "the redeployed executor has V4 hops and batch"
         );
         assert!(!c.atlas.bid, "bidding needs a funded solver: it ships off");
         assert!(
