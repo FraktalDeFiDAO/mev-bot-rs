@@ -42,6 +42,9 @@ use tracing::{error, info, warn};
 /// Recently observed winning tips kept for the competition estimate (count, max age).
 const TIP_BOOK_CAPACITY: usize = 200;
 const TIP_BOOK_HORIZON_SECS: u64 = 3600;
+/// Tips paid by contract calls seen in the sequencer feed (what competing bots bid right now).
+const FEED_TIP_CAPACITY: usize = 500;
+const FEED_TIP_HORIZON_SECS: u64 = 120;
 
 /// The bid policy from `[pga]` config.
 fn bid_policy(c: &mev_config::PgaConfig) -> BidPolicy {
@@ -117,6 +120,8 @@ pub struct Engine {
     /// Fast Feed counters when the paid feed is enabled and keyed.
     fast_feed_stats: Option<Arc<mev_ingest::fast_feed::FastFeedStats>>,
     tips: TipBook,
+    /// Priority fees of contract calls in the feed: the live competition for ordering.
+    feed_tips: Arc<std::sync::Mutex<TipBook>>,
     tip_budget: TipBudget,
     mode: Mode,
     liq: Option<LiqCtx>,
@@ -288,6 +293,10 @@ impl Engine {
             .clone()
             .filter(|p| p.enabled && !p.rpc_urls.is_empty());
         let feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>> = Default::default();
+        let feed_tips = Arc::new(std::sync::Mutex::new(TipBook::new(
+            FEED_TIP_CAPACITY,
+            FEED_TIP_HORIZON_SECS,
+        )));
         let fast_feed_stats = (cfg.pga.fast_feed.enabled && secrets.fast_feed_key.is_some())
             .then(|| Arc::new(mev_ingest::fast_feed::FastFeedStats::default()));
         if cfg.pga.fast_feed.enabled && secrets.fast_feed_key.is_none() {
@@ -313,6 +322,7 @@ impl Engine {
                 let (pre_tx, pre_rx) = mpsc::unbounded_channel();
                 let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
                 let log = feed_log.clone();
+                let tip_book = feed_tips.clone();
                 tokio::spawn(async move {
                     let mut seen = RecentHashes::new(FEED_DEDUP);
                     while let Some(st) = raw_rx.recv().await {
@@ -320,6 +330,9 @@ impl Engine {
                             continue; // already delivered by the other feed
                         }
                         log.lock().unwrap().record(&st);
+                        if let Some(t) = st.bid_tip_wei() {
+                            tip_book.lock().unwrap().record(t, now_secs());
+                        }
                         if want_pre {
                             let _ = pre_tx.send(st.clone());
                         }
@@ -434,6 +447,7 @@ impl Engine {
             busy_pools: HashMap::new(),
             busy_routes: HashMap::new(),
             bid_policy: pga_policy,
+            feed_tips,
             fast_feed_stats,
             tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
             tip_budget: pga_budget,
@@ -756,7 +770,9 @@ impl Engine {
             return Some((Fees::no_bid(base_fee), 0.0));
         }
         let now = now_secs();
-        let competition = self.tips.estimate(self.cfg.pga.competition_quantile, now);
+        let q = self.cfg.pga.competition_quantile;
+        let from_feed = self.feed_tips.lock().unwrap().estimate(q, now);
+        let competition = mev_risk::bid::strongest(self.tips.estimate(q, now), from_feed);
         let input = BidInput {
             gross_profit_usd: gross_usd,
             gas_units: gas,
@@ -795,7 +811,7 @@ impl Engine {
         self.metrics.event(
             "bid",
             json!({ "opp": ev, "tip_wei": bid.max_priority_fee_per_gas.to_string(), "tip_usd": bid.tip_cost_usd,
-                    "fraction_of_net": bid.fraction_of_net, "competition_wei": competition.map(|c| c.to_string()) }),
+                    "fraction_of_net": bid.fraction_of_net, "competition_wei": competition.map(|c| c.to_string()), "feed_competition_wei": from_feed.map(|c| c.to_string()) }),
         );
         Some((Fees::from_bid(&bid), bid.tip_cost_usd))
     }
@@ -1071,14 +1087,17 @@ impl Engine {
                 .collect();
             // Trigger seen -> first endpoint accepted (the latency that decides races).
             let latency_ms = race::ms(trigger.seen, sent.first_accept.unwrap_or(sent.signed));
+            let decide_ms = race::ms(trigger.seen, sent.signed);
             metrics.event(
                 "sent",
-                json!({ "hash": hash, "net_usd": net_usd, "latency_ms": latency_ms, "source": trigger.source, "endpoints": endpoints }),
+                json!({ "hash": hash, "net_usd": net_usd, "latency_ms": latency_ms, "decide_ms": decide_ms, "source": trigger.source, "endpoints": endpoints }),
             );
             info!(%hash, latency_ms, source = trigger.source, endpoints = endpoints.join(" "), "arb sent (trigger -> accepted)");
-            // Inside the PGA round its trigger was in? (Later = bidding in a later round.)
+            // Signed (broadcast starts) inside the PGA round its trigger was in? `latency_ms` above
+            // includes the sequencer's acknowledgement, which arrives about a round later even for
+            // sends that are ordered in time, so it can't tell timely from late.
             metrics.update(|c| {
-                if latency_ms <= round_ms as i64 {
+                if decide_ms <= round_ms as i64 {
                     c.round_within += 1
                 } else {
                     c.round_over += 1
