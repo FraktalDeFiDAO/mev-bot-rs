@@ -23,6 +23,7 @@ mev-bot/
     ├── mev-bindings/         # L0
     ├── mev-rpc/              # L1
     ├── mev-ingest/           # L1
+    ├── mev-atlas/            # L1  (optional Atlas/SVR solver protocol: auction feed, EIP-712 signing)
     ├── mev-dex/              # L2
     ├── mev-discovery/        # L2
     ├── mev-lending/          # L2

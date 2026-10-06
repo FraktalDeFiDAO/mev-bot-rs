@@ -38,3 +38,4 @@ mev-lending-gearbox = { workspace = true }
 mev-sequencer = { workspace = true }
 mev-presim = { workspace = true }
 mev-localsim = { workspace = true }
+mev-atlas = { workspace = true }

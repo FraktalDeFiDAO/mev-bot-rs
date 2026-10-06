@@ -112,6 +112,17 @@ feed_min_bot_tip_gwei = 0.02   # ignore feed txs tipping less: ordinary wallets 
 feed_quantile = 0.9            # of bot-like feed tips
 min_tip_gwei = 0.01            # never bid below this (a 1-wei bid is a zero bid)
 
+[atlas]
+# Optional Chainlink SVR / FastLane Atlas solver (docs/research/ATLAS.md). OFF: nothing connects.
+# enabled = true  -> listen to the auction feed and log the auctions on this chain (free, no funds)
+# bid     = true  -> also submit solver operations (needs the steps in scripts/atlas-solver.sh)
+enabled = false
+bid = false
+# solver = "0x..."           # the deployed AtlasSolver (scripts/atlas-solver.sh deploy)
+bid_fraction = 0.7           # share of a liquidation's expected net profit offered as the bid
+max_bid_eth = 0.01           # per-bid cap; keep equal to the contract's maxBid
+solver_gas_limit = 1500000   # used if DappControl.getSolverGasLimit() cannot be read
+
 [tokens]
 WETH = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"
 USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
