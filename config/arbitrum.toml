@@ -14,6 +14,7 @@ executor_flash_swaps = true
 # Executor 0xb793f66e4e3D1fFfd7c095E3AC2D863BfBB336A2 (2026-10-05) adds liquidateViaAave: liquidations above
 # the Balancer cap borrow from the Aave pool (5 bps). DECISIONS #51.
 executor_aave_flash = true
+executor_batch = false   # the deployed executor has `batch` (redeploy first); see [batch]
 loan_tokens = ["WETH", "USDC", "USDT", "WBTC", "ARB", "DAI", "USDC.e"]
 usd_token = "USDC"
 native_token = "WETH"
@@ -126,6 +127,13 @@ backoff_after = 3        # consecutive losses
 backoff_secs = 600       # first back-off, doubled per further loss
 backoff_max_secs = 21600
 memory_secs = 86400      # results older than this are forgotten
+[batch]
+# Several ready liquidations/arbitrages as ONE transaction via the executor's `batch` (one nonce, one
+# tip and base fee for the lot; each trade still succeeds or fails on its own). OFF until the executor
+# with `batch` is deployed and `executor_batch = true` is set at the top of this file.
+enabled = false
+window_ms = 15     # how long the first queued trade waits for company
+max_items = 4      # flush at once at this many (the executor allows 8)
 
 [atlas]
 # Optional Chainlink SVR / FastLane Atlas solver (docs/research/ATLAS.md). Observing only: bids are off.

@@ -193,6 +193,29 @@ impl Default for PgaConfig {
     }
 }
 
+/// Batching: several liquidations and/or arbitrages ready within a short window go out as one
+/// transaction through the executor's `batch` (one nonce, one tip, one base fee for the lot; each
+/// trade still succeeds or fails alone). Needs `executor_batch = true` (a redeployed executor).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct BatchConfig {
+    pub enabled: bool,
+    /// How long the first queued trade waits for company, ms.
+    pub window_ms: u64,
+    /// Flush at once when this many are queued (the executor allows at most 8).
+    pub max_items: usize,
+}
+
+impl Default for BatchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            window_ms: 15,
+            max_items: 4,
+        }
+    }
+}
+
 /// Per-route win-rate gate for arbitrage sends (`mev_risk::gate`, DECISIONS #54): a route is sent
 /// only while `p_win × net − (1 − p_win) × cost > 0`; losing streaks back a route off.
 #[derive(Debug, Clone, Deserialize)]
@@ -347,6 +370,12 @@ pub struct ChainConfig {
     /// without a lender (no fee, no lender-balance cap). Only set after deploying that executor.
     #[serde(default)]
     pub executor_flash_swaps: bool,
+    /// The deployed executor has `batch`. Only set after deploying that executor.
+    #[serde(default)]
+    pub executor_batch: bool,
+    /// Send ready trades together as one transaction (needs `executor_batch`). Off by default.
+    #[serde(default)]
+    pub batch: BatchConfig,
     /// The deployed executor has `liquidateViaAave`: liquidations whose loan exceeds the Balancer
     /// cap borrow from the Aave pool (`[aave] pool`) instead (5 bps premium, deep liquidity).
     #[serde(default)]
@@ -563,6 +592,10 @@ mod tests {
         assert_eq!(c.pair_addresses().unwrap().len(), c.pairs.len());
         assert_eq!(c.pga.max_tip_usd_per_tx, 1.0);
         assert!(c.pga.feed_min_bot_tip_gwei >= 0.02);
+        assert!(
+            !c.batch.enabled,
+            "batching ships off until the executor with `batch` is deployed"
+        );
         assert!(c.max_cycles > 20_000, "long-tail cycles need headroom");
         assert!(c.auto_discovery.as_ref().is_some_and(|a| a.cross_pairs > 0));
         assert!(!c.atlas.bid, "bidding needs a funded solver: it ships off");

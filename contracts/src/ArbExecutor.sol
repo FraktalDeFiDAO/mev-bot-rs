@@ -107,6 +107,8 @@ contract ArbExecutor {
     address transient flashPool;
     /// The Aave pool an Aave-funded liquidation borrowed from; only its callback is accepted.
     address transient aaveFlashPool;
+    /// True only while `batch` runs its items: lets each item's self-call start its trade.
+    bool transient batching;
 
     error NotOwner();
     error Unauthorized();
@@ -114,8 +116,12 @@ contract ArbExecutor {
     error BadRoute();
     error TransferFailed();
     error TargetNotAllowed(address target);
+    error NothingExecuted();
+    error BatchTooLarge();
 
     event TargetSet(address indexed target, bool allowed);
+    /// One item of a `batch`: its position, selector and whether it executed.
+    event BatchItem(uint256 indexed index, bytes4 indexed selector, bool ok);
 
     constructor(address vault_, address weth_, address profitReceiver_) {
         vault = IBalancerVault(vault_);
@@ -133,7 +139,7 @@ contract ArbExecutor {
     /// @dev Who may start a liquidation: the owner. A subclass can additionally admit itself
     /// during a call it authenticated (see `AtlasSolver`).
     function _isOperator() internal view virtual returns (bool) {
-        return msg.sender == owner;
+        return msg.sender == owner || (msg.sender == address(this) && batching);
     }
 
     /// @notice Allow or revoke a liquidation call target / approval spender.
@@ -149,7 +155,7 @@ contract ArbExecutor {
         external
         returns (uint256 profit)
     {
-        if (msg.sender != owner) revert NotOwner();
+        if (!_isOperator()) revert NotOwner();
         if (hops.length == 0 || hops[0].tokenIn != token || hops[hops.length - 1].tokenOut != token) revert BadRoute();
 
         address[] memory tokens = new address[](1);
@@ -172,7 +178,7 @@ contract ArbExecutor {
         external
         returns (uint256 profit)
     {
-        if (msg.sender != owner) revert NotOwner();
+        if (!_isOperator()) revert NotOwner();
         if (hops.length < 2 || hops[0].kind != UNI_V3 || hops[0].tokenIn != hops[hops.length - 1].tokenOut) {
             revert BadRoute();
         }
@@ -249,6 +255,40 @@ contract ArbExecutor {
             .flashLoanSimple(address(this), debt, flashAmount, abi.encode(collateral, minProfit, calls, hops), 0);
         if (aaveFlashPool != address(0)) revert Unauthorized(); // callback must have run
         profit = lastProfit;
+    }
+
+    /// Most trades one `batch` call may carry (bounds the gas an owner mistake can burn).
+    uint256 internal constant MAX_BATCH = 8;
+
+    /// @notice Run several trades in one transaction: each item is ABI-encoded calldata for
+    /// `execute`, `executeFlashSwap`, `liquidate` or `liquidateViaAave` on this contract. Items run
+    /// one after another, each in its own self-call, so an item that reverts (a lost race, a
+    /// failed `minProfit`) only undoes itself and the rest still execute; every item keeps its own
+    /// route checks, allowlist, exact approvals and `minProfit`. Reverts with `NothingExecuted` if
+    /// no item succeeded. Each item's profit is sent to `profitReceiver` as usual.
+    /// @return ok per item: whether it executed
+    function batch(bytes[] calldata calls) external returns (bool[] memory ok) {
+        if (msg.sender != owner) revert NotOwner();
+        uint256 n = calls.length;
+        if (n == 0) revert BadRoute();
+        if (n > MAX_BATCH) revert BatchTooLarge();
+        ok = new bool[](n);
+        bool any;
+        batching = true;
+        for (uint256 i; i < n; ++i) {
+            if (calls[i].length < 4) revert BadRoute();
+            bytes4 sel = bytes4(calls[i][:4]);
+            if (
+                sel != this.execute.selector && sel != this.executeFlashSwap.selector && sel != this.liquidate.selector
+                    && sel != this.liquidateViaAave.selector
+            ) revert BadRoute();
+            (bool success,) = address(this).call(calls[i]);
+            ok[i] = success;
+            any = any || success;
+            emit BatchItem(i, sel, success);
+        }
+        batching = false;
+        if (!any) revert NothingExecuted();
     }
 
     /// Aave V3 flash-loan callback: only the pool `liquidateViaAave` borrowed from, once, for a loan

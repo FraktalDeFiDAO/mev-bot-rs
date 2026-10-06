@@ -178,7 +178,9 @@ impl MorphoAdapter {
             .collect()
     }
 
-    /// Fetch and cache market params + token decimals for ids not seen yet.
+    /// Fetch and cache market params for ids not seen yet, then the decimals of every token those
+    /// markets use that we don't have (a failed `decimals()` is retried on the next call, never
+    /// guessed).
     async fn load_params(&self, ids: &[B256]) -> Result<()> {
         let missing: Vec<B256> = {
             let known = self.params.lock().unwrap();
@@ -187,16 +189,12 @@ impl MorphoAdapter {
                 .copied()
                 .collect()
         };
-        if missing.is_empty() {
-            return Ok(());
-        }
-        let calls: Vec<_> = missing
-            .iter()
-            .map(|id| call(self.cfg.morpho, IMorpho::idToMarketParamsCall { id: *id }))
-            .collect();
-        let res = multicall(&self.rpc.fast, &calls, 200).await?;
-        let mut new_tokens = Vec::new();
-        {
+        if !missing.is_empty() {
+            let calls: Vec<_> = missing
+                .iter()
+                .map(|id| call(self.cfg.morpho, IMorpho::idToMarketParamsCall { id: *id }))
+                .collect();
+            let res = multicall(&self.rpc.fast, &calls, 200).await?;
             let mut known = self.params.lock().unwrap();
             for (id, r) in missing.iter().zip(res.iter()) {
                 if let Some(p) = decode::<IMorpho::idToMarketParamsCall>(r) {
@@ -210,17 +208,32 @@ impl MorphoAdapter {
                             lltv: p.lltv,
                         },
                     );
-                    new_tokens.extend([p.loanToken, p.collateralToken]);
                 }
             }
         }
-        let calls: Vec<_> = new_tokens
+        let need: Vec<Address> = {
+            let known = self.params.lock().unwrap();
+            let dec = self.decimals.lock().unwrap();
+            let mut t: Vec<Address> = ids
+                .iter()
+                .filter_map(|id| known.get(id))
+                .flat_map(|p| [p.loan, p.collateral])
+                .filter(|t| !dec.contains_key(t))
+                .collect();
+            t.sort();
+            t.dedup();
+            t
+        };
+        if need.is_empty() {
+            return Ok(());
+        }
+        let calls: Vec<_> = need
             .iter()
             .map(|t| call(*t, IERC20::decimalsCall {}))
             .collect();
         let res = multicall(&self.rpc.fast, &calls, 200).await?;
         let mut dec = self.decimals.lock().unwrap();
-        for (t, r) in new_tokens.iter().zip(res.iter()) {
+        for (t, r) in need.iter().zip(res.iter()) {
             if let Some(d) = decode::<IERC20::decimalsCall>(r) {
                 dec.insert(*t, d);
             }
@@ -257,6 +270,8 @@ impl MorphoAdapter {
             .filter_map(|(i, (id, pm))| {
                 let m = decode::<IMorpho::marketCall>(&res[3 * i])?;
                 let price = decode::<IMorphoOracle::priceCall>(&res[3 * i + 1])?;
+                // Unknown loan decimals: skip the market until they are known, never assume 18.
+                let loan_decimals = *dec.get(&pm.loan)?;
                 let usd = decode::<IAaveOracle::getAssetPriceCall>(&res[3 * i + 2])
                     .map(f64::from)
                     .unwrap_or(0.0)
@@ -268,7 +283,7 @@ impl MorphoAdapter {
                         total_borrow_assets: m.totalBorrowAssets as f64,
                         total_borrow_shares: m.totalBorrowShares as f64,
                         loan_usd: usd,
-                        loan_decimals: dec.get(&pm.loan).copied().unwrap_or(18),
+                        loan_decimals,
                     },
                 ))
             })
@@ -675,4 +690,35 @@ async fn feed_signs(
         })
         .filter(|(_, v): &(Address, Vec<(u64, f64)>)| !v.is_empty())
         .collect()
+}
+
+#[cfg(test)]
+mod decimals_tests {
+    use super::*;
+
+    fn market(loan_usd: f64, loan_decimals: u8) -> MarketState {
+        MarketState {
+            price: 1e36,
+            total_borrow_assets: 0.0,
+            total_borrow_shares: 0.0,
+            loan_usd,
+            loan_decimals,
+        }
+    }
+
+    #[test]
+    fn loan_amounts_are_scaled_by_the_loan_tokens_own_decimals() {
+        // 1.5 USDC (6 decimals), 0.5 WBTC (8), 2 WETH (18): same code, three scales.
+        assert!((loan_usd(1_500_000.0, &market(1.0, 6)) - 1.5).abs() < 1e-9);
+        assert!((loan_usd(50_000_000.0, &market(86_000.0, 8)) - 43_000.0).abs() < 1e-6);
+        assert!((loan_usd(2e18, &market(2_700.0, 18)) - 5_400.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn assuming_18_for_a_6_decimal_token_would_be_off_by_a_trillion() {
+        // The reason unknown decimals must skip the market instead of defaulting to 18.
+        let right = loan_usd(1_500_000.0, &market(1.0, 6));
+        let wrong = loan_usd(1_500_000.0, &market(1.0, 18));
+        assert!((right / wrong - 1e12).abs() / 1e12 < 1e-9);
+    }
 }

@@ -81,6 +81,7 @@ const BUSY_TTL: Duration = Duration::from_secs(30);
 const ROUTE_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 
 mod atlas;
+mod batch;
 mod race;
 
 /// Gas a backrun liquidation is priced at (flash loan + protocol call + swap), and its limit.
@@ -146,6 +147,8 @@ pub struct Engine {
     trusted: std::collections::HashSet<Address>,
     /// Routes whose pre-send simulation succeeded, and when (re-checked after `SIM_OK_TTL`).
     sim_ok: HashMap<(Address, Address), Instant>,
+    /// Trades waiting to go out together (only used when `[batch]` is on).
+    batch: batch::Queue,
     tip_budget: TipBudget,
     mode: Mode,
     liq: Option<LiqCtx>,
@@ -197,6 +200,18 @@ enum TxDone {
     },
     Failed {
         hash: Option<TxHash>,
+        error: String,
+    },
+    /// A batched transaction landed: `items` in batch order.
+    BatchLanded {
+        hash: TxHash,
+        landed: Landed,
+        items: Vec<batch::Done>,
+    },
+    /// A batched transaction was never sent or never landed.
+    BatchFailed {
+        hash: Option<TxHash>,
+        items: Vec<batch::Done>,
         error: String,
     },
     /// A priority fee (wei/gas) seen winning ordering over us: the competition estimate's input.
@@ -493,6 +508,7 @@ impl Engine {
             gate: mev_risk::gate::RouteGate::new(),
             trusted,
             sim_ok: HashMap::new(),
+            batch: Default::default(),
             fast_feed_stats,
             tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
             tip_budget: pga_budget,
@@ -553,6 +569,7 @@ impl Engine {
             backoff.reset();
             info!("subscribed to pool events");
             loop {
+                let flush_at = self.batch_deadline().map(tokio::time::Instant::from_std);
                 tokio::select! {
                     maybe = logs.next() => {
                         let Some(log) = maybe else { warn!("log stream ended; resubscribing"); break };
@@ -574,6 +591,9 @@ impl Engine {
                     }
                     Some(done) = rx_done.recv() => self.on_tx_done(done),
                     Some(ev) = recv_opt(&mut liq_rx) => self.on_runner_event(ev, &tx_done).await,
+                    _ = async { tokio::time::sleep_until(flush_at.expect("guarded")).await }, if flush_at.is_some() => {
+                        self.flush_batch(&tx_done).await;
+                    }
                     Some(a) = recv_opt(&mut atlas_auctions) => self.on_atlas_auction(a),
                     Some(e) = recv_opt(&mut atlas_events) => self.on_atlas_event(e),
                     _ = resync.tick() => {
@@ -1137,6 +1157,24 @@ impl Engine {
             self.metrics.event("pool_busy", json!({ "opp": base }));
             return;
         }
+        if self.batch_on() {
+            // Batched: bid once for everything ready together (see `batch`).
+            self.claim_pools((opp.buy_pool, opp.sell_pool), &route_pools);
+            let (o, flash) = (opp.clone(), sender.flash_swaps);
+            let item = batch::Item {
+                kind: "arb",
+                build: Box::new(move |mp| mev_bindings::arb_calldata(&o, mp, flash)),
+                gas,
+                gas_limit: gas * 5 / 2,
+                gas_usd,
+                gross_usd: profit_usd,
+                est_profit_usd: opp.est_profit_usd,
+                px: loan_px,
+                route: Some((opp.buy_pool, opp.sell_pool)),
+                seen: trigger.seen,
+            };
+            return self.enqueue(item, tx_done).await;
+        }
         // PGA bid, decided now (fresh base fee and competition), not at detection.
         let Some((fees, tip_usd)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
         else {
@@ -1360,6 +1398,25 @@ impl Engine {
             );
         }
         let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
+        if self.batch_on() {
+            let item = batch::Item {
+                kind: "liquidation_backrun",
+                build: Box::new(move |mp| {
+                    mev_bindings::liquidation_calldata(&plan, &hops, mp, aave_pool)
+                }),
+                gas: BACKRUN_GAS,
+                gas_limit: BACKRUN_GAS_LIMIT,
+                gas_usd,
+                gross_usd: gross,
+                est_profit_usd: net_usd,
+                px: debt_px,
+                route: None,
+                seen: Instant::now()
+                    .checked_sub(lead)
+                    .unwrap_or_else(Instant::now),
+            };
+            return self.enqueue(item, tx_done).await;
+        }
         let Some((fees, tip_usd)) = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev)
         else {
             return;
@@ -1460,6 +1517,23 @@ impl Engine {
                 "risk_block",
                 json!({ "liq": base, "reason": format!("{block:?}") }),
             );
+        }
+        if self.batch_on() {
+            let item = batch::Item {
+                kind: "liquidation",
+                build: Box::new(move |mp| {
+                    mev_bindings::liquidation_calldata(&plan, &hops, mp, aave_pool)
+                }),
+                gas,
+                gas_limit: gas + gas * 3 / 10,
+                gas_usd,
+                gross_usd: profit_usd,
+                est_profit_usd: net_usd,
+                px: debt_px,
+                route: None,
+                seen: Instant::now(),
+            };
+            return self.enqueue(item, tx_done).await;
         }
         let Some((fees, tip_usd)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
         else {
@@ -1570,6 +1644,12 @@ impl Engine {
                 );
                 info!(%hash, success = landed.success, gas_usd = format!("{gas_usd:.4}"), "landed");
             }
+            TxDone::BatchLanded {
+                hash,
+                landed,
+                items,
+            } => self.on_batch_landed(hash, landed, items),
+            TxDone::BatchFailed { hash, items, error } => self.on_batch_failed(hash, items, error),
             TxDone::TipSeen(tip) => self.tips.record(tip, now_secs()),
             TxDone::Failed { hash, error } => {
                 self.risk.record(false, 0.0, now_secs());
