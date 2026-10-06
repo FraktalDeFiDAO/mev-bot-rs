@@ -46,6 +46,19 @@ const TIP_BOOK_HORIZON_SECS: u64 = 3600;
 const FEED_TIP_CAPACITY: usize = 500;
 const FEED_TIP_HORIZON_SECS: u64 = 120;
 
+/// The legs of a route for event logs: hop kind (0/1 V2, 2 V3-style, 3/4 Uniswap V4 ERC20/native),
+/// tokens, pool (a stand-in id address for V4), fee and, for V4, tick spacing.
+fn route_json(o: &Opportunity) -> serde_json::Value {
+    o.hops
+        .iter()
+        .map(|h| {
+            json!({ "kind": h.kind, "in": h.token_in, "out": h.token_out, "pool": h.pool,
+                    "fee": h.fee_bps, "spacing": h.spacing })
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
+
 /// The gate parameters from `[gate]` config.
 fn gate_params(c: &mev_config::GateConfig) -> mev_risk::gate::GateConfig {
     mev_risk::gate::GateConfig {
@@ -88,6 +101,8 @@ mod race;
 /// Unsimulated, so the limit is generous; unused gas isn't charged.
 /// A long-tail route's successful simulation is trusted for this long.
 const SIM_OK_TTL: Duration = Duration::from_secs(300);
+/// A route whose simulation reverted is not simulated again for this long (seconds).
+const SIM_BAD_TTL: u64 = 120;
 const BACKRUN_GAS: u64 = 900_000;
 const BACKRUN_GAS_LIMIT: u64 = 2_000_000;
 /// Share of the oracle-price bonus expected to survive swap fees and slippage.
@@ -141,6 +156,9 @@ pub struct Engine {
     atlas: Option<atlas::Hub>,
     /// Per-route win/loss record for arbitrage sends (`[gate]`).
     gate: mev_risk::gate::RouteGate<(Address, Address)>,
+    /// Routes whose pre-send simulation just reverted: skipped for `SIM_BAD_TTL` so the search moves
+    /// on to the next route instead of re-simulating a dead one on every pool update.
+    sim_bad: mev_risk::gate::Cooldowns<(Address, Address)>,
     /// Tokens we trade routinely (configured pairs and loan tokens). A route touching any other
     /// (long-tail) token is simulated before it is sent, which catches fee-on-transfer and
     /// honeypot tokens that the pool model cannot see.
@@ -511,6 +529,7 @@ impl Engine {
             feed_tips,
             atlas,
             gate: mev_risk::gate::RouteGate::new(),
+            sim_bad: mev_risk::gate::Cooldowns::new(),
             trusted,
             sim_ok: HashMap::new(),
             batch: Default::default(),
@@ -837,9 +856,11 @@ impl Engine {
 
     /// Did a send on `o`'s route revert within `ROUTE_COOLDOWN`?
     fn cooling(&self, o: &Opportunity) -> bool {
+        let key = (o.buy_pool, o.sell_pool);
         self.cooldown
-            .get(&(o.buy_pool, o.sell_pool))
+            .get(&key)
             .is_some_and(|t| t.elapsed() < ROUTE_COOLDOWN)
+            || self.sim_bad.active(&key, now_secs(), SIM_BAD_TTL)
     }
 
     /// The PGA bid for a send happening now: fee fields and the tip's USD cost, or `None` (logged)
@@ -1057,6 +1078,7 @@ impl Engine {
         let base = json!({
             "loan": self.cfg.symbol(opp.loan_token), "amount": opp.amount_in.to_string(),
             "est_profit_usd": opp.est_profit_usd, "buy": opp.buy_pool, "sell": opp.sell_pool,
+            "route": route_json(&opp),
         });
         // A route through a Uniswap V4 pool needs an executor with V4 hops. Until one is deployed
         // (`executor_v4`), record what V4 would have offered and move on.
@@ -1104,6 +1126,10 @@ impl Engine {
                     (f64::from(profit) * loan_px, gas)
                 }
                 SimOutcome::Reverted(r) => {
+                    if self.sim_bad.len() > 5_000 {
+                        self.sim_bad.prune(now_secs(), SIM_BAD_TTL);
+                    }
+                    self.sim_bad.mark(key, now_secs());
                     self.metrics
                         .event("sim_revert", json!({ "opp": base, "reason": r }));
                     return;
