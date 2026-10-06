@@ -101,6 +101,7 @@ arb_presimulate = false       # live arbs send on the local model; executor minP
 
 [pga]
 # Priority-fee (tip) spend caps, USD. Daily gas stays capped by [risk] max_gas_usd_per_day.
+max_fraction_of_net = 0.5      # share of expected net spendable on one tip (was 0.3)
 max_tip_usd_per_tx = 1.00      # one bid (still limited by max_fraction_of_net of expected net)
 max_tip_usd_per_minute = 5.00  # rolling minute
 max_tip_usd_per_day = 25.00    # per UTC day
