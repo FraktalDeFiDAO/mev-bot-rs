@@ -128,7 +128,7 @@ log_rpc = "https://arb1.arbitrum.io/rpc"
 first_block = 250000000   # before the manager's deployment (first pool: block 298,076,243)
 blocks = 12000            # swap-activity window (~50 min)
 step = 500
-min_swaps = 3             # swaps in the window to be tracked
+min_swaps = 1             # swaps in the window to be tracked (was 3: ~52 pools; 1 tracks every pool that swapped)
 max_pools = 150
 
 [gate]
