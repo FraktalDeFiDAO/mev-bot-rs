@@ -1110,7 +1110,9 @@ impl Engine {
         let presimulate = !self.sending(true)
             || self.cfg.risk.arb_presimulate
             || !opp.exact
-            || self.unvetted(&opp, key);
+            || self.unvetted(&opp, key)
+            || (self.cfg.uniswap_v4.as_ref().is_some_and(|v| v.presimulate)
+                && opp.hops.iter().any(|h| matches!(h.kind, 3 | 4)));
         let (profit_usd, gas) = if presimulate {
             self.metrics.update(|c| c.simulated += 1);
             let outcome = match sim.simulate_fast(&opp, U256::ZERO).await {

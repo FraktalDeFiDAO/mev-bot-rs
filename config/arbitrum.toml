@@ -130,6 +130,7 @@ blocks = 12000            # swap-activity window (~50 min)
 step = 500
 min_swaps = 1             # swaps in the window to be tracked (was 3: ~52 pools; 1 tracks every pool that swapped)
 max_pools = 150
+presimulate = true        # eth_call every route through a V4 pool before sending it (optional; costs one call per candidate)
 
 [gate]
 # Per-route win-rate gate for arbitrage sends (DECISIONS #54). A loss costs gas plus a tip, so a route
