@@ -189,6 +189,42 @@ impl Default for PgaConfig {
     }
 }
 
+/// Chainlink SVR / FastLane Atlas solver (docs/research/ATLAS.md). Optional and off: the bot only
+/// listens to auctions when `enabled`, and only bids when `bid` is also set, a deployed
+/// `AtlasSolver` is named, the owner's ETH is bonded on Atlas and the solver's `maxBid` is set.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct AtlasConfig {
+    /// Connect to the auction feed and log the auctions on this chain (no bids, no funds).
+    pub enabled: bool,
+    /// Submit solver operations for liquidations the oracle update makes profitable.
+    pub bid: bool,
+    /// The deployed `AtlasSolver` contract.
+    pub solver: Option<Address>,
+    /// Chainlink's solver websocket.
+    pub url: String,
+    /// Share of a liquidation's expected net profit offered as the bid.
+    pub bid_fraction: f64,
+    /// Never bid more than this, ETH (keep equal to the contract's `maxBid`).
+    pub max_bid_eth: f64,
+    /// Solver gas limit if the control contract's `getSolverGasLimit` can't be read.
+    pub solver_gas_limit: u64,
+}
+
+impl Default for AtlasConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bid: false,
+            solver: None,
+            url: "wss://svr-bid-endpoint.chain.link/ws/solver".into(),
+            bid_fraction: 0.7,
+            max_bid_eth: 0.01,
+            solver_gas_limit: 1_500_000,
+        }
+    }
+}
+
 /// The paid Fast Feed (ordered txs inside the PGA round, before the block closes). Off by
 /// default: a daily ticket costs at least $17 (DECISIONS #59). The API key comes only from the
 /// environment (`<PREFIX>_FAST_FEED_KEY`), never from config files.
@@ -292,6 +328,9 @@ pub struct ChainConfig {
     /// Arbitrum One Priority Gas Auction bidding and the optional Fast Feed. Absent = defaults.
     #[serde(default)]
     pub pga: PgaConfig,
+    /// Optional Atlas/SVR solver (off by default).
+    #[serde(default)]
+    pub atlas: AtlasConfig,
 }
 
 impl ChainConfig {
@@ -475,6 +514,10 @@ mod tests {
         assert_eq!(c.pair_addresses().unwrap().len(), c.pairs.len());
         assert_eq!(c.pga.max_tip_usd_per_tx, 1.0);
         assert!(c.pga.feed_min_bot_tip_gwei >= 0.02);
+        assert!(
+            !c.atlas.enabled && !c.atlas.bid,
+            "the Atlas solver ships off"
+        );
     }
 
     #[test]

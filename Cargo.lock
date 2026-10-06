@@ -3024,6 +3024,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-atlas"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "futures",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+]
+
+[[package]]
 name = "mev-bindings"
 version = "0.1.0"
 dependencies = [
@@ -3091,6 +3105,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "futures",
+ "mev-atlas",
  "mev-bindings",
  "mev-config",
  "mev-discovery",

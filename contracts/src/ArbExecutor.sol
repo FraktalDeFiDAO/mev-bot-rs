@@ -126,8 +126,14 @@ contract ArbExecutor {
 
     /// @dev Protocols that pay seized collateral in native ETH (e.g. Fluid ETH vaults). Rejected
     /// outside a liquidation so ETH can't be parked here.
-    receive() external payable {
+    receive() external payable virtual {
         if (!liquidating) revert Unauthorized();
+    }
+
+    /// @dev Who may start a liquidation: the owner. A subclass can additionally admit itself
+    /// during a call it authenticated (see `AtlasSolver`).
+    function _isOperator() internal view virtual returns (bool) {
+        return msg.sender == owner;
     }
 
     /// @notice Allow or revoke a liquidation call target / approval spender.
@@ -197,7 +203,7 @@ contract ArbExecutor {
         ProtocolCall[] calldata calls,
         Hop[] calldata hops
     ) external returns (uint256 profit) {
-        if (msg.sender != owner) revert NotOwner();
+        if (!_isOperator()) revert NotOwner();
         if (calls.length == 0) revert BadRoute();
         if (collateral == debt) {
             if (hops.length != 0) revert BadRoute();
@@ -231,7 +237,7 @@ contract ArbExecutor {
         ProtocolCall[] calldata calls,
         Hop[] calldata hops
     ) external returns (uint256 profit) {
-        if (msg.sender != owner) revert NotOwner();
+        if (!_isOperator()) revert NotOwner();
         if (calls.length == 0) revert BadRoute();
         if (collateral == debt) {
             if (hops.length != 0) revert BadRoute();

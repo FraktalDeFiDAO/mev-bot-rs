@@ -61,6 +61,13 @@ pub enum RunnerEvent {
         plan: Plan,
         lead: Duration,
     },
+    /// Predicted from an SVR auction's hints (the oracle update a solver can bundle with its
+    /// liquidation): one event per auction, so both parallel auctions of an update get a bid.
+    AtlasBackrun {
+        plan: Plan,
+        auction_id: String,
+        lead: Duration,
+    },
     /// Liquidatable but nothing worth taking (bad debt, dust, unsupported shape).
     NoPlan(Health),
     /// Price-feed transaction seen in the sequencer feed (for metrics).
@@ -68,6 +75,16 @@ pub enum RunnerEvent {
         adapter: &'static str,
         lead: Duration,
     },
+}
+
+/// An oracle update announced by an SVR auction (Atlas hints): `feed` will report `answer`
+/// (raw aggregator units, like `mev_oracle::report_answer`).
+#[derive(Debug, Clone)]
+pub struct OracleHint {
+    pub feed: Address,
+    pub answer: f64,
+    pub auction_id: String,
+    pub received: Instant,
 }
 
 struct Slot {
@@ -94,7 +111,15 @@ pub struct Runner {
     last_plan: HashMap<AccountRef, (Instant, Duration)>,
     /// When each account was last backrun (one attempt per account per `BACKRUN_COOLDOWN`).
     last_backrun: HashMap<AccountRef, Instant>,
+    /// Auction hints (SVR); taken by `run`.
+    hints: Option<mpsc::UnboundedReceiver<OracleHint>>,
+    /// Plans predicted for a (feed, answer) update, reused by the parallel auction of the same
+    /// update (adapters move their prediction state on each `predict`).
+    hint_plans: HashMap<(Address, u64), (Instant, Vec<Plan>)>,
 }
+
+/// How long predicted plans are reused for the same update.
+const HINT_PLAN_TTL: Duration = Duration::from_secs(20);
 
 /// A failed backrun costs gas; don't retry the same account on every subsequent update.
 const BACKRUN_COOLDOWN: Duration = Duration::from_secs(30);
@@ -136,7 +161,20 @@ impl Runner {
             feeds,
             last_plan: HashMap::new(),
             last_backrun: HashMap::new(),
+            hints: None,
+            hint_plans: HashMap::new(),
         }
+    }
+
+    /// Take oracle updates announced by SVR auctions as another source of backruns.
+    pub fn with_hints(mut self, rx: mpsc::UnboundedReceiver<OracleHint>) -> Self {
+        self.hints = Some(rx);
+        self
+    }
+
+    /// Feed contracts the live adapters watch.
+    pub fn watched_feeds(&self) -> Vec<Address> {
+        self.feeds.contracts()
     }
 
     /// Tokens across all live adapters (for swap-route discovery).
@@ -354,6 +392,34 @@ impl Runner {
         }
     }
 
+    /// An SVR auction announced `h`: predict the liquidations that price makes possible, like
+    /// `on_feed_tx` does for a report seen in the sequencer feed, and emit one event per auction.
+    fn on_hint(&mut self, h: &OracleHint, tx: &mpsc::UnboundedSender<RunnerEvent>) {
+        self.hint_plans
+            .retain(|_, (at, _)| at.elapsed() < HINT_PLAN_TTL);
+        let key = (h.feed, h.answer.to_bits());
+        if !self.hint_plans.contains_key(&key) {
+            let mut predicted: Vec<Plan> = Vec::new();
+            for &i in self.feeds.slots_for(h.feed) {
+                predicted.extend(self.slots[i].adapter.predict(
+                    h.feed,
+                    h.answer,
+                    self.cfg.executor,
+                ));
+            }
+            predicted.sort_by(|a, b| b.bonus_usd.total_cmp(&a.bonus_usd));
+            predicted.truncate(MAX_BACKRUNS_PER_UPDATE);
+            self.hint_plans.insert(key, (Instant::now(), predicted));
+        }
+        for plan in &self.hint_plans[&key].1 {
+            let _ = tx.send(RunnerEvent::AtlasBackrun {
+                plan: plan.clone(),
+                auction_id: h.auction_id.clone(),
+                lead: h.received.elapsed(),
+            });
+        }
+    }
+
     /// Run until the event receiver is dropped.
     pub async fn run(
         mut self,
@@ -363,6 +429,7 @@ impl Runner {
         if self.slots.is_empty() {
             return;
         }
+        let mut hints = self.hints.take();
         let sweep_every = Duration::from_secs(self.cfg.sweep_secs);
         let mut index_tick = tokio::time::interval(BACKFILL_EVERY);
         let mut sweep = tokio::time::interval(sweep_every);
@@ -398,6 +465,7 @@ impl Runner {
                     }
                 }
                 Some(st) = recv_opt(&mut feed) => self.on_feed_tx(&st, &tx),
+                Some(h) = recv_opt(&mut hints) => self.on_hint(&h, &tx),
                 _ = burst.tick() => {
                     let now = Instant::now();
                     for i in 0..self.slots.len() {
@@ -734,6 +802,44 @@ mod tests {
             matches!(rx.try_recv(), Ok(RunnerEvent::FeedTrigger { .. })),
             "same account within the cooldown: no second backrun"
         );
+    }
+
+    #[tokio::test]
+    async fn auction_hints_predict_once_and_fan_out_to_each_auction() {
+        let agg: Address = "0xa5E1a36938769cbd5a26f5e19D8FCB379f597c83"
+            .parse()
+            .unwrap();
+        let fake = Fake {
+            hf: Arc::new(Mutex::new(1.02)),
+            status: AdapterStatus::Live,
+            feed: agg,
+        };
+        let mut r = Runner::new(cfg(), vec![Box::new(fake)]);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let hint = |id: &str| OracleHint {
+            feed: agg,
+            answer: 269_591_000_000.0,
+            auction_id: id.into(),
+            received: Instant::now(),
+        };
+        r.on_hint(&hint("a"), &tx);
+        r.on_hint(&hint("b"), &tx); // the parallel auction of the same update
+        let ids: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|e| match e {
+                RunnerEvent::AtlasBackrun { auction_id, .. } => Some(auction_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["a", "b"],
+            "one plan per auction, both auctions served"
+        );
+        // A feed nobody watches predicts nothing.
+        let mut other = hint("c");
+        other.feed = Address::with_last_byte(9);
+        r.on_hint(&other, &tx);
+        assert!(rx.try_recv().is_err());
     }
 
     fn sequenced(to: Option<Address>) -> SequencedTx {

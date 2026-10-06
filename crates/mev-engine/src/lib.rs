@@ -21,7 +21,7 @@ use mev_bindings::ArbExecutor;
 use mev_config::{ChainConfig, Secrets};
 use mev_exec::{Fees, Landed, Sender};
 use mev_lending::{AdapterRpc, LiquidationAdapter, Plan};
-use mev_liquidate::{Runner, RunnerConfig, RunnerEvent};
+use mev_liquidate::{OracleHint, Runner, RunnerConfig, RunnerEvent};
 use mev_metrics::Metrics;
 use mev_risk::{
     RiskGuard, RiskLimits,
@@ -69,6 +69,7 @@ const ROUTE_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 /// Upper bound on indexed triangular cycles (memory and per-update cost stay bounded).
 const MAX_CYCLES: usize = 20_000;
 
+mod atlas;
 mod race;
 
 /// Gas a backrun liquidation is priced at (flash loan + protocol call + swap), and its limit.
@@ -122,6 +123,8 @@ pub struct Engine {
     tips: TipBook,
     /// Priority fees of contract calls in the feed: the live competition for ordering.
     feed_tips: Arc<std::sync::Mutex<TipBook>>,
+    /// Optional Atlas/SVR solver (None unless `[atlas] enabled`).
+    atlas: Option<atlas::Hub>,
     tip_budget: TipBudget,
     mode: Mode,
     liq: Option<LiqCtx>,
@@ -413,17 +416,27 @@ impl Engine {
             }
             _ => None,
         };
+        // SVR auction hints reach the runner through this channel (only when `[atlas] enabled`).
+        let (hint_tx, hint_rx) = mpsc::unbounded_channel::<OracleHint>();
+        let mut hint_rx = cfg.atlas.enabled.then_some(hint_rx);
+        let mut watched_feeds: Vec<Address> = Vec::new();
         let liq = match liq_setup {
             Some((runner, via)) => {
                 if let Some(exec) = secrets.executor {
                     check_allowlist(&rpc, exec, &runner.targets()).await;
                 }
+                watched_feeds = runner.watched_feeds();
+                let runner = match hint_rx.take() {
+                    Some(rx) => runner.with_hints(rx),
+                    None => runner,
+                };
                 let (tx, rx) = mpsc::unbounded_channel();
                 tokio::spawn(runner.run(liq_feed, tx));
                 Some(LiqCtx { via, rx: Some(rx) })
             }
             None => None,
         };
+        let atlas = atlas::setup(&cfg, &secrets, &rpc, hint_tx, watched_feeds).await;
 
         let pga_policy = bid_policy(&cfg.pga);
         let pga_budget =
@@ -449,6 +462,7 @@ impl Engine {
             busy_routes: HashMap::new(),
             bid_policy: pga_policy,
             feed_tips,
+            atlas,
             fast_feed_stats,
             tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
             tip_budget: pga_budget,
@@ -477,6 +491,8 @@ impl Engine {
         info!(cycles = self.cycles.len(), "triangular cycles indexed");
         let mut liq_rx = self.liq.as_mut().and_then(|l| l.rx.take());
         let mut presim_rx = self.presim_rx.take();
+        let mut atlas_auctions = self.atlas.as_mut().and_then(|a| a.auction_rx.take());
+        let mut atlas_events = self.atlas.as_mut().and_then(|a| a.event_rx.take());
         // Created once, outside the loops: a signal arriving while a handler runs is not lost.
         // SIGTERM is what `podman stop` sends.
         let mut sigterm =
@@ -528,6 +544,8 @@ impl Engine {
                     }
                     Some(done) = rx_done.recv() => self.on_tx_done(done),
                     Some(ev) = recv_opt(&mut liq_rx) => self.on_runner_event(ev, &tx_done).await,
+                    Some(a) = recv_opt(&mut atlas_auctions) => self.on_atlas_auction(a),
+                    Some(e) = recv_opt(&mut atlas_events) => self.on_atlas_event(e),
                     _ = resync.tick() => {
                         if let Err(e) = mev_discovery::refresh(&self.rpc, &mut self.store).await {
                             warn!(error = %e, "resync failed");
@@ -1159,6 +1177,11 @@ impl Engine {
         match ev {
             RunnerEvent::Plan(p) => self.on_plan(p, tx_done).await,
             RunnerEvent::Backrun { plan, lead } => self.on_backrun(plan, lead, tx_done).await,
+            RunnerEvent::AtlasBackrun {
+                plan,
+                auction_id,
+                lead,
+            } => self.on_atlas_backrun(plan, auction_id, lead).await,
             RunnerEvent::NoPlan(h) => self.metrics.event(
                 "liq_no_plan",
                 json!({ "account": h.account.to_string(), "hf": h.health_factor, "debt_usd": h.debt_usd }),

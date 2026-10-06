@@ -228,6 +228,16 @@ impl<T: Clone> FeedWatcher<T> {
             .find(|a| self.by_contract.contains_key(a))
     }
 
+    /// Tags watching exactly `contract` (no forwarder unwrapping).
+    pub fn slots_for(&self, contract: Address) -> &[T] {
+        self.matches(Some(contract))
+    }
+
+    /// Every watched contract.
+    pub fn contracts(&self) -> Vec<Address> {
+        self.by_contract.keys().copied().collect()
+    }
+
     pub fn len(&self) -> usize {
         self.by_contract.len()
     }

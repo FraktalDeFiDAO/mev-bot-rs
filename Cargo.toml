@@ -58,6 +58,7 @@ mev-analytics = { path = "crates/mev-analytics" }
 mev-engine = { path = "crates/mev-engine" }
 mev-sequencer = { path = "crates/mev-sequencer" }
 mev-presim = { path = "crates/mev-presim" }
+mev-atlas = { path = "crates/mev-atlas" }
 mev-localsim = { path = "crates/mev-localsim" }
 
 [profile.release]
