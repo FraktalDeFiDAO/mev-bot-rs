@@ -116,6 +116,13 @@ impl FluidAdapter {
             .zip(dec.iter())
             .filter_map(|(t, r)| decode::<IERC20::decimalsCall>(r).map(|d| (*t, d)))
             .collect();
+        if me.decimals.len() < tokens.len() {
+            tracing::warn!(
+                known = me.decimals.len(),
+                tokens = tokens.len(),
+                "fluid: some token decimals unreadable; those vaults are valued at 0 until a restart"
+            );
+        }
         // Trigger on the same Chainlink aggregators the vault oracles read, found via the USD oracle's sources.
         let src_calls: Vec<_> = tokens
             .iter()
@@ -211,7 +218,10 @@ impl FluidAdapter {
 
     fn usd(&self, token: Address, raw: f64, prices: &HashMap<Address, f64>) -> f64 {
         let t = erc20(token);
-        let dec = self.decimals.get(&t).copied().unwrap_or(18);
+        // Unknown decimals: value it at 0 (unpriced, so it is skipped), never assume 18.
+        let Some(dec) = self.decimals.get(&t).copied() else {
+            return 0.0;
+        };
         raw / 10f64.powi(dec as i32) * prices.get(&t).copied().unwrap_or(0.0)
     }
 }

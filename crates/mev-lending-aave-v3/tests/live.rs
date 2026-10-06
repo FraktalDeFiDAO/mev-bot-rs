@@ -155,3 +155,73 @@ async fn predicts_liquidations_from_a_price_report_on_real_positions() {
         assert_eq!(p.calls.len(), 1);
     }
 }
+
+/// Every Chainlink aggregator an Aave reserve's price depends on must be watched, or an update of
+/// it moves the price without our backrun trigger noticing (missed 2026-10-04: the wstETH
+/// exchange-rate feed behind a price-cap adapter's `RATIO_PROVIDER`).
+#[tokio::test]
+#[ignore = "network"]
+async fn every_price_dependency_of_every_reserve_is_watched() {
+    use alloy::{
+        primitives::{Bytes, U256},
+        providers::Provider,
+        rpc::types::TransactionRequest,
+        sol_types::SolCall,
+    };
+    use mev_bindings::{IAaveOracle, IPriceSource};
+
+    let c = cfg().aave.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let r = rpc();
+    let a = AaveV3Adapter::new(c.clone(), r.clone(), dir.path().join("idx.json"))
+        .await
+        .unwrap();
+    let watched: std::collections::HashSet<Address> = a.price_feeds().into_iter().collect();
+    let mut missing = Vec::new();
+    for asset in a.assets() {
+        let tx = TransactionRequest::default()
+            .to(c.oracle)
+            .gas_limit(2_000_000)
+            .input(IAaveOracle::getAssetPriceCall { asset }.abi_encode().into());
+        let Ok(al) = r.fast.create_access_list(&tx).await else {
+            panic!("the RPC must serve eth_createAccessList (set MEV_IT_RPC to a keyed endpoint)");
+        };
+        for item in al.access_list.0 {
+            let addr = item.address;
+            if addr == c.oracle {
+                continue;
+            }
+            // A leaf aggregator: serves latestRoundData but is not a proxy (aggregator() reverts).
+            let is_feed = r
+                .fast
+                .call(
+                    TransactionRequest::default()
+                        .to(addr)
+                        .input(IPriceSource::latestRoundDataCall {}.abi_encode().into()),
+                )
+                .await
+                .is_ok();
+            let is_proxy = r
+                .fast
+                .call(
+                    TransactionRequest::default()
+                        .to(addr)
+                        .input(IPriceSource::aggregatorCall {}.abi_encode().into()),
+                )
+                .await
+                .map(|o: Bytes| o.len() >= 32 && U256::from_be_slice(&o[..32]) != U256::ZERO)
+                .unwrap_or(false);
+            if is_feed && !is_proxy && !watched.contains(&addr) {
+                missing.push((asset, addr));
+            }
+        }
+    }
+    println!(
+        "watched {} feeds; unwatched leaf feeds: {missing:?}",
+        watched.len()
+    );
+    assert!(
+        missing.is_empty(),
+        "reserve prices depend on unwatched feeds: {missing:?}"
+    );
+}
