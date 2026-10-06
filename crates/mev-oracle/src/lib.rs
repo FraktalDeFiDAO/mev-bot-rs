@@ -21,7 +21,7 @@ use tracing::debug;
 /// How deep to follow adapter -> proxy -> aggregator chains.
 const MAX_DEPTH: usize = 4;
 /// Getter calls per contract per resolution round.
-const GETTERS: usize = 7;
+const GETTERS: usize = 8;
 
 /// Map each underlying aggregator to the original sources (e.g. Aave oracle sources) it feeds.
 pub async fn resolve_aggregators(
@@ -46,6 +46,7 @@ pub async fn resolve_aggregators(
             calls.push(call(*c, IPriceSource::BASE_FEED_2Call {}));
             calls.push(call(*c, IPriceSource::QUOTE_FEED_1Call {}));
             calls.push(call(*c, IPriceSource::QUOTE_FEED_2Call {}));
+            calls.push(call(*c, IPriceSource::RATIO_PROVIDERCall {}));
         }
         let res = multicall(p, &calls, 200).await?;
         let mut next = Vec::new();
@@ -61,6 +62,8 @@ pub async fn resolve_aggregators(
                 nz(decode::<IPriceSource::BASE_FEED_2Call>(&r[4])),
                 nz(decode::<IPriceSource::QUOTE_FEED_1Call>(&r[5])),
                 nz(decode::<IPriceSource::QUOTE_FEED_2Call>(&r[6])),
+                // Price-cap adapters (wstETH, weETH, ...): the exchange-rate feed also moves the price.
+                nz(decode::<IPriceSource::RATIO_PROVIDERCall>(&r[7])),
             ]
             .into_iter()
             .flatten()
