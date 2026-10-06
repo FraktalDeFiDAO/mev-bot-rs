@@ -224,6 +224,9 @@ impl Engine {
         for (it, ok) in items.iter().zip(&oks) {
             if let Some(r) = it.route {
                 self.release_pools(r);
+                if it.kind == "arb" {
+                    self.gate.record(r, *ok, now_secs());
+                }
                 if !ok {
                     // Lost race or mispriced: don't retry the route straight away.
                     self.cooldown.insert(r, Instant::now());

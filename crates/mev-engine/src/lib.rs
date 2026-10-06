@@ -46,6 +46,20 @@ const TIP_BOOK_HORIZON_SECS: u64 = 3600;
 const FEED_TIP_CAPACITY: usize = 500;
 const FEED_TIP_HORIZON_SECS: u64 = 120;
 
+/// The gate parameters from `[gate]` config.
+fn gate_params(c: &mev_config::GateConfig) -> mev_risk::gate::GateConfig {
+    mev_risk::gate::GateConfig {
+        enabled: c.enabled,
+        min_attempts: c.min_attempts,
+        prior_strength: c.prior_strength,
+        prior_floor: c.prior_floor,
+        backoff_after: c.backoff_after,
+        backoff_secs: c.backoff_secs,
+        backoff_max_secs: c.backoff_max_secs,
+        memory_secs: c.memory_secs,
+    }
+}
+
 /// The bid policy from `[pga]` config.
 fn bid_policy(c: &mev_config::PgaConfig) -> BidPolicy {
     let gwei = |g: f64| (g.max(0.0) * 1e9) as u128;
@@ -66,15 +80,14 @@ const BUSY_TTL: Duration = Duration::from_secs(30);
 /// How long an arbitrage route is skipped after its send reverted (lost race or mispriced).
 const ROUTE_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 
-/// Upper bound on indexed triangular cycles (memory and per-update cost stay bounded).
-const MAX_CYCLES: usize = 20_000;
-
 mod atlas;
 mod batch;
 mod race;
 
 /// Gas a backrun liquidation is priced at (flash loan + protocol call + swap), and its limit.
 /// Unsimulated, so the limit is generous; unused gas isn't charged.
+/// A long-tail route's successful simulation is trusted for this long.
+const SIM_OK_TTL: Duration = Duration::from_secs(300);
 const BACKRUN_GAS: u64 = 900_000;
 const BACKRUN_GAS_LIMIT: u64 = 2_000_000;
 /// Share of the oracle-price bonus expected to survive swap fees and slippage.
@@ -126,6 +139,14 @@ pub struct Engine {
     feed_tips: Arc<std::sync::Mutex<TipBook>>,
     /// Optional Atlas/SVR solver (None unless `[atlas] enabled`).
     atlas: Option<atlas::Hub>,
+    /// Per-route win/loss record for arbitrage sends (`[gate]`).
+    gate: mev_risk::gate::RouteGate<(Address, Address)>,
+    /// Tokens we trade routinely (configured pairs and loan tokens). A route touching any other
+    /// (long-tail) token is simulated before it is sent, which catches fee-on-transfer and
+    /// honeypot tokens that the pool model cannot see.
+    trusted: std::collections::HashSet<Address>,
+    /// Routes whose pre-send simulation succeeded, and when (re-checked after `SIM_OK_TTL`).
+    sim_ok: HashMap<(Address, Address), Instant>,
     /// Trades waiting to go out together (only used when `[batch]` is on).
     batch: batch::Queue,
     tip_budget: TipBudget,
@@ -452,6 +473,12 @@ impl Engine {
             None => None,
         };
         let atlas = atlas::setup(&cfg, &secrets, &rpc, hint_tx, watched_feeds).await;
+        let trusted: std::collections::HashSet<Address> = cfg
+            .pair_addresses()?
+            .into_iter()
+            .flat_map(|(a, b)| [a, b])
+            .chain(search_loan.keys().copied())
+            .collect();
 
         let pga_policy = bid_policy(&cfg.pga);
         let pga_budget =
@@ -478,6 +505,9 @@ impl Engine {
             bid_policy: pga_policy,
             feed_tips,
             atlas,
+            gate: mev_risk::gate::RouteGate::new(),
+            trusted,
+            sim_ok: HashMap::new(),
             batch: Default::default(),
             fast_feed_stats,
             tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
@@ -786,6 +816,20 @@ impl Engine {
         let _ = self.sending(true);
     }
 
+    /// A route through a token we don't trade routinely whose simulation hasn't succeeded
+    /// recently: it must be simulated before it is sent.
+    fn unvetted(&self, o: &Opportunity, key: (Address, Address)) -> bool {
+        let touches_unknown = o
+            .hops
+            .iter()
+            .any(|h| !self.trusted.contains(&h.token_in) || !self.trusted.contains(&h.token_out));
+        touches_unknown
+            && self
+                .sim_ok
+                .get(&key)
+                .is_none_or(|t| t.elapsed() > SIM_OK_TTL)
+    }
+
     /// Did a send on `o`'s route revert within `ROUTE_COOLDOWN`?
     fn cooling(&self, o: &Opportunity) -> bool {
         self.cooldown
@@ -879,7 +923,8 @@ impl Engine {
     /// Re-enumerate triangular cycles over the current pool set.
     fn rebuild_cycles(&mut self) {
         let loans: Vec<Address> = self.search_loan.keys().copied().collect();
-        self.cycles = mev_search::cycles::CycleIndex::build(&self.store, &loans, MAX_CYCLES);
+        self.cycles =
+            mev_search::cycles::CycleIndex::build(&self.store, &loans, self.cfg.max_cycles);
     }
 
     fn price(&self, token: Address) -> Option<f64> {
@@ -959,6 +1004,7 @@ impl Engine {
             round_within = c.round_within,
             round_over = c.round_over,
             feed_triggers = c.feed_triggers,
+            gate_skipped = c.gate_skipped,
             sent = c.sent,
             ok = c.landed_ok,
             reverted = c.landed_reverted,
@@ -1026,7 +1072,10 @@ impl Engine {
         // (the race is decided in ~100s of ms). Shadow always simulates to keep measuring it.
         // Live sends on the model only when it is exact for this route (no V3 tick crossed);
         // otherwise the executor eth_call confirms it first (a crossed tick can mean less output).
-        let presimulate = !self.sending(true) || self.cfg.risk.arb_presimulate || !opp.exact;
+        let presimulate = !self.sending(true)
+            || self.cfg.risk.arb_presimulate
+            || !opp.exact
+            || self.unvetted(&opp, key);
         let (profit_usd, gas) = if presimulate {
             self.metrics.update(|c| c.simulated += 1);
             let outcome = match sim.simulate_fast(&opp, U256::ZERO).await {
@@ -1037,7 +1086,10 @@ impl Engine {
                 }
             };
             match outcome {
-                SimOutcome::Profitable { profit, gas } => (f64::from(profit) * loan_px, gas),
+                SimOutcome::Profitable { profit, gas } => {
+                    self.sim_ok.insert(key, Instant::now());
+                    (f64::from(profit) * loan_px, gas)
+                }
                 SimOutcome::Reverted(r) => {
                     self.metrics
                         .event("sim_revert", json!({ "opp": base, "reason": r }));
@@ -1074,6 +1126,23 @@ impl Engine {
         let Some(sender) = self.sender.clone() else {
             return;
         };
+        // Win-rate gate: a loss costs gas plus a tip; skip routes that have not earned a send.
+        let cost_usd = gas_usd + gas as f64 * self.bid_policy.default_tip_wei as f64 * native_px;
+        let verdict = self.gate.check(
+            &gate_params(&self.cfg.gate),
+            key,
+            net_usd,
+            cost_usd,
+            now_secs(),
+        );
+        if !verdict.allows() {
+            self.metrics.update(|c| c.gate_skipped += 1);
+            self.metrics.event(
+                "gate_skip",
+                json!({ "opp": base, "net_usd": net_usd, "cost_usd": cost_usd, "verdict": format!("{verdict:?}") }),
+            );
+            return;
+        }
         if let Err(block) = self.risk.check_arb(net_usd, gas_usd, now_secs()) {
             self.on_cap(&block, true);
             self.metrics.event(
@@ -1527,6 +1596,9 @@ impl Engine {
             } => {
                 if let Some(r) = route {
                     self.release_pools(r);
+                }
+                if let (true, Some(r)) = (kind == "arb", route) {
+                    self.gate.record(r, landed.success, now_secs());
                 }
                 if let (false, Some(r)) = (landed.success, route) {
                     // Lost race or mispriced: the next attempt on this route likely fails the same

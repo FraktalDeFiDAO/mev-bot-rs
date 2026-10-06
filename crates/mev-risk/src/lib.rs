@@ -1,6 +1,7 @@
 //! Risk limits: profit floor, daily gas cap, failure-streak pause, kill switch. Pure logic.
 
 pub mod bid;
+pub mod gate;
 
 use std::path::PathBuf;
 

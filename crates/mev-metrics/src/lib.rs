@@ -32,6 +32,8 @@ pub struct Counters {
     pub liq_planned: u64,
     pub liq_profitable: u64,
     pub feed_triggers: u64,
+    /// Arbitrage sends held back by the per-route win-rate gate.
+    pub gate_skipped: u64,
     /// PGA bids: placed, skipped (policy or tip caps), won (landed ok), lost (reverted).
     pub bids_placed: u64,
     pub bids_skipped: u64,
