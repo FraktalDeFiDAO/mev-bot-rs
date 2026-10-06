@@ -24,6 +24,7 @@ pub async fn pool_logs(
         IUniswapV3Pool::Swap::SIGNATURE_HASH,
         IPancakeV3Pool::Swap::SIGNATURE_HASH,
         IPoolManager::Swap::SIGNATURE_HASH,
+        IPoolManager::ModifyLiquidity::SIGNATURE_HASH,
     ]);
     let sub = ws
         .subscribe_logs(&filter)

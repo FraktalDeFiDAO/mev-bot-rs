@@ -96,6 +96,49 @@ impl PoolStore {
         }
     }
 
+    /// A V4 `ModifyLiquidity`: liquidity added or removed over `[tickLower, tickUpper)` changes the
+    /// active liquidity only if the pool's current tick is inside that range. Without this the pool's
+    /// depth would stay stale until the next periodic refresh.
+    fn apply_v4_liquidity(&mut self, log: &Log) -> Option<Address> {
+        let id = *log.topics().get(1)?;
+        let addr = *self.v4.get(&id)?;
+        let pool = self.pools.get_mut(&addr)?;
+        let PoolKind::UniV4 {
+            manager, flipped, ..
+        } = pool.info.kind
+        else {
+            return None;
+        };
+        if manager != log.address() {
+            return None;
+        }
+        let PoolState::V3 {
+            sqrt_price,
+            liquidity,
+        } = pool.state
+        else {
+            return None;
+        };
+        let ev = IPoolManager::ModifyLiquidity::decode_log_data(log.data()).ok()?;
+        // The pool's own price orientation (ours is mirrored when flipped).
+        let sqrt = if flipped {
+            1.0 / sqrt_price
+        } else {
+            sqrt_price
+        };
+        let tick = (2.0 * sqrt.ln() / 1.0001f64.ln()).floor();
+        let (lo, hi) = (ev.tickLower.as_i32() as f64, ev.tickUpper.as_i32() as f64);
+        if !(lo <= tick && tick < hi) {
+            return None; // outside the active range: depth at the current price is unchanged
+        }
+        let delta: f64 = ev.liquidityDelta.to_string().parse().ok()?;
+        pool.state = PoolState::V3 {
+            sqrt_price,
+            liquidity: (liquidity + delta).max(0.0),
+        };
+        Some(addr)
+    }
+
     /// A V4 `Swap` from the PoolManager: new price and active liquidity, and the fee that swap paid
     /// (protocol + LP) for its direction. Pools we don't track are ignored.
     fn apply_v4_swap(&mut self, log: &Log) -> Option<Address> {
@@ -138,6 +181,9 @@ impl PoolStore {
         let topic0: B256 = *log.topic0()?;
         if topic0 == IPoolManager::Swap::SIGNATURE_HASH {
             return self.apply_v4_swap(log);
+        }
+        if topic0 == IPoolManager::ModifyLiquidity::SIGNATURE_HASH {
+            return self.apply_v4_liquidity(log);
         }
         let pool = self.pools.get_mut(&addr)?;
         if topic0 == IUniswapV2Pair::Sync::SIGNATURE_HASH {
@@ -573,5 +619,73 @@ mod tests {
         assert_eq!(logs.len(), 2, "one V3 pool plus the single manager");
         assert!(logs.contains(&Address::with_last_byte(0x77)));
         assert!(!logs.contains(&mev_types::v4_pool_address(B256::repeat_byte(0x44))));
+    }
+
+    fn v4_liquidity_log(id: B256, lower: i32, upper: i32, delta: i64) -> Log {
+        use alloy::sol_types::SolEvent;
+        let ev = IPoolManager::ModifyLiquidity {
+            id,
+            sender: Address::with_last_byte(1),
+            tickLower: I24::try_from(lower).unwrap(),
+            tickUpper: I24::try_from(upper).unwrap(),
+            liquidityDelta: I256::try_from(delta).unwrap(),
+            salt: B256::ZERO,
+        };
+        rpc_log(Address::with_last_byte(0x77), ev.encode_log_data())
+    }
+
+    #[test]
+    fn liquidity_changes_apply_only_when_the_current_tick_is_inside_the_range() {
+        let mut s = PoolStore::default();
+        let p = v4_pool(false); // sqrt price 1.0 = tick 0, liquidity 1.0
+        let (addr, id) = (p.info.address, B256::repeat_byte(0x44));
+        s.insert(p);
+        // Range straddling tick 0: depth grows.
+        assert_eq!(
+            s.apply_log(&v4_liquidity_log(id, -10, 10, 1_000)),
+            Some(addr)
+        );
+        let PoolState::V3 { liquidity, .. } = s.get(&addr).unwrap().state else {
+            panic!()
+        };
+        assert_eq!(liquidity, 1_001.0);
+        // A range above the current tick does not touch the active depth.
+        assert_eq!(s.apply_log(&v4_liquidity_log(id, 10, 20, 5_000)), None);
+        // Removal (negative delta) shrinks it, and never below zero.
+        s.apply_log(&v4_liquidity_log(id, 0, 10, -400));
+        let PoolState::V3 { liquidity, .. } = s.get(&addr).unwrap().state else {
+            panic!()
+        };
+        assert_eq!(liquidity, 601.0);
+        s.apply_log(&v4_liquidity_log(id, -5, 5, -1_000_000));
+        let PoolState::V3 { liquidity, .. } = s.get(&addr).unwrap().state else {
+            panic!()
+        };
+        assert_eq!(liquidity, 0.0);
+        // Unknown pool or foreign emitter: ignored.
+        assert_eq!(
+            s.apply_log(&v4_liquidity_log(B256::repeat_byte(1), -10, 10, 5)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_range_test_uses_the_pools_own_orientation_when_flipped() {
+        let mut s = PoolStore::default();
+        // Flipped pool at stored sqrt price 1/1.0002 (the pool's own price is 1.0002, tick ~ 2):
+        // a range [5, 10) is above its tick, [0, 5) contains it.
+        let mut p = v4_pool(true);
+        p.state = PoolState::V3 {
+            sqrt_price: 1.0 / 1.0002,
+            liquidity: 100.0,
+        };
+        let (addr, id) = (p.info.address, B256::repeat_byte(0x44));
+        s.insert(p);
+        assert_eq!(s.apply_log(&v4_liquidity_log(id, 5, 10, 50)), None);
+        assert_eq!(s.apply_log(&v4_liquidity_log(id, 0, 5, 50)), Some(addr));
+        let PoolState::V3 { liquidity, .. } = s.get(&addr).unwrap().state else {
+            panic!()
+        };
+        assert_eq!(liquidity, 150.0);
     }
 }

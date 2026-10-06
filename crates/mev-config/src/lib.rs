@@ -239,6 +239,15 @@ pub struct UniswapV4Config {
     pub min_swaps: u64,
     #[serde(default = "default_v4_max_pools")]
     pub max_pools: usize,
+    /// Simulate every route through a V4 pool before sending it, even when the model says it is
+    /// exact. One extra `eth_call` per candidate; guards against V4 state drifting between events
+    /// (a live V4 send lost $0.20 on a model-only route).
+    #[serde(default = "default_v4_presimulate")]
+    pub presimulate: bool,
+}
+
+fn default_v4_presimulate() -> bool {
+    true
 }
 
 fn default_v4_first_block() -> u64 {
@@ -643,6 +652,10 @@ mod tests {
         assert!(
             !c.batch.enabled,
             "batching ships off until the executor with `batch` is deployed"
+        );
+        assert!(
+            c.uniswap_v4.as_ref().is_some_and(|v| v.presimulate),
+            "V4 routes are simulated before sending"
         );
         assert!(c.max_cycles > 20_000, "long-tail cycles need headroom");
         assert!(c.auto_discovery.as_ref().is_some_and(|a| a.cross_pairs > 0));
