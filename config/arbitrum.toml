@@ -101,10 +101,14 @@ arb_presimulate = false       # live arbs send on the local model; executor minP
 
 [pga]
 # Priority-fee (tip) spend caps, USD. Daily gas stays capped by [risk] max_gas_usd_per_day.
-max_tip_usd_per_tx = 0.25      # one bid
+max_tip_usd_per_tx = 1.00      # one bid (still limited by max_fraction_of_net of expected net)
 max_tip_usd_per_minute = 5.00  # rolling minute
 max_tip_usd_per_day = 25.00    # per UTC day
 default_tip_gwei = 0.05        # bid when no competition is observed (was 0.005: lost to 0-3 gwei winners)
+outbid_margin = 0.25           # bid 25% above the competition estimate (was 10%)
+competition_quantile = 0.9     # of recent race-winner tips (was 0.75)
+feed_min_bot_tip_gwei = 0.02   # ignore feed txs tipping less: ordinary wallets (~0.01 gwei), not bots
+feed_quantile = 0.9            # of bot-like feed tips
 min_tip_gwei = 0.01            # never bid below this (a 1-wei bid is a zero bid)
 
 [tokens]

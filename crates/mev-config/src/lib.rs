@@ -156,6 +156,11 @@ pub struct PgaConfig {
     pub min_tip_gwei: f64,
     /// Outbid the competition estimate by this fraction.
     pub outbid_margin: f64,
+    /// Feed txs tipping less than this (gwei per gas) are ordinary users, not bots, and are
+    /// ignored when estimating competition (wallets default to ~0.01 gwei).
+    pub feed_min_bot_tip_gwei: f64,
+    /// Quantile of the bot-like feed tips used as the competition estimate.
+    pub feed_quantile: f64,
     /// Quantile of recently observed winning tips used as the competition estimate.
     pub competition_quantile: f64,
     /// Nominal PGA round (docs: 125 ms on Arbitrum One); a send signed later than this after its
@@ -174,8 +179,10 @@ impl Default for PgaConfig {
             max_tip_usd_per_day: 2.0,
             default_tip_gwei: 0.05,
             min_tip_gwei: 0.01,
-            outbid_margin: 0.1,
-            competition_quantile: 0.75,
+            outbid_margin: 0.25,
+            feed_min_bot_tip_gwei: 0.02,
+            feed_quantile: 0.9,
+            competition_quantile: 0.9,
             round_ms: 125,
             fast_feed: FastFeedConfig::default(),
         }
@@ -466,6 +473,8 @@ mod tests {
             c.aave.is_some() && c.compound_v3.is_some() && c.morpho.is_some() && c.fluid.is_some()
         );
         assert_eq!(c.pair_addresses().unwrap().len(), c.pairs.len());
+        assert_eq!(c.pga.max_tip_usd_per_tx, 1.0);
+        assert!(c.pga.feed_min_bot_tip_gwei >= 0.02);
     }
 
     #[test]
