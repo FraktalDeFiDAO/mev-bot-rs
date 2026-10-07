@@ -163,10 +163,13 @@ pub struct PgaConfig {
     /// Feed txs tipping less than this (gwei per gas) are ordinary users, not bots, and are
     /// ignored when estimating competition (wallets default to ~0.01 gwei).
     pub feed_min_bot_tip_gwei: f64,
-    /// Quantile of the bot-like feed tips used as the competition estimate.
-    pub feed_quantile: f64,
     /// Quantile of recently observed winning tips used as the competition estimate.
     pub competition_quantile: f64,
+    /// Winners recorded on a route before it is priced from them alone.
+    pub route_min_observations: usize,
+    /// Quantile of the market (all winners, all bot-like feed tips) used for a route with less
+    /// history than that: the median, not the top of a bimodal market.
+    pub market_quantile: f64,
     /// Nominal PGA round (docs: 125 ms on Arbitrum One); a send signed later than this after its
     /// trigger is counted as over (it likely bids in a later round than its trigger).
     pub round_ms: u64,
@@ -185,8 +188,9 @@ impl Default for PgaConfig {
             min_tip_gwei: 0.01,
             outbid_margin: 0.25,
             feed_min_bot_tip_gwei: 0.02,
-            feed_quantile: 0.9,
             competition_quantile: 0.9,
+            route_min_observations: 3,
+            market_quantile: 0.5,
             round_ms: 125,
             fast_feed: FastFeedConfig::default(),
         }
@@ -690,6 +694,10 @@ mod tests {
         assert!(
             c.risk.arb_presimulate,
             "live arbs are simulated before sending: with tick maps most routes count as exact"
+        );
+        assert!(
+            c.pga.market_quantile < c.pga.competition_quantile && c.pga.route_min_observations >= 1,
+            "unknown routes are priced from the market median, known ones from their own winners"
         );
         assert!(c.max_cycles > 20_000, "long-tail cycles need headroom");
         assert!(c.auto_discovery.as_ref().is_some_and(|a| a.cross_pairs > 0));

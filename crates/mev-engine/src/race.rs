@@ -103,10 +103,12 @@ pub async fn report(
     let mut winner: Option<(TxHash, usize)> = None;
     let mut winner_tip: Option<u128> = None;
     let (mut our_idx, mut trig_idx) = (landed.tx_index.map(|i| i as usize), None);
+    let mut our_tip: Option<u128> = None;
     if let Some(n) = landed.block
         && let Ok(Some(block)) = http.get_block_by_number(BlockNumberOrTag::Number(n)).await
     {
         let base_fee = block.header.base_fee_per_gas.unwrap_or_default() as u128;
+        our_tip = Some(effective_tip(landed.effective_gas_price, base_fee));
         let hashes: Vec<TxHash> = block.transactions.hashes().collect();
         let (o, t, between) = candidates(&hashes, sent.hash, trigger.tx);
         (our_idx, trig_idx) = (o.or(our_idx), t);
@@ -130,6 +132,17 @@ pub async fn report(
             }
         }
     }
+    // Which block the trigger landed in, relative to ours (the trigger is usually in an earlier block,
+    // so `trigger_index` above is only set for the rare same-block case).
+    let trigger_block = match trigger.tx {
+        Some(t) => http
+            .get_transaction_receipt(t)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.block_number),
+        None => None,
+    };
     let winner_feed = winner.and_then(|(h, _)| arrival(&h));
     let rel = |t: Option<Instant>| t.map(|t| ms(t0, t));
     json!({
@@ -143,6 +156,12 @@ pub async fn report(
         "block": landed.block,
         "our_index": our_idx,
         "trigger_index": trig_idx,
+        "trigger_block": trigger_block,
+        "blocks_after_trigger": match (landed.block, trigger_block) {
+            (Some(ours), Some(t)) => Some(ours as i64 - t as i64),
+            _ => None,
+        },
+        "our_tip_wei": our_tip.map(|t| t.to_string()),
         "winner": winner.map(|(h, _)| h),
         "winner_index": winner.map(|(_, i)| i),
         "winner_tip_wei": winner_tip.map(|t| t.to_string()),

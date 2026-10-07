@@ -136,6 +136,24 @@ pub fn strongest(a: Option<u128>, b: Option<u128>) -> Option<u128> {
 
 /// Recently observed winning priority fees (wei/gas), for the competition estimate. Entries
 /// older than `horizon_secs` or beyond `capacity` are dropped.
+/// The competition a bid on one route has to beat. A route with at least `min_obs` recorded winners
+/// is priced from its own winners only: the market is bimodal (about 40 % of races are won by
+/// near-zero tips, a fifth by 0.3 to 3 gwei) and one network-wide high quantile prices every route as
+/// the worst. A route without that history starts from the market's central tendency (`market`, a
+/// median of winners and of bot-like feed tips), not its top.
+pub fn route_competition(
+    route_obs: usize,
+    min_obs: usize,
+    route: Option<u128>,
+    market: Option<u128>,
+) -> Option<u128> {
+    if route_obs >= min_obs.max(1) {
+        route.or(market)
+    } else {
+        market
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TipBook {
     seen: VecDeque<(u64, u128)>,
@@ -259,6 +277,27 @@ impl TipBudget {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_route_with_history_is_priced_by_its_own_winners() {
+        let m = Some(20_000_000);
+        // Enough winners on the route: its own estimate, even when the market is much higher or lower.
+        assert_eq!(
+            route_competition(5, 3, Some(1_000), Some(1_000_000_000)),
+            Some(1_000)
+        );
+        assert_eq!(
+            route_competition(3, 3, Some(2_000_000_000), m),
+            Some(2_000_000_000)
+        );
+        // Too few winners: the market median.
+        assert_eq!(route_competition(2, 3, Some(1_000_000_000), m), m);
+        assert_eq!(route_competition(0, 3, None, m), m);
+        // Nothing known anywhere: no competition data (the default tip applies).
+        assert_eq!(route_competition(0, 3, None, None), None);
+        // History present but its estimate unavailable (all expired): fall back to the market.
+        assert_eq!(route_competition(4, 3, None, m), m);
+    }
+
     use super::*;
 
     const GWEI: u128 = 1_000_000_000;

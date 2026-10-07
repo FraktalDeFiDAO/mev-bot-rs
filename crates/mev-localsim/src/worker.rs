@@ -269,7 +269,12 @@ pub async fn run(
                         .collect();
                     if !logs.is_empty() {
                         stats.local_moved_pools.fetch_add(1, Relaxed);
-                        let _ = out.send(Presimulated { tx: st.hash, received: st.received, logs });
+                        let _ = out.send(Presimulated {
+                            tx: st.hash,
+                            received: st.received,
+                            logs,
+                            call: mev_presim::call_json(&st.tx).unwrap_or_default(),
+                        });
                     }
                     continue;
                 }
