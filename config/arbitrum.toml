@@ -144,6 +144,11 @@ backoff_after = 3        # consecutive losses
 backoff_secs = 600       # first back-off, doubled per further loss
 backoff_max_secs = 21600
 memory_secs = 86400      # results older than this are forgotten
+[ticks]
+enabled = true          # price V3/Pancake swaps across tick boundaries (optional; false = one-bucket model)
+window_ticks = 800      # ticks loaded each side of the price (~8 %)
+refresh_secs = 300
+
 [batch]
 # Several ready liquidations/arbitrages as ONE transaction via the executor's `batch` (one nonce, one
 # tip and base fee for the lot; each trade still succeeds or fails on its own). OFF until the executor

@@ -5,6 +5,7 @@
 //! *which tokens* to look up; the pools themselves still come from the factories. Uniswap V4 pools
 //! live inside the one PoolManager (`v4`), hookless ones only.
 
+pub mod ticks;
 pub mod v4;
 
 use std::collections::{HashMap, HashSet};
@@ -292,10 +293,23 @@ fn v4_pool(
 
 pub async fn refresh(rpc: &Rpc, store: &mut PoolStore) -> Result<()> {
     let infos: Vec<PoolInfo> = store.pools().map(|p| p.info.clone()).collect();
-    for p in load_pools(rpc, infos).await? {
+    for mut p in load_pools(rpc, infos).await? {
+        // A state refresh keeps the pool's tick map (reloaded on its own, slower, schedule).
+        p.ticks = store.get(&p.info.address).and_then(|old| old.ticks.clone());
         store.replace(p);
     }
     Ok(())
+}
+
+/// (Re)load tick maps for every V3-style pool in the store. Pools whose reads fail keep what they had.
+pub async fn refresh_ticks(rpc: &Rpc, store: &mut PoolStore, half_window: i32) -> Result<usize> {
+    let pools: Vec<Pool> = store.pools().cloned().collect();
+    let maps = ticks::load_ticks(rpc, &pools, half_window).await?;
+    let n = maps.len();
+    for (addr, map) in maps {
+        store.set_ticks(&addr, map);
+    }
+    Ok(n)
 }
 
 /// Tokens traded recently in pools created by our configured factories, most active first.

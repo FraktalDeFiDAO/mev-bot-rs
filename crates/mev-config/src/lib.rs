@@ -216,6 +216,29 @@ impl Default for BatchConfig {
     }
 }
 
+/// Initialized-tick data for V3-style pools (Uniswap V3, PancakeV3), so a swap is priced across tick
+/// boundaries instead of only inside the current bucket. Loaded around the price at startup and
+/// reloaded every `refresh_secs` (liquidity added or removed in between is not seen until then; the
+/// pre-send simulation still verifies every trade). Off = the one-bucket model.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TicksConfig {
+    pub enabled: bool,
+    /// Ticks loaded on each side of the current one (800 is about 8 % of price).
+    pub window_ticks: i32,
+    pub refresh_secs: u64,
+}
+
+impl Default for TicksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            window_ticks: 800,
+            refresh_secs: 300,
+        }
+    }
+}
+
 /// Uniswap V4 (hookless pools only; hooked pools can change a swap's outcome in ways we can't model).
 /// Pools are found from the PoolManager's `Initialize` events (cached on disk and extended
 /// incrementally) and ranked by recent swap activity. Routes through V4 pools are only sent when the
@@ -433,6 +456,9 @@ pub struct ChainConfig {
     /// Send ready trades together as one transaction (needs `executor_batch`). Off by default.
     #[serde(default)]
     pub batch: BatchConfig,
+    /// Tick-aware pricing for V3-style pools.
+    #[serde(default)]
+    pub ticks: TicksConfig,
     /// The deployed executor has `liquidateViaAave`: liquidations whose loan exceeds the Balancer
     /// cap borrow from the Aave pool (`[aave] pool`) instead (5 bps premium, deep liquidity).
     #[serde(default)]
@@ -656,6 +682,10 @@ mod tests {
         assert!(
             c.uniswap_v4.as_ref().is_some_and(|v| v.presimulate),
             "V4 routes are simulated before sending"
+        );
+        assert!(
+            c.ticks.enabled && c.ticks.window_ticks > 0,
+            "tick-aware pricing is on"
         );
         assert!(c.max_cycles > 20_000, "long-tail cycles need headroom");
         assert!(c.auto_discovery.as_ref().is_some_and(|a| a.cross_pairs > 0));

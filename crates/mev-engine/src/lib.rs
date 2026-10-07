@@ -285,7 +285,20 @@ impl Engine {
                 mev_discovery::v4::discover(&cfg, v4, &data_dir.join("v4_pools.json")).await,
             );
         }
-        let pools = mev_discovery::load_pools(&rpc, infos).await?;
+        let mut pools = mev_discovery::load_pools(&rpc, infos).await?;
+        if cfg.ticks.enabled {
+            match mev_discovery::ticks::load_ticks(&rpc, &pools, cfg.ticks.window_ticks).await {
+                Ok(mut maps) => {
+                    info!(pools = maps.len(), "tick maps loaded");
+                    for p in &mut pools {
+                        if let Some(m) = maps.remove(&p.info.address) {
+                            p.ticks = Some(std::sync::Arc::new(m));
+                        }
+                    }
+                }
+                Err(e) => warn!(error = %e, "tick maps unavailable, using the one-bucket model"),
+            }
+        }
         let tokens: Vec<Address> = pools
             .iter()
             .flat_map(|p| [p.info.token0, p.info.token1])
@@ -564,6 +577,9 @@ impl Engine {
     pub async fn run(&mut self) -> Result<()> {
         let (tx_done, mut rx_done) = mpsc::unbounded_channel::<TxDone>();
         let mut resync = tokio::time::interval(Duration::from_secs(60));
+        let mut tick_reload =
+            tokio::time::interval(Duration::from_secs(self.cfg.ticks.refresh_secs.max(30)));
+        tick_reload.tick().await; // the first tick is immediate; bootstrap just loaded them
         let mut summary = tokio::time::interval(Duration::from_secs(60));
         let mut backoff = Backoff::default();
         self.rebuild_cycles();
@@ -635,6 +651,12 @@ impl Engine {
                         }
                         *self.presim_watch.write().unwrap() = watchlist(&self.store);
                         self.rebuild_cycles();
+                    }
+                    _ = tick_reload.tick(), if self.cfg.ticks.enabled => {
+                        match mev_discovery::refresh_ticks(&self.rpc, &mut self.store, self.cfg.ticks.window_ticks).await {
+                            Ok(n) => info!(pools = n, "tick maps reloaded"),
+                            Err(e) => warn!(error = %e, "tick reload failed"),
+                        }
                     }
                     _ = summary.tick() => self.log_summary(),
                     _ = &mut shutdown => { info!("shutting down"); return Ok(()); }
