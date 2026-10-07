@@ -58,12 +58,14 @@ fi
 no_build=$([[ $BUILD == local ]] && echo 1 || true)
 echo "== server: save old log, rebuild, restart ($mode)"
 ssh "$SERVER" "set -e; cd $REMOTE_DIR; mkdir -p data/logs
+  podman image prune -f >/dev/null 2>&1 || true   # untagged images from earlier builds filled the disk (2026-10-07)
   if podman container exists mev-bot-arbitrum; then
     f=data/logs/mev-bot-arbitrum-\$(date -u +%Y%m%d-%H%M%S).log.gz
     podman logs mev-bot-arbitrum 2>&1 | gzip > \$f && echo \"   saved \$f\"
     ls -1t data/logs/mev-bot-arbitrum-*.log.gz | tail -n +21 | xargs -r rm -f
   fi
-  echo y | NO_BUILD=$no_build scripts/run.sh $mode | tail -1"
+  echo y | NO_BUILD=$no_build scripts/run.sh $mode | tail -1
+  podman image prune -f >/dev/null 2>&1 || true"
 
 tag=deploy-$(date -u +%Y%m%d-%H%M%S)
 git tag "$tag" "$sha" && git push -q origin "$tag"
