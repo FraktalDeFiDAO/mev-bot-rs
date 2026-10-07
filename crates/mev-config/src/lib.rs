@@ -687,6 +687,10 @@ mod tests {
             c.ticks.enabled && c.ticks.window_ticks > 0,
             "tick-aware pricing is on"
         );
+        assert!(
+            c.risk.arb_presimulate,
+            "live arbs are simulated before sending: with tick maps most routes count as exact"
+        );
         assert!(c.max_cycles > 20_000, "long-tail cycles need headroom");
         assert!(c.auto_discovery.as_ref().is_some_and(|a| a.cross_pairs > 0));
         assert!(
