@@ -86,5 +86,6 @@ The 155 races on record: **0 wins**. In every race with an identified winner (71
 | Date | Change | Invariants moved |
 |---|---|---|
 | 2026-10-07 | Wave 1 (DECISIONS #78): async metrics writer, background refresh/tick reload/cycle rebuild, guarded refresh apply + `state_correction` events, per-pool versions on opportunities, `EXECUTION_MODE`, stub check in `scripts/check.sh` | #2 partial → mostly compliant (reason codes still `Unknown`); #3 violated → interim (versions stamped and re-checked, not `(block, tx_index)`); #4 two of four causes removed (metrics I/O, awaited maintenance in the loop); #5 compliant under the right name; #8 now enforced |
+| 2026-10-07 | V3 `Mint`/`Burn` events subscribed and applied (DECISIONS #79), validated on 38 real pool-blocks | state accuracy (spec §5): removes a measured drift source; supports #2 |
 | next | Wave 2: pool busy-marking review (#6), confidence per pool excluded from search when its last read failed (#7 interim), reason-code classification of corrections | #6, #7 |
 | later | New stack: integer AMM math, `mev-market`, Fast Feed log-driven state, local exact simulation | #1, #3 full, #4 RPC part, #7 full |

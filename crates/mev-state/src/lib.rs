@@ -185,6 +185,61 @@ impl PoolStore {
         }
     }
 
+    /// A V3-style `Mint` (`add`) or `Burn`: liquidity over `[tickLower, tickUpper)` changes the pool's
+    /// active liquidity only if its current tick is inside that range, and always moves the tick
+    /// table's `liquidityNet` (+amount at the lower tick, -amount at the upper; reversed for a burn)
+    /// when those ticks are inside the loaded window.
+    fn apply_v3_liquidity(&mut self, log: &Log, add: bool) -> Option<Address> {
+        let addr = log.address();
+        let (lo, hi, amount) = if add {
+            let ev = IUniswapV3Pool::Mint::decode_log_data(log.data()).ok()?;
+            (ev.tickLower.as_i32(), ev.tickUpper.as_i32(), ev.amount)
+        } else {
+            let ev = IUniswapV3Pool::Burn::decode_log_data(log.data()).ok()?;
+            (ev.tickLower.as_i32(), ev.tickUpper.as_i32(), ev.amount)
+        };
+        if amount == 0 {
+            return None; // a "poke" collects fees, no liquidity moves
+        }
+        let pool = self.pools.get_mut(&addr)?;
+        if !matches!(
+            pool.info.kind,
+            PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. } | PoolKind::AlgebraV3
+        ) {
+            return None;
+        }
+        let PoolState::V3 {
+            sqrt_price,
+            liquidity,
+        } = pool.state
+        else {
+            return None;
+        };
+        let delta = if add { amount as f64 } else { -(amount as f64) };
+        let tick = ((sqrt_price * sqrt_price).ln() / 1.0001f64.ln()).floor() as i32;
+        if lo <= tick && tick < hi {
+            pool.state = PoolState::V3 {
+                sqrt_price,
+                liquidity: (liquidity + delta).max(0.0),
+            };
+        }
+        if let Some(map) = pool.ticks.as_deref() {
+            let mut map = map.clone();
+            for (t, d) in [(lo, delta), (hi, -delta)] {
+                if t < map.lo || t > map.hi {
+                    continue;
+                }
+                match map.ticks.binary_search_by_key(&t, |(k, _)| *k) {
+                    Ok(i) => map.ticks[i].1 += d,
+                    Err(i) => map.ticks.insert(i, (t, d)),
+                }
+            }
+            pool.ticks = Some(std::sync::Arc::new(map));
+        }
+        self.bump(addr);
+        Some(addr)
+    }
+
     /// A V4 `ModifyLiquidity`: liquidity added or removed over `[tickLower, tickUpper)` changes the
     /// active liquidity only if the pool's current tick is inside that range. Without this the pool's
     /// depth would stay stale until the next periodic refresh.
@@ -305,6 +360,12 @@ impl PoolStore {
         if topic0 == IPoolManager::ModifyLiquidity::SIGNATURE_HASH {
             return self.apply_v4_liquidity(log);
         }
+        if topic0 == IUniswapV3Pool::Mint::SIGNATURE_HASH {
+            return self.apply_v3_liquidity(log, true);
+        }
+        if topic0 == IUniswapV3Pool::Burn::SIGNATURE_HASH {
+            return self.apply_v3_liquidity(log, false);
+        }
         let pool = self.pools.get_mut(&addr)?;
         if topic0 == IUniswapV2Pair::Sync::SIGNATURE_HASH {
             let ev = IUniswapV2Pair::Sync::decode_log_data(log.data()).ok()?;
@@ -375,7 +436,7 @@ impl PoolStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{Address, I256, U160, aliases::I24, aliases::U112};
+    use alloy::primitives::{Address, I256, U160, U256, aliases::I24, aliases::U112};
     use mev_bindings::IPancakeV3Pool;
     use mev_types::{PoolInfo, PoolKind};
 
@@ -911,5 +972,113 @@ mod tests {
                 reserve1: 1.0
             }
         );
+    }
+
+    fn v3_liquidity_log(addr: Address, mint: bool, lo: i32, hi: i32, amount: u128) -> Log {
+        let (l, h) = (I24::try_from(lo).unwrap(), I24::try_from(hi).unwrap());
+        let data = if mint {
+            IUniswapV3Pool::Mint {
+                sender: Address::with_last_byte(1),
+                owner: Address::with_last_byte(2),
+                tickLower: l,
+                tickUpper: h,
+                amount,
+                amount0: U256::ZERO,
+                amount1: U256::ZERO,
+            }
+            .encode_log_data()
+        } else {
+            IUniswapV3Pool::Burn {
+                owner: Address::with_last_byte(2),
+                tickLower: l,
+                tickUpper: h,
+                amount,
+                amount0: U256::ZERO,
+                amount1: U256::ZERO,
+            }
+            .encode_log_data()
+        };
+        rpc_log(addr, data)
+    }
+
+    #[test]
+    fn v3_mint_and_burn_move_active_liquidity_only_when_the_price_is_in_range() {
+        let mut s = PoolStore::default();
+        let addr = Address::with_last_byte(1);
+        // sqrt price 1.0 = tick 0.
+        s.insert(pool(
+            1,
+            PoolKind::UniV3 { fee: 500 },
+            A,
+            B,
+            PoolState::V3 {
+                sqrt_price: 1.0,
+                liquidity: 1_000.0,
+            },
+        ));
+        let liq = |s: &PoolStore| match s.get(&addr).unwrap().state {
+            PoolState::V3 { liquidity, .. } => liquidity,
+            _ => panic!(),
+        };
+        let v0 = s.version(&addr);
+        assert_eq!(
+            s.apply_log(&v3_liquidity_log(addr, true, -10, 10, 400)),
+            Some(addr)
+        );
+        assert_eq!(liq(&s), 1_400.0);
+        assert!(s.version(&addr) > v0);
+        // Out of range: active liquidity untouched.
+        s.apply_log(&v3_liquidity_log(addr, true, 10, 20, 999));
+        assert_eq!(liq(&s), 1_400.0);
+        // Burn inside the range, never below zero.
+        s.apply_log(&v3_liquidity_log(addr, false, -10, 10, 100));
+        assert_eq!(liq(&s), 1_300.0);
+        s.apply_log(&v3_liquidity_log(addr, false, -10, 10, 1_000_000));
+        assert_eq!(liq(&s), 0.0);
+        // A zero-amount poke and an unknown pool do nothing.
+        assert_eq!(s.apply_log(&v3_liquidity_log(addr, true, -10, 10, 0)), None);
+        assert_eq!(
+            s.apply_log(&v3_liquidity_log(
+                Address::with_last_byte(9),
+                true,
+                -10,
+                10,
+                5
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn v3_mint_and_burn_keep_the_tick_table_exact() {
+        let mut s = PoolStore::default();
+        let addr = Address::with_last_byte(1);
+        let p = pool(
+            1,
+            PoolKind::UniV3 { fee: 500 },
+            A,
+            B,
+            PoolState::V3 {
+                sqrt_price: 1.0,
+                liquidity: 100.0,
+            },
+        )
+        .with_ticks(mev_dex::TickMap {
+            ticks: vec![(-10, 100.0), (10, -100.0)],
+            lo: -50,
+            hi: 50,
+            hint: None,
+        });
+        s.insert(p);
+        let net = |s: &PoolStore| s.get(&addr).unwrap().ticks.as_ref().unwrap().ticks.clone();
+        s.apply_log(&v3_liquidity_log(addr, true, -10, 20, 40));
+        // +40 at -10, new entry -40 at 20; the existing upper tick at 10 is unchanged.
+        assert_eq!(net(&s), vec![(-10, 140.0), (10, -100.0), (20, -40.0)]);
+        s.apply_log(&v3_liquidity_log(addr, false, -10, 20, 40));
+        assert_eq!(net(&s), vec![(-10, 100.0), (10, -100.0), (20, 0.0)]);
+        // A bound outside the loaded window is ignored.
+        s.apply_log(&v3_liquidity_log(addr, true, 40, 400, 5));
+        assert_eq!(net(&s).last(), Some(&(40, 5.0)));
+        assert!(!net(&s).iter().any(|(t, _)| *t == 400));
     }
 }
