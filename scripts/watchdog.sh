@@ -3,7 +3,7 @@
 #   scripts/watchdog.sh             prints "ok" or one ALERT line per problem; exit 1 on any alert
 # Alerts are appended to data/arbitrum/ALERTS.log. Optional push: put a webhook URL in
 # data/arbitrum/alert_webhook (a file, never committed); each new alert is POSTed to it as JSON {"text": ...}.
-# Checks: container up + healthy, heartbeat fresh, kill switch, hot wallet gas balance, cap/mode events.
+# Checks: container up + healthy, heartbeat fresh, kill switch, hot wallet gas balance, disk, cap/mode events.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 D=data/arbitrum
@@ -42,6 +42,9 @@ if [[ -n $addr ]]; then
     alerts+=("could not read hot wallet balance")
   fi
 fi
+
+disk="$(df --output=pcent / | tail -1 | tr -dc 0-9)"
+(( disk < ${MAX_DISK_PCT:-85} )) || alerts+=("disk ${disk}% full (builds fail near 100%; podman image prune -f)")
 
 today="$D/events-$(date -u +%F).jsonl"
 if [[ -f $today ]]; then
