@@ -77,6 +77,84 @@ struct SimCall {
 }
 
 /// Run `tx` as its sender on top of the latest block; the logs it emits (empty if it reverts).
+/// `tx` as an `eth_simulateV1` call by its sender.
+pub fn call_json(tx: &TxEnvelope) -> Result<serde_json::Value> {
+    let from = tx.recover_signer().context("recover sender")?;
+    Ok(serde_json::json!({
+        "from": from,
+        "to": tx.to(),
+        "input": tx.input(),
+        "value": tx.value(),
+        "gas": format!("{:#x}", tx.gas_limit()),
+    }))
+}
+
+/// Result of the last call of a simulated block.
+#[derive(Debug, Clone)]
+pub struct AfterCall {
+    pub ok: bool,
+    pub return_data: Bytes,
+    /// Revert reason / error message when `!ok`.
+    pub error: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AfterSimCall {
+    status: alloy::primitives::U64,
+    #[serde(default, rename = "returnData")]
+    return_data: Bytes,
+    #[serde(default)]
+    error: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AfterSimBlock {
+    calls: Vec<AfterSimCall>,
+}
+
+/// Run `trigger` and then `then` in one simulated block on top of the latest, and report `then`'s
+/// result: a trade that only exists once a pending transaction has landed can be verified exactly
+/// (a plain `eth_call` at the latest block does not contain that transaction). `then` fails to
+/// verify (`ok = false`) if the trigger itself reverts, since its effect would then not happen.
+pub async fn simulate_after(
+    p: &DynProvider,
+    trigger: &serde_json::Value,
+    then: serde_json::Value,
+) -> Result<AfterCall> {
+    let params = serde_json::json!([
+        { "blockStateCalls": [{ "calls": [trigger, then] }], "validation": false },
+        "latest"
+    ]);
+    let blocks: Vec<AfterSimBlock> = p
+        .raw_request("eth_simulateV1".into(), params)
+        .await
+        .context("eth_simulateV1")?;
+    let calls = blocks
+        .into_iter()
+        .next()
+        .map(|b| b.calls)
+        .unwrap_or_default();
+    let [first, second] = calls.as_slice() else {
+        anyhow::bail!("expected two call results, got {}", calls.len());
+    };
+    if first.status.to::<u64>() != 1 {
+        return Ok(AfterCall {
+            ok: false,
+            return_data: Bytes::new(),
+            error: "trigger transaction reverts".into(),
+        });
+    }
+    Ok(AfterCall {
+        ok: second.status.to::<u64>() == 1,
+        return_data: second.return_data.clone(),
+        error: second
+            .error
+            .as_ref()
+            .map(|e| e.to_string())
+            .unwrap_or_default(),
+    })
+}
+
 pub async fn simulate_logs(p: &DynProvider, tx: &TxEnvelope) -> Result<Vec<SimLog>> {
     simulate_logs_at(p, tx, None).await
 }
@@ -88,14 +166,7 @@ pub async fn simulate_logs_at(
     tx: &TxEnvelope,
     at: Option<u64>,
 ) -> Result<Vec<SimLog>> {
-    let from = tx.recover_signer().context("recover sender")?;
-    let call = serde_json::json!({
-        "from": from,
-        "to": tx.to(),
-        "input": tx.input(),
-        "value": tx.value(),
-        "gas": format!("{:#x}", tx.gas_limit()),
-    });
+    let call = call_json(tx)?;
     // validation=false: no fee/nonce checks, so a tx priced for the next block still runs.
     let params = serde_json::json!([
         { "blockStateCalls": [{ "calls": [call] }], "validation": false },
@@ -175,6 +246,9 @@ pub struct Presimulated {
     pub tx: B256,
     pub received: std::time::Instant,
     pub logs: Vec<alloy::rpc::types::Log>,
+    /// The pending transaction as an `eth_simulateV1` call (`from`, `to`, `input`, `value`, `gas`), so
+    /// a trade it triggers can be verified on top of it. `Null` when it could not be built.
+    pub call: serde_json::Value,
 }
 
 /// Simulate candidate feed transactions (at most `max_in_flight` at once; extras are skipped,
@@ -237,6 +311,7 @@ pub async fn run(
                     tx: st.hash,
                     received: st.received,
                     logs,
+                    call: call_json(&st.tx).unwrap_or_default(),
                 });
             }
         });

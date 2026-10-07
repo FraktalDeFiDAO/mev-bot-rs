@@ -111,9 +111,10 @@ max_tip_usd_per_minute = 5.00  # rolling minute
 max_tip_usd_per_day = 25.00    # per UTC day
 default_tip_gwei = 0.05        # bid when no competition is observed (was 0.005: lost to 0-3 gwei winners)
 outbid_margin = 0.25           # bid 25% above the competition estimate (was 10%)
-competition_quantile = 0.9     # of recent race-winner tips (was 0.75)
+competition_quantile = 0.9     # of a route's own recent winner tips (was 0.75)
+route_min_observations = 3    # winners seen on a route before it is priced from them alone
+market_quantile = 0.5         # routes with less history: the MEDIAN of all winners and bot-like feed tips. The market is bimodal (about 40 % of races won by ~0 tips, a fifth by 0.3-3 gwei); a network-wide p90 of 1 gwei priced every route out (2026-10-07: 12 of 27 profitable trades skipped)
 feed_min_bot_tip_gwei = 0.02   # ignore feed txs tipping less: ordinary wallets (~0.01 gwei), not bots
-feed_quantile = 0.9            # of bot-like feed tips
 min_tip_gwei = 0.01            # never bid below this (a 1-wei bid is a zero bid)
 
 [uniswap_v4]

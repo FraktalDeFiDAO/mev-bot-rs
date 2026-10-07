@@ -103,6 +103,8 @@ mod race;
 /// Unsimulated, so the limit is generous; unused gas isn't charged.
 /// A long-tail route's successful simulation is trusted for this long.
 const SIM_OK_TTL: Duration = Duration::from_secs(300);
+/// A pending feed transaction's call is kept this long for verifying trades it triggers.
+const TRIGGER_CALL_KEEP: Duration = Duration::from_secs(20);
 /// A pool is re-read after a failed simulation at most this often.
 const HEAL_MIN_GAP: Duration = Duration::from_secs(10);
 /// A route whose simulation reverted is not simulated again for this long (seconds).
@@ -168,6 +170,11 @@ pub struct Engine {
     sim_bad: mev_risk::gate::Cooldowns<(Address, Address)>,
     /// When each pool was last re-read after a failed simulation.
     healed: HashMap<Address, Instant>,
+    /// Pending feed transactions that moved a pool (as `eth_simulateV1` calls), so a trade they
+    /// trigger is verified on top of them. Pruned by age.
+    trigger_calls: HashMap<TxHash, (Instant, serde_json::Value)>,
+    /// An endpoint that serves `eth_simulateV1` (the presim provider).
+    sim_v1: Option<alloy::providers::DynProvider>,
     /// Tokens we trade routinely (configured pairs and loan tokens). A route touching any other
     /// (long-tail) token is simulated before it is sent, which catches fee-on-transfer and
     /// honeypot tokens that the pool model cannot see.
@@ -431,6 +438,7 @@ impl Engine {
         let presim_watch: mev_presim::Watchlist = Default::default();
         *presim_watch.write().unwrap() = watchlist(&store);
         let localsim_stats = Arc::new(mev_localsim::worker::LocalStats::default());
+        let mut sim_v1: Option<alloy::providers::DynProvider> = None;
         let presim_rx = match (presim_cfg, presim_feed) {
             (Some(pc), Some(feed)) => {
                 // Keyed endpoints (from .env) first, then the public ones.
@@ -441,6 +449,7 @@ impl Engine {
                     .cloned()
                     .collect();
                 let p = metered_rotating(presim_urls.clone(), "presim", &mut meters)?;
+                sim_v1 = Some(p.clone());
                 let (tx, rx) = mpsc::unbounded_channel();
                 // Local mode: the worker simulates the feed in-process and passes only candidates
                 // it can't run yet to the RPC pre-simulator.
@@ -550,6 +559,8 @@ impl Engine {
             gate: mev_risk::gate::RouteGate::new(),
             sim_bad: mev_risk::gate::Cooldowns::new(),
             healed: HashMap::new(),
+            trigger_calls: HashMap::new(),
+            sim_v1,
             trusted,
             sim_ok: HashMap::new(),
             batch: Default::default(),
@@ -628,6 +639,12 @@ impl Engine {
                         }
                     }
                     Some(pre) = recv_opt(&mut presim_rx) => {
+                        if !pre.call.is_null() {
+                            if self.trigger_calls.len() > 512 {
+                                self.trigger_calls.retain(|_, (t, _)| t.elapsed() < TRIGGER_CALL_KEEP);
+                            }
+                            self.trigger_calls.insert(pre.tx, (Instant::now(), pre.call.clone()));
+                        }
                         // Same path as block logs, a block early; the real logs overwrite it.
                         for log in &pre.logs {
                             if let Some(pool) = self.store.apply_log(log) {
@@ -987,16 +1004,22 @@ impl Engine {
             return Some((Fees::no_bid(base_fee), 0.0));
         }
         let now = now_secs();
-        let q = self.cfg.pga.competition_quantile;
-        let from_feed = self
-            .feed_tips
-            .lock()
-            .unwrap()
-            .estimate(self.cfg.pga.feed_quantile, now);
-        let mut competition = mev_risk::bid::strongest(self.tips.estimate(q, now), from_feed);
-        if let Some(book) = route.and_then(|r| self.route_tips.get_mut(&r)) {
-            competition = mev_risk::bid::strongest(competition, book.estimate(q, now));
-        }
+        let (q, mq) = (
+            self.cfg.pga.competition_quantile,
+            self.cfg.pga.market_quantile,
+        );
+        // The market: winners seen anywhere and bot-like feed tips, at its median.
+        let from_feed = self.feed_tips.lock().unwrap().estimate(mq, now);
+        let market = mev_risk::bid::strongest(self.tips.estimate(mq, now), from_feed);
+        let (obs, own) = match route.and_then(|r| self.route_tips.get_mut(&r)) {
+            Some(book) => {
+                let est = book.estimate(q, now);
+                (book.len(), est)
+            }
+            None => (0, None),
+        };
+        let competition =
+            mev_risk::bid::route_competition(obs, self.cfg.pga.route_min_observations, own, market);
         let input = BidInput {
             gross_profit_usd: gross_usd,
             gas_units: gas,
@@ -1226,12 +1249,41 @@ impl Engine {
                 && opp.hops.iter().any(|h| matches!(h.kind, 3 | 4)));
         let (profit_usd, gas) = if presimulate {
             self.metrics.update(|c| c.simulated += 1);
-            let outcome = match sim.simulate_fast(&opp, U256::ZERO).await {
-                Ok(o) => o,
-                Err(e) => {
-                    warn!(error = %e, "simulation error");
-                    return;
+            // A trade triggered by a pending feed transaction only exists once that transaction has
+            // landed, so verify the two together in one simulated block; a plain eth_call at the
+            // latest block would reject exactly the trades the feed path finds a block early.
+            let after = match (trigger.source, trigger.tx, &self.sim_v1) {
+                ("presim", Some(tx), Some(p)) => self
+                    .trigger_calls
+                    .get(&tx)
+                    .map(|(_, call)| (p.clone(), call.clone())),
+                _ => None,
+            };
+            let outcome = match after {
+                Some((p, call)) => {
+                    let arb = sim.arb_call_json(&opp, U256::ZERO);
+                    match mev_presim::simulate_after(&p, &call, arb).await {
+                        Ok(r) if r.ok => match mev_sim::decode_arb_profit(&r.return_data) {
+                            Ok(profit) => SimOutcome::Profitable {
+                                profit,
+                                gas: mev_sim::arb_gas_estimate(opp.hops.len()),
+                            },
+                            Err(e) => SimOutcome::Reverted(e),
+                        },
+                        Ok(r) => SimOutcome::Reverted(format!("after trigger: {}", r.error)),
+                        Err(e) => {
+                            warn!(error = %e, "trigger+arb simulation error");
+                            return;
+                        }
+                    }
                 }
+                None => match sim.simulate_fast(&opp, U256::ZERO).await {
+                    Ok(o) => o,
+                    Err(e) => {
+                        warn!(error = %e, "simulation error");
+                        return;
+                    }
+                },
             };
             match outcome {
                 SimOutcome::Profitable { profit, gas } => {
@@ -1247,7 +1299,9 @@ impl Engine {
                         .event("sim_revert", json!({ "opp": base, "reason": r }));
                     // The model said profit and the chain said no: re-read the route's pools so a
                     // stale price is corrected now (and the drift is logged), not at the next resync.
-                    self.heal_route(&opp).await;
+                    if trigger.source == "block" {
+                        self.heal_route(&opp).await;
+                    }
                     return;
                 }
             }

@@ -45,6 +45,15 @@ impl Simulator {
             .input(mev_bindings::arb_calldata(opp, min_profit, self.flash_swaps).into())
     }
 
+    /// The arbitrage call as an `eth_simulateV1` call object.
+    pub fn arb_call_json(&self, opp: &Opportunity, min_profit: U256) -> serde_json::Value {
+        serde_json::json!({
+            "from": self.owner,
+            "to": self.executor,
+            "input": mev_bindings::arb_calldata(opp, min_profit, self.flash_swaps),
+        })
+    }
+
     /// `eth_call` the arbitrage; the executor returns its profit.
     async fn call_arb(&self, req: &TransactionRequest) -> std::result::Result<U256, String> {
         let raw = self
@@ -73,6 +82,11 @@ impl Simulator {
 /// Arbitrum txs: 2 V3 hops used 300-333k gas. This prices the trade; the gas limit is set higher.
 pub fn arb_gas_estimate(hops: usize) -> u64 {
     100_000 + 115_000 * hops as u64
+}
+
+/// The profit an `execute` return carries.
+pub fn decode_arb_profit(raw: &[u8]) -> std::result::Result<U256, String> {
+    ArbExecutor::executeCall::abi_decode_returns(raw).map_err(|e| short(&e.to_string()))
 }
 
 impl Simulator {

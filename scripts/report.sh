@@ -27,6 +27,26 @@ for f in sys.argv[1:]:
 for day in sorted(n): print(\"  %s  landed %3d  net %+.4f USD (profit when won - gas)\" % (day, n[day], net[day]))
 "' 2>&1 | head -8
 
+echo "== races (landed arb sends; winner = the tx ahead of ours that touched our pools)"
+ssh -o ConnectTimeout=15 "$HOST" 'cd src/mev-bot && ls data/arbitrum/events-*.jsonl | tail -3 | xargs python3 -c "
+import sys, json, collections
+c = collections.Counter(); late = []
+for f in sys.argv[1:]:
+    for l in open(f):
+        try: e = json.loads(l)
+        except Exception: continue
+        if e.get(\"kind\") != \"race\": continue
+        d = e[\"data\"]
+        c[\"races\"] += 1; c[\"won\"] += bool(d.get(\"success\"))
+        if d.get(\"winner\"): c[\"winner identified\"] += 1
+        ours, win = d.get(\"our_tip_wei\"), d.get(\"winner_tip_wei\")
+        if d.get(\"winner\") and ours is not None and win is not None:
+            c[\"lost on tip (winner paid >= us)\" if int(win) >= int(ours) else \"lost on timing (we paid more, still behind)\"] += 1
+        if d.get(\"blocks_after_trigger\") is not None: late.append(d[\"blocks_after_trigger\"])
+for k, v in c.items(): print(\"  %-46s %d\" % (k, v))
+if late: print(\"  blocks between trigger and our landing: median %d, max %d\" % (sorted(late)[len(late)//2], max(late)))
+"' 2>&1 | head -10
+
 echo "== infrastructure (month to date)"
 START="$(date -u +%Y-%m-01)"; END="$(date -u -d tomorrow +%Y-%m-%d)"
 if OUT=$(aws ce get-cost-and-usage --profile mev-bot --region us-east-1 --time-period "Start=$START,End=$END" \
