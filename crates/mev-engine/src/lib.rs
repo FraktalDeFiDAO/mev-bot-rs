@@ -103,6 +103,8 @@ mod race;
 /// Unsimulated, so the limit is generous; unused gas isn't charged.
 /// A long-tail route's successful simulation is trusted for this long.
 const SIM_OK_TTL: Duration = Duration::from_secs(300);
+/// A pool is re-read after a failed simulation at most this often.
+const HEAL_MIN_GAP: Duration = Duration::from_secs(10);
 /// A route whose simulation reverted is not simulated again for this long (seconds).
 const SIM_BAD_TTL: u64 = 120;
 const BACKRUN_GAS: u64 = 900_000;
@@ -164,6 +166,8 @@ pub struct Engine {
     /// Routes whose pre-send simulation just reverted: skipped for `SIM_BAD_TTL` so the search moves
     /// on to the next route instead of re-simulating a dead one on every pool update.
     sim_bad: mev_risk::gate::Cooldowns<(Address, Address)>,
+    /// When each pool was last re-read after a failed simulation.
+    healed: HashMap<Address, Instant>,
     /// Tokens we trade routinely (configured pairs and loan tokens). A route touching any other
     /// (long-tail) token is simulated before it is sent, which catches fee-on-transfer and
     /// honeypot tokens that the pool model cannot see.
@@ -545,6 +549,7 @@ impl Engine {
             atlas,
             gate: mev_risk::gate::RouteGate::new(),
             sim_bad: mev_risk::gate::Cooldowns::new(),
+            healed: HashMap::new(),
             trusted,
             sim_ok: HashMap::new(),
             batch: Default::default(),
@@ -879,6 +884,71 @@ impl Engine {
                 .is_none_or(|t| t.elapsed() > SIM_OK_TTL)
     }
 
+    /// Re-read the state of the pools on `o`'s route after a failed simulation. Logs a `state_heal`
+    /// event with how far each pool's price and liquidity had drifted from the chain (relative, bps
+    /// for price). At most once per pool per `HEAL_MIN_GAP`.
+    async fn heal_route(&mut self, o: &Opportunity) {
+        let now = Instant::now();
+        let mut infos = Vec::new();
+        for h in &o.hops {
+            let Some(p) = self.store.get(&h.pool) else {
+                continue;
+            };
+            if infos
+                .iter()
+                .any(|i: &mev_types::PoolInfo| i.address == h.pool)
+                || self
+                    .healed
+                    .get(&h.pool)
+                    .is_some_and(|t| now.duration_since(*t) < HEAL_MIN_GAP)
+            {
+                continue;
+            }
+            infos.push(p.info.clone());
+        }
+        if infos.is_empty() {
+            return;
+        }
+        for i in &infos {
+            self.healed.insert(i.address, now);
+        }
+        let fresh = match mev_discovery::load_pools(&self.rpc, infos).await {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(error = %e, "state heal failed");
+                return;
+            }
+        };
+        let mut drift = Vec::new();
+        for mut p in fresh {
+            let addr = p.info.address;
+            let (old, ticks) = match self.store.get(&addr) {
+                Some(old) => (old.state.clone(), old.ticks.clone()),
+                None => continue,
+            };
+            if let (
+                mev_dex::PoolState::V3 {
+                    sqrt_price: a,
+                    liquidity: la,
+                },
+                mev_dex::PoolState::V3 {
+                    sqrt_price: b,
+                    liquidity: lb,
+                },
+            ) = (&old, &p.state)
+            {
+                drift.push(json!({
+                    "pool": addr,
+                    "price_bps": (b * b / (a * a) - 1.0) * 1e4,
+                    "liquidity_change": if *la > 0.0 { lb / la - 1.0 } else { 0.0 },
+                }));
+            }
+            p.ticks = ticks;
+            self.store.replace(p);
+        }
+        self.metrics.event("state_heal", json!({ "pools": drift }));
+    }
+
     /// Did a send on `o`'s route revert within `ROUTE_COOLDOWN`?
     fn cooling(&self, o: &Opportunity) -> bool {
         let key = (o.buy_pool, o.sell_pool);
@@ -1175,6 +1245,9 @@ impl Engine {
                     self.sim_bad.mark(key, now_secs());
                     self.metrics
                         .event("sim_revert", json!({ "opp": base, "reason": r }));
+                    // The model said profit and the chain said no: re-read the route's pools so a
+                    // stale price is corrected now (and the drift is logged), not at the next resync.
+                    self.heal_route(&opp).await;
                     return;
                 }
             }

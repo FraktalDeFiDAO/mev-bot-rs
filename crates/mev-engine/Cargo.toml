@@ -17,6 +17,7 @@ mev-config = { workspace = true }
 mev-bindings = { workspace = true }
 mev-rpc = { workspace = true }
 mev-ingest = { workspace = true }
+mev-dex = { workspace = true }
 mev-discovery = { workspace = true }
 mev-state = { workspace = true }
 mev-sim = { workspace = true }
