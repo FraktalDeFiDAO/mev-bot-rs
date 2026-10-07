@@ -35,7 +35,7 @@ start() {
   # NO_BUILD=1: the image was built elsewhere and loaded (small hosts can't compile the workspace).
   [[ -n ${NO_BUILD:-} ]] || compose build bot >/dev/null
   compose down >/dev/null 2>&1 || true
-  MEV_MODE="$1" compose up -d bot
+  EXECUTION_MODE="$1" compose up -d bot
   echo "started in $1 mode — 'scripts/run.sh logs' to follow, 'scripts/run.sh halt' to stop trading"
 }
 

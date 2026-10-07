@@ -5,9 +5,11 @@ use std::{
     io::{BufWriter, Write},
     path::PathBuf,
     sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
     },
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -53,9 +55,22 @@ pub struct Counters {
     pub fast_feed_reconnects: u64,
 }
 
+/// Events queued for the writer thread before new ones are dropped. A burst of a few thousand events
+/// fits; a stalled disk costs diagnostics, never the hot path (invariant 4).
+const QUEUE: usize = 16_384;
+
+enum Msg {
+    /// `(day, json line)`.
+    Line(String, String),
+    Heartbeat(String),
+    /// Written and flushed up to here; reply when done.
+    Flush(SyncSender<()>),
+}
+
 pub struct Metrics {
-    dir: PathBuf,
-    file: Mutex<(String, BufWriter<File>)>,
+    tx: SyncSender<Msg>,
+    /// Events dropped because the queue was full (or the writer is gone).
+    dropped: Arc<AtomicU64>,
     pub counters: Mutex<Counters>,
     /// Whether the bot is sending real transactions; stamped on every event so live and shadow
     /// data share one history (`events-*.jsonl`) and can be told apart.
@@ -67,12 +82,31 @@ impl Metrics {
         std::fs::create_dir_all(&dir)?;
         let day = Utc::now().format("%Y-%m-%d").to_string();
         let file = open(&dir, &day)?;
+        let (tx, rx) = sync_channel(QUEUE);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let seen = dropped.clone();
+        std::thread::Builder::new()
+            .name("metrics-writer".into())
+            .spawn(move || writer(dir, day, file, rx, seen))?;
         Ok(Self {
-            dir,
-            file: Mutex::new((day, file)),
+            tx,
+            dropped,
             counters: Mutex::new(Counters::default()),
             live: AtomicBool::new(false),
         })
+    }
+
+    /// Events dropped so far because the writer could not keep up.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// Wait until everything queued so far is on disk (shutdown, tests). Never call on the hot path.
+    pub fn flush(&self) {
+        let (done_tx, done_rx) = sync_channel(1);
+        if self.tx.send(Msg::Flush(done_tx)).is_ok() {
+            let _ = done_rx.recv_timeout(Duration::from_secs(5));
+        }
     }
 
     /// Set the mode stamped on later events; true if it changed.
@@ -80,22 +114,16 @@ impl Metrics {
         self.live.swap(live, Ordering::Relaxed) != live
     }
 
-    /// Append one event. Never fails the caller — logging errors are reported via tracing.
+    /// Queue one event for the writer thread. Never blocks and never fails the caller: if the queue is
+    /// full the event is dropped and counted (`dropped()`).
     pub fn event(&self, kind: &str, data: Value) {
         let now = Utc::now();
         let line = json!({ "ts": now.to_rfc3339(), "mode": if self.live.load(Ordering::Relaxed) { "live" } else { "shadow" }, "kind": kind, "data": data }).to_string();
         // Error strings can embed RPC URLs with API keys.
-        let line = mev_types::redact_secrets(&line);
-        let mut guard = self.file.lock().unwrap();
+        let line = mev_types::redact_secrets(&line).into_owned();
         let day = now.format("%Y-%m-%d").to_string();
-        if guard.0 != day {
-            match open(&self.dir, &day) {
-                Ok(f) => *guard = (day, f),
-                Err(e) => tracing::error!(error = %e, "rotating metrics file failed"),
-            }
-        }
-        if let Err(e) = writeln!(guard.1, "{line}").and_then(|_| guard.1.flush()) {
-            tracing::error!(error = %e, "writing metrics failed");
+        if self.tx.try_send(Msg::Line(day, line)).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -104,15 +132,81 @@ impl Metrics {
     }
 
     /// Touch `heartbeat` (unix seconds) so a container healthcheck can tell the loop is alive.
+    /// The write happens on the writer thread.
     pub fn heartbeat(&self) {
         let now = Utc::now().timestamp().to_string();
-        if let Err(e) = std::fs::write(self.dir.join("heartbeat"), now) {
-            tracing::error!(error = %e, "writing heartbeat failed");
+        if self.tx.try_send(Msg::Heartbeat(now)).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     pub fn snapshot(&self) -> Counters {
         self.counters.lock().unwrap().clone()
+    }
+}
+
+/// Owns the event file: appends queued lines (rotating by day), flushes when the queue goes idle or a
+/// flush is requested, writes the heartbeat, and reports drops. Exits when every sender is gone.
+fn writer(
+    dir: PathBuf,
+    mut day: String,
+    mut file: BufWriter<File>,
+    rx: Receiver<Msg>,
+    dropped: Arc<AtomicU64>,
+) {
+    let mut reported = 0u64;
+    let mut last_report = std::time::Instant::now();
+    loop {
+        // Block for the next message; once the queue is empty, flush what was buffered.
+        let msg = match rx.try_recv() {
+            Ok(m) => m,
+            Err(TryRecvError::Empty) => {
+                if let Err(e) = file.flush() {
+                    tracing::error!(error = %e, "flushing metrics failed");
+                }
+                match rx.recv() {
+                    Ok(m) => m,
+                    Err(_) => return,
+                }
+            }
+            Err(TryRecvError::Disconnected) => {
+                let _ = file.flush();
+                return;
+            }
+        };
+        match msg {
+            Msg::Line(d, line) => {
+                if d != day {
+                    match open(&dir, &d) {
+                        Ok(f) => {
+                            let _ = file.flush();
+                            (day, file) = (d, f);
+                        }
+                        Err(e) => tracing::error!(error = %e, "rotating metrics file failed"),
+                    }
+                }
+                if let Err(e) = writeln!(file, "{line}") {
+                    tracing::error!(error = %e, "writing metrics failed");
+                }
+            }
+            Msg::Heartbeat(ts) => {
+                if let Err(e) = std::fs::write(dir.join("heartbeat"), ts) {
+                    tracing::error!(error = %e, "writing heartbeat failed");
+                }
+            }
+            Msg::Flush(done) => {
+                let _ = file.flush();
+                let _ = done.send(());
+            }
+        }
+        let d = dropped.load(Ordering::Relaxed);
+        if d > reported && last_report.elapsed() >= Duration::from_secs(10) {
+            tracing::warn!(
+                dropped = d,
+                "metrics events dropped: the writer cannot keep up"
+            );
+            (reported, last_report) = (d, std::time::Instant::now());
+        }
     }
 }
 
@@ -136,6 +230,7 @@ mod tests {
         assert!(m.set_live(true));
         assert!(!m.set_live(true));
         m.event("b", json!({}));
+        m.flush();
         let day = Utc::now().format("%Y-%m-%d");
         let text = std::fs::read_to_string(dir.path().join(format!("events-{day}.jsonl"))).unwrap();
         let modes: Vec<String> = text
@@ -158,6 +253,7 @@ mod tests {
             "liq_sim_revert",
             json!({ "reason": format!("error sending request for url (https://arb-mainnet.g.alchemy.com/v2/{})", ["SECRETKEY", "0123456789abc"].concat()) }),
         );
+        m.flush();
         let text: String = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| std::fs::read_to_string(e.unwrap().path()).ok())
@@ -177,6 +273,7 @@ mod tests {
             c.profit_usd += 1.5;
         });
         m.heartbeat();
+        m.flush();
 
         let day = Utc::now().format("%Y-%m-%d").to_string();
         let text = std::fs::read_to_string(dir.path().join(format!("events-{day}.jsonl"))).unwrap();
@@ -194,5 +291,41 @@ mod tests {
             .parse()
             .unwrap();
         assert!((Utc::now().timestamp() - hb).abs() < 5);
+    }
+
+    #[test]
+    fn a_full_queue_drops_events_without_blocking_the_caller() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = Metrics::new(dir.path().to_path_buf()).unwrap();
+        // Far more events than the queue holds, as fast as possible: the calls must all return.
+        let t = std::time::Instant::now();
+        for i in 0..(QUEUE * 4) {
+            m.event("burst", json!({ "i": i }));
+        }
+        assert!(
+            t.elapsed() < Duration::from_secs(10),
+            "event() must not wait on the disk"
+        );
+        m.flush();
+        let day = Utc::now().format("%Y-%m-%d").to_string();
+        let written = std::fs::read_to_string(dir.path().join(format!("events-{day}.jsonl")))
+            .unwrap()
+            .lines()
+            .count() as u64;
+        assert_eq!(
+            written + m.dropped(),
+            (QUEUE * 4) as u64,
+            "every event is written or counted as dropped"
+        );
+    }
+
+    #[test]
+    fn events_of_a_new_day_go_to_a_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = Metrics::new(dir.path().to_path_buf()).unwrap();
+        m.tx.send(Msg::Line("2001-01-01".into(), "{\"x\":1}".into()))
+            .unwrap();
+        m.flush();
+        assert!(dir.path().join("events-2001-01-01.jsonl").exists());
     }
 }

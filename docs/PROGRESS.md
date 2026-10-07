@@ -18,6 +18,13 @@ Read this file first in every session. Update at the end of every phase.
 - Audited the existing bot (12 areas with verdicts; explicit file:line findings for every list item in spec §13).
 - Wrote the design doc (flows, state model, crate graph, per-protocol transitions, bid engine, reconciliation, migration plan).
 
+## Compliance workstream (owner: invariants bind the live bot)
+
+- **Wave 1 shipped in PR "compliance wave 1" (DECISIONS #78):** async metrics, background maintenance, guarded refresh + `state_correction` events, opportunity version stamps, `EXECUTION_MODE`, stub check.
+  Verified by unit tests (metrics burst/drop, version bump semantics, refresh vs newer event), `scripts/check.sh`, and `scripts/test-e2e-crash.sh` (5/5 in 4 s).
+- **Wave 2 (next, no new money/hardware needed):** pool busy-marking review (#6), per-pool confidence from read failures (#7 interim), correction reason classification.
+- **Blocked on human decisions:** Fast Feed ticket (experiment 0), node for replay/reconciliation, shadow key + host. Phases 2+ proceed with recorded fixtures where they can.
+
 ## Conflicts between the spec and verified facts (recorded, design adapted)
 
 1. **Fast Feed cost vs project budget:** ≥ 17 USDG per ticket-day (≈ $510/month per connection; spec wants two). Project budget is $200 / ~$0 infra. Needs a human decision.

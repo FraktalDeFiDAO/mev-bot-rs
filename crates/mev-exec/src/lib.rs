@@ -411,6 +411,7 @@ mod tests {
             buy_pool: Address::ZERO,
             sell_pool: Address::ZERO,
             exact: true,
+            versions: vec![],
         };
         let d =
             ArbExecutor::executeCall::abi_decode(&execute_calldata(&opp, U256::from(9))).unwrap();
@@ -441,6 +442,7 @@ mod tests {
             buy_pool: Address::ZERO,
             sell_pool: Address::ZERO,
             exact: true,
+            versions: vec![],
         }
     }
 
