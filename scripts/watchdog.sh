@@ -48,8 +48,14 @@ disk="$(df --output=pcent / | tail -1 | tr -dc 0-9)"
 
 today="$D/events-$(date -u +%F).jsonl"
 if [[ -f $today ]]; then
-  n="$(grep -cE '"kind":"(cap_reached|mode_switch)"' "$today" || true)"
-  (( n == 0 )) || alerts+=("$n cap_reached/mode_switch event(s) today (bot may be in shadow)")
+  # Only events from the last hour: a cap hit earlier in the day (the arb strategy runs again
+  # after midnight UTC, or after an operator restart) is not a current problem.
+  since="$(date -u -d '1 hour ago' +%FT%T)"
+  n="$(grep -E '"kind":"(cap_reached|mode_switch)"' "$today" | python3 -c "
+import sys, json
+since = '$since'
+print(sum(1 for l in sys.stdin if json.loads(l).get('ts', '')[:19] >= since))" 2>/dev/null || echo 0)"
+  (( n == 0 )) || alerts+=("$n cap_reached/mode_switch event(s) in the last hour (bot may be in shadow)")
 fi
 
 if (( ${#alerts[@]} == 0 )); then
