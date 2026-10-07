@@ -35,6 +35,14 @@ Rules:
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
 
+## Sequencer-first engine (new build; read before touching it)
+
+A multi-phase build is specified in `docs/tasks/sequencer-first-engine.md`; standing invariants for that engine (integer math, chain-state-wins,
+hot-path purity, shadow-only execution, version-tagged opportunities) are in `docs/tasks/sequencer-first-invariants.md`; progress is in `docs/PROGRESS.md`
+(read it first in every session on this task). Arbitrum-specific facts live in `docs/arbitrum-facts.md` and must be re-verified against docs.arbitrum.io
+before being relied on. The invariants bind the **new** engine; the live bot (`mev-engine` etc.) is legacy until the migration gates in
+`docs/design/sequencer-first.md` §11 pass. Stop at the gates after Phases 1, 6 and before 10.
+
 ## AWS
 
 - AWS work (hosting the bot in us-east-2, next to the Arbitrum sequencer): read `.ai/aws-rules.md` first. CLI profile `mev-bot`, Region `us-east-2`; the Agent Toolkit service itself runs in `us-east-1`.
