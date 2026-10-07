@@ -37,6 +37,8 @@ pub(crate) struct Item {
     pub px: f64,
     /// Arbitrage route whose pools were claimed (released when it lands or fails).
     pub route: Option<(Address, Address)>,
+    /// State versions the trade was computed from; dropped at flush if any pool moved since.
+    pub versions: Vec<(Address, u64)>,
     pub seen: Instant,
 }
 
@@ -114,11 +116,8 @@ impl Engine {
 
     /// Bid once for everything queued and send it.
     pub(crate) async fn flush_batch(&mut self, tx_done: &mpsc::UnboundedSender<TxDone>) {
-        let items = std::mem::take(&mut self.batch.items);
+        let queued = std::mem::take(&mut self.batch.items);
         self.batch.since = None;
-        if items.is_empty() {
-            return;
-        }
         let release = |s: &mut Engine, items: &[Item]| {
             for it in items {
                 if let Some(r) = it.route {
@@ -126,6 +125,20 @@ impl Engine {
                 }
             }
         };
+        // A trade that waited in the queue is dropped if a pool it was computed from has moved.
+        let (stale, items): (Vec<Item>, Vec<Item>) = queued
+            .into_iter()
+            .partition(|i| self.superseded(&i.versions));
+        for it in &stale {
+            self.metrics.event(
+                "opp_stale",
+                json!({ "kind": it.kind, "stage": "batch_flush" }),
+            );
+        }
+        release(self, &stale);
+        if items.is_empty() {
+            return;
+        }
         let Some(sender) = self.sender.clone() else {
             return release(self, &items);
         };

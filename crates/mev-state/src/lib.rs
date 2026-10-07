@@ -7,9 +7,31 @@ use mev_bindings::{IPancakeV3Pool, IPoolManager, IUniswapV2Pair, IUniswapV3Pool}
 use mev_dex::{Pool, PoolState, sqrt_price_from_x96};
 use mev_types::{Address, B256, PoolKind};
 
-#[derive(Default)]
+/// What a background state read changed in the store.
+#[derive(Debug, Default)]
+pub struct RefreshOutcome {
+    /// Pools whose state was replaced by the fresh read.
+    pub applied: usize,
+    /// Pools left alone because an event updated them after the read began (the event is newer).
+    pub skipped: usize,
+    /// Applied pools whose fresh state differed from what we held: the chain won.
+    pub overwrites: Vec<Overwrite>,
+}
+
+/// One cached state replaced by the chain's (becomes a `StateCorrection` record).
+#[derive(Debug, Clone)]
+pub struct Overwrite {
+    pub pool: Address,
+    pub predicted: PoolState,
+    pub actual: PoolState,
+}
+
+#[derive(Default, Clone)]
 pub struct PoolStore {
     pools: HashMap<Address, Pool>,
+    /// Bumped each time a pool's state or tick map actually changes: an opportunity records the
+    /// versions it was computed from and is dropped if any moved (invariant 3).
+    versions: HashMap<Address, u64>,
     by_pair: HashMap<(Address, Address), Vec<Address>>,
     /// Uniswap V4 pool id -> the stand-in address it is stored under (their events come from the
     /// shared PoolManager and name the pool only by id).
@@ -30,6 +52,53 @@ impl PoolStore {
         if self.pools.insert(addr, pool).is_none() {
             self.by_pair.entry(key).or_default().push(addr);
         }
+        self.bump(addr);
+    }
+
+    fn bump(&mut self, addr: Address) {
+        *self.versions.entry(addr).or_insert(0) += 1;
+    }
+
+    /// The pool's state version (0 if unknown).
+    pub fn version(&self, addr: &Address) -> u64 {
+        self.versions.get(addr).copied().unwrap_or(0)
+    }
+
+    /// Versions of every pool now, to compare against later (a background read records them first).
+    pub fn versions_snapshot(&self) -> HashMap<Address, u64> {
+        self.versions.clone()
+    }
+
+    /// Apply a background read of pool states. A pool that an event updated after the read began
+    /// (`read_at` older than its version) is skipped: the event is newer than the read. Every
+    /// applied pool whose state differs from ours is reported as an overwrite.
+    pub fn apply_refresh(
+        &mut self,
+        fresh: Vec<Pool>,
+        read_at: &HashMap<Address, u64>,
+    ) -> RefreshOutcome {
+        let mut out = RefreshOutcome::default();
+        for mut p in fresh {
+            let addr = p.info.address;
+            let Some(old) = self.pools.get(&addr) else {
+                continue;
+            };
+            if self.version(&addr) != read_at.get(&addr).copied().unwrap_or(0) {
+                out.skipped += 1;
+                continue;
+            }
+            p.ticks = old.ticks.clone();
+            if old.state != p.state {
+                out.overwrites.push(Overwrite {
+                    pool: addr,
+                    predicted: old.state.clone(),
+                    actual: p.state.clone(),
+                });
+            }
+            self.replace(p);
+            out.applied += 1;
+        }
+        out
     }
 
     pub fn get(&self, addr: &Address) -> Option<&Pool> {
@@ -85,21 +154,34 @@ impl PoolStore {
 
     /// Replace an existing pool's state and fees (e.g. after a resync). Unknown pools are ignored.
     pub fn replace(&mut self, pool: Pool) {
-        if let Some(p) = self.pools.get_mut(&pool.info.address) {
+        let addr = pool.info.address;
+        if let Some(p) = self.pools.get_mut(&addr) {
+            let changed = p.state != pool.state || p.fee0 != pool.fee0 || p.fee1 != pool.fee1;
             *p = pool;
+            if changed {
+                self.bump(addr);
+            }
         }
     }
 
     /// Replace a pool's tick map (concentrated-liquidity pricing across tick boundaries).
     pub fn set_ticks(&mut self, addr: &Address, ticks: mev_dex::TickMap) {
         if let Some(p) = self.pools.get_mut(addr) {
+            let changed = p.ticks.as_deref() != Some(&ticks);
             p.ticks = Some(std::sync::Arc::new(ticks));
+            if changed {
+                self.bump(*addr);
+            }
         }
     }
 
     pub fn set_state(&mut self, addr: &Address, state: PoolState) {
         if let Some(p) = self.pools.get_mut(addr) {
+            let changed = p.state != state;
             p.state = state;
+            if changed {
+                self.bump(*addr);
+            }
         }
     }
 
@@ -183,7 +265,38 @@ impl PoolStore {
     }
 
     /// Apply a V2 `Sync` or V3 `Swap` log. Returns the pool address if state changed.
+    /// The pool a log would update, if any (for V4 the pool named by the event's id).
+    fn log_pool(&self, log: &Log) -> Option<Address> {
+        if log.address() == Address::ZERO {
+            return None;
+        }
+        match log.topics().get(1) {
+            Some(id) if self.v4.contains_key(id) => self.v4.get(id).copied(),
+            _ => self
+                .pools
+                .contains_key(&log.address())
+                .then(|| log.address()),
+        }
+    }
+
+    /// Apply a pool event. Returns the pool it updated; the pool's version moves only when its
+    /// state actually changed (a real block log that repeats a pending tx's state is a no-op).
     pub fn apply_log(&mut self, log: &Log) -> Option<Address> {
+        let before = self
+            .log_pool(log)
+            .and_then(|a| self.pools.get(&a).map(|p| (a, p.state.clone())));
+        let updated = self.apply_log_inner(log);
+        if let (Some(a), Some((b, old))) = (updated, before) {
+            if a != b || self.pools.get(&a).is_some_and(|p| p.state != old) {
+                self.bump(a);
+            }
+        } else if let Some(a) = updated {
+            self.bump(a);
+        }
+        updated
+    }
+
+    fn apply_log_inner(&mut self, log: &Log) -> Option<Address> {
         let addr = log.address();
         let topic0: B256 = *log.topic0()?;
         if topic0 == IPoolManager::Swap::SIGNATURE_HASH {
@@ -694,5 +807,109 @@ mod tests {
             panic!()
         };
         assert_eq!(liquidity, 150.0);
+    }
+
+    #[test]
+    fn a_pool_version_moves_only_when_its_state_changes() {
+        let mut s = PoolStore::default();
+        let addr = Address::with_last_byte(1);
+        s.insert(pool(
+            1,
+            PoolKind::UniV2 { fee_bps: 30 },
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 1.0,
+                reserve1: 1.0,
+            },
+        ));
+        let v0 = s.version(&addr);
+        let sync = |r0: u64, r1: u64| {
+            rpc_log(
+                addr,
+                IUniswapV2Pair::Sync {
+                    reserve0: U112::from(r0),
+                    reserve1: U112::from(r1),
+                }
+                .encode_log_data(),
+            )
+        };
+        s.apply_log(&sync(500, 700));
+        let v1 = s.version(&addr);
+        assert!(v1 > v0, "a changed state bumps the version");
+        s.apply_log(&sync(500, 700));
+        assert_eq!(s.version(&addr), v1, "repeating the same state is a no-op");
+        assert_eq!(
+            s.version(&Address::with_last_byte(9)),
+            0,
+            "unknown pools are version 0"
+        );
+    }
+
+    #[test]
+    fn a_background_read_never_overwrites_a_pool_an_event_updated_since() {
+        let mut s = PoolStore::default();
+        let (a1, a2) = (Address::with_last_byte(1), Address::with_last_byte(2));
+        for n in [1u8, 2] {
+            s.insert(pool(
+                n,
+                PoolKind::UniV2 { fee_bps: 30 },
+                A,
+                B,
+                PoolState::V2 {
+                    reserve0: 1.0,
+                    reserve1: 1.0,
+                },
+            ));
+        }
+        let read_at = s.versions_snapshot();
+        // The read began; then an event moved pool 1.
+        s.apply_log(&rpc_log(
+            a1,
+            IUniswapV2Pair::Sync {
+                reserve0: U112::from(40),
+                reserve1: U112::from(60),
+            }
+            .encode_log_data(),
+        ));
+        let fresh = |n: u8, r0: f64| {
+            pool(
+                n,
+                PoolKind::UniV2 { fee_bps: 30 },
+                A,
+                B,
+                PoolState::V2 {
+                    reserve0: r0,
+                    reserve1: 9.0,
+                },
+            )
+        };
+        let out = s.apply_refresh(vec![fresh(1, 5.0), fresh(2, 7.0)], &read_at);
+        assert_eq!((out.applied, out.skipped), (1, 1));
+        assert_eq!(
+            s.get(&a1).unwrap().state,
+            PoolState::V2 {
+                reserve0: 40.0,
+                reserve1: 60.0
+            },
+            "the newer event wins"
+        );
+        assert_eq!(
+            s.get(&a2).unwrap().state,
+            PoolState::V2 {
+                reserve0: 7.0,
+                reserve1: 9.0
+            },
+            "the untouched pool takes the chain's state"
+        );
+        assert_eq!(out.overwrites.len(), 1);
+        assert_eq!(out.overwrites[0].pool, a2);
+        assert_eq!(
+            out.overwrites[0].predicted,
+            PoolState::V2 {
+                reserve0: 1.0,
+                reserve1: 1.0
+            }
+        );
     }
 }

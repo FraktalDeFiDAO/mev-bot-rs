@@ -106,6 +106,10 @@ pub struct Opportunity {
     /// tick may be crossed and the estimate is verified on-chain (`eth_call`) before sending.
     #[serde(default)]
     pub exact: bool,
+    /// `(pool, state version)` of every pool this was computed from. If any pool's version has moved
+    /// by the time the trade would be simulated or sent, the opportunity is dropped (invariant 3).
+    #[serde(default)]
+    pub versions: Vec<(Address, u64)>,
 }
 
 /// Mask API keys inside URLs (e.g. `https://arb-mainnet.g.alchemy.com/v2/<key>`,

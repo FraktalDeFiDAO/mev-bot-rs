@@ -158,6 +158,7 @@ impl CycleIndex {
                 buy_pool: c.legs[0].0,
                 sell_pool: c.legs[2].0,
                 exact,
+                versions: vec![],
             });
         }
         out.sort_by(|a, b| b.est_profit_usd.total_cmp(&a.est_profit_usd));

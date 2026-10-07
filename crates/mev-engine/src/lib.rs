@@ -255,6 +255,28 @@ enum TxDone {
     },
 }
 
+/// Results of background maintenance (state refresh, tick reload, cycle rebuild). The slow work, RPC
+/// reads and the global enumeration, runs in spawned tasks; the event loop only applies the result.
+enum Maint {
+    Pools {
+        fresh: Vec<mev_dex::Pool>,
+        read_at: HashMap<Address, u64>,
+    },
+    Ticks(HashMap<Address, mev_dex::TickMap>),
+    Cycles {
+        index: mev_search::cycles::CycleIndex,
+        watch: std::collections::HashSet<[u8; 20]>,
+    },
+}
+
+/// Which maintenance tasks are in flight (a new one starts only when the previous finished).
+#[derive(Default, Clone)]
+struct MaintBusy {
+    pools: Arc<std::sync::atomic::AtomicBool>,
+    ticks: Arc<std::sync::atomic::AtomicBool>,
+    cycles: Arc<std::sync::atomic::AtomicBool>,
+}
+
 impl Engine {
     /// Connect, discover pools, size loans, and wire the executor (if deployed).
     pub async fn bootstrap(
@@ -591,6 +613,8 @@ impl Engine {
             tokio::time::interval(Duration::from_secs(self.cfg.ticks.refresh_secs.max(30)));
         tick_reload.tick().await; // the first tick is immediate; bootstrap just loaded them
         let mut summary = tokio::time::interval(Duration::from_secs(60));
+        let (maint_tx, mut maint_rx) = mpsc::unbounded_channel::<Maint>();
+        let busy = MaintBusy::default();
         let mut backoff = Backoff::default();
         self.rebuild_cycles();
         info!(cycles = self.cycles.len(), "triangular cycles indexed");
@@ -662,20 +686,19 @@ impl Engine {
                     Some(a) = recv_opt(&mut atlas_auctions) => self.on_atlas_auction(a),
                     Some(e) = recv_opt(&mut atlas_events) => self.on_atlas_event(e),
                     _ = resync.tick() => {
-                        if let Err(e) = mev_discovery::refresh(&self.rpc, &mut self.store).await {
-                            warn!(error = %e, "resync failed");
-                        }
-                        *self.presim_watch.write().unwrap() = watchlist(&self.store);
-                        self.rebuild_cycles();
+                        self.spawn_pool_refresh(&maint_tx, &busy);
+                        self.spawn_cycle_rebuild(&maint_tx, &busy);
                     }
                     _ = tick_reload.tick(), if self.cfg.ticks.enabled => {
-                        match mev_discovery::refresh_ticks(&self.rpc, &mut self.store, self.cfg.ticks.window_ticks).await {
-                            Ok(n) => info!(pools = n, "tick maps reloaded"),
-                            Err(e) => warn!(error = %e, "tick reload failed"),
-                        }
+                        self.spawn_tick_reload(&maint_tx, &busy);
                     }
+                    Some(m) = maint_rx.recv() => self.apply_maint(m),
                     _ = summary.tick() => self.log_summary(),
-                    _ = &mut shutdown => { info!("shutting down"); return Ok(()); }
+                    _ = &mut shutdown => {
+                        info!("shutting down");
+                        self.metrics.flush();
+                        return Ok(());
+                    }
                 }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -961,6 +984,17 @@ impl Engine {
                 }));
             }
             p.ticks = ticks;
+            if old != p.state {
+                self.record_overwrite(
+                    &mev_state::Overwrite {
+                        pool: addr,
+                        predicted: old.clone(),
+                        actual: p.state.clone(),
+                    },
+                    "failed_simulation",
+                    "Unknown",
+                );
+            }
             self.store.replace(p);
         }
         self.metrics.event("state_heal", json!({ "pools": drift }));
@@ -1080,7 +1114,125 @@ impl Engine {
                 .is_some_and(|cap| f64::from(o.amount_in) <= *cap)
     }
 
-    /// Re-enumerate triangular cycles over the current pool set.
+    /// Read every pool's state in a background task (never inside the event loop). The result is
+    /// applied by `apply_maint`, which keeps any pool an event updated in the meantime.
+    fn spawn_pool_refresh(&self, tx: &mpsc::UnboundedSender<Maint>, busy: &MaintBusy) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if busy.pools.swap(true, SeqCst) {
+            return;
+        }
+        let infos: Vec<_> = self.store.pools().map(|p| p.info.clone()).collect();
+        let read_at = self.store.versions_snapshot();
+        let (rpc, tx, flag) = (self.rpc.clone(), tx.clone(), busy.pools.clone());
+        tokio::spawn(async move {
+            match mev_discovery::load_pools(&rpc, infos).await {
+                Ok(fresh) => {
+                    let _ = tx.send(Maint::Pools { fresh, read_at });
+                }
+                Err(e) => warn!(error = %e, "resync failed"),
+            }
+            flag.store(false, SeqCst);
+        });
+    }
+
+    /// Reload tick maps in a background task.
+    fn spawn_tick_reload(&self, tx: &mpsc::UnboundedSender<Maint>, busy: &MaintBusy) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if busy.ticks.swap(true, SeqCst) {
+            return;
+        }
+        let pools: Vec<_> = self.store.pools().cloned().collect();
+        let (rpc, tx, flag) = (self.rpc.clone(), tx.clone(), busy.ticks.clone());
+        let half = self.cfg.ticks.window_ticks;
+        tokio::spawn(async move {
+            match mev_discovery::ticks::load_ticks(&rpc, &pools, half).await {
+                Ok(maps) => {
+                    let _ = tx.send(Maint::Ticks(maps));
+                }
+                Err(e) => warn!(error = %e, "tick reload failed"),
+            }
+            flag.store(false, SeqCst);
+        });
+    }
+
+    /// Re-enumerate cycles and the presim watchlist on a blocking thread, off the event loop.
+    fn spawn_cycle_rebuild(&self, tx: &mpsc::UnboundedSender<Maint>, busy: &MaintBusy) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if busy.cycles.swap(true, SeqCst) {
+            return;
+        }
+        let store = self.store.clone();
+        let loans: Vec<Address> = self.search_loan.keys().copied().collect();
+        let max = self.cfg.max_cycles;
+        let (tx, flag) = (tx.clone(), busy.cycles.clone());
+        tokio::task::spawn_blocking(move || {
+            let index = mev_search::cycles::CycleIndex::build(&store, &loans, max);
+            let watch = watchlist(&store);
+            let _ = tx.send(Maint::Cycles { index, watch });
+            flag.store(false, SeqCst);
+        });
+    }
+
+    /// Apply a finished background task. Quick: no I/O, no enumeration.
+    fn apply_maint(&mut self, m: Maint) {
+        match m {
+            Maint::Pools { fresh, read_at } => {
+                let out = self.store.apply_refresh(fresh, &read_at);
+                for o in &out.overwrites {
+                    self.record_overwrite(o, "Resync", "resync");
+                }
+                tracing::debug!(
+                    applied = out.applied,
+                    skipped_newer_event = out.skipped,
+                    corrected = out.overwrites.len(),
+                    "pool state resynced"
+                );
+            }
+            Maint::Ticks(maps) => {
+                let n = maps.len();
+                for (addr, map) in maps {
+                    self.store.set_ticks(&addr, map);
+                }
+                info!(pools = n, "tick maps reloaded");
+            }
+            Maint::Cycles { index, watch } => {
+                self.cycles = index;
+                *self.presim_watch.write().unwrap() = watch;
+            }
+        }
+    }
+
+    /// Emit a `state_correction` event: the chain's state replaced ours (invariant 2). `reason`
+    /// follows the spec's reason codes (`Unknown` until a cause can be classified).
+    fn record_overwrite(&self, o: &mev_state::Overwrite, source: &str, reason: &str) {
+        let parts = |s: &mev_dex::PoolState| match s {
+            mev_dex::PoolState::V2 { reserve0, reserve1 } => {
+                json!({ "reserve0": reserve0, "reserve1": reserve1 })
+            }
+            mev_dex::PoolState::V3 {
+                sqrt_price,
+                liquidity,
+            } => json!({ "sqrt_price": sqrt_price, "liquidity": liquidity }),
+        };
+        let (dex, protocol) = self
+            .store
+            .get(&o.pool)
+            .map(|p| (p.info.dex.clone(), format!("{:?}", p.info.kind)))
+            .unwrap_or_default();
+        self.metrics.event(
+            "state_correction",
+            json!({ "market": o.pool, "dex": dex, "protocol": protocol, "source": source,
+                    "reason": reason, "predicted": parts(&o.predicted), "actual": parts(&o.actual) }),
+        );
+    }
+
+    /// Has any pool this opportunity was computed from changed since? (invariant 3)
+    pub(crate) fn superseded(&self, versions: &[(Address, u64)]) -> bool {
+        versions.iter().any(|(p, v)| self.store.version(p) != *v)
+    }
+
+    /// Re-enumerate triangular cycles over the current pool set (startup only; resyncs run in the
+    /// background).
     fn rebuild_cycles(&mut self) {
         let loans: Vec<Address> = self.search_loan.keys().copied().collect();
         self.cycles =
@@ -1198,13 +1350,19 @@ impl Engine {
             .arbs(&self.store, pool, &params)
             .into_iter()
             .find(fundable);
-        let Some(opp) = [two, tri]
+        let Some(mut opp) = [two, tri]
             .into_iter()
             .flatten()
             .max_by(|a, b| a.est_profit_usd.total_cmp(&b.est_profit_usd))
         else {
             return;
         };
+        // The exact state versions this opportunity was computed from (invariant 3).
+        opp.versions = opp
+            .hops
+            .iter()
+            .map(|h| (h.pool, self.store.version(&h.pool)))
+            .collect();
         let loan_px = self.price(opp.loan_token).unwrap_or(0.0);
         let native_px = self.price(self.native).unwrap_or(0.0);
 
@@ -1337,6 +1495,13 @@ impl Engine {
         };
         // Win-rate gate: a loss costs gas plus a tip; skip routes that have not earned a send.
         let cost_usd = gas_usd + gas as f64 * self.bid_policy.default_tip_wei as f64 * native_px;
+        if self.superseded(&opp.versions) {
+            self.metrics.event(
+                "opp_stale",
+                json!({ "opp": base, "stage": "after_simulation" }),
+            );
+            return;
+        }
         let verdict = self.gate.check(
             &gate_params(&self.cfg.gate),
             key,
@@ -1381,6 +1546,7 @@ impl Engine {
                 px: loan_px,
                 route: Some((opp.buy_pool, opp.sell_pool)),
                 seen: trigger.seen,
+                versions: opp.versions.clone(),
             };
             return self.enqueue(item, tx_done).await;
         }
@@ -1639,6 +1805,7 @@ impl Engine {
                 seen: Instant::now()
                     .checked_sub(lead)
                     .unwrap_or_else(Instant::now),
+                versions: vec![],
             };
             return self.enqueue(item, tx_done).await;
         }
@@ -1757,6 +1924,7 @@ impl Engine {
                 px: debt_px,
                 route: None,
                 seen: Instant::now(),
+                versions: vec![],
             };
             return self.enqueue(item, tx_done).await;
         }

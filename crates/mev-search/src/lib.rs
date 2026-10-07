@@ -69,6 +69,7 @@ pub fn two_pool_arbs(
                     buy_pool: buy.info.address,
                     sell_pool: sell.info.address,
                     exact,
+                    versions: vec![],
                 });
             }
         }
