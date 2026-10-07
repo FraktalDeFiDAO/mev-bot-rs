@@ -7,6 +7,9 @@ set -uo pipefail
 HOST="${MEV_HOST:-mev-ohio}"
 CHAINSTACK_MONTHLY=49
 
+echo "== health (scripts/watchdog.sh on $HOST)"
+ssh -o ConnectTimeout=15 "$HOST" 'cd src/mev-bot && scripts/watchdog.sh' 2>&1 | head -6
+
 echo "== trading (event logs on $HOST)"
 ssh -o ConnectTimeout=15 "$HOST" 'cd src/mev-bot && ls data/arbitrum/events-*.jsonl | tail -3 | xargs python3 -c "
 import sys, json, collections
@@ -27,14 +30,13 @@ for day in sorted(n): print(\"  %s  landed %3d  net %+.4f USD (profit when won -
 echo "== infrastructure (month to date)"
 START="$(date -u +%Y-%m-01)"; END="$(date -u -d tomorrow +%Y-%m-%d)"
 if OUT=$(aws ce get-cost-and-usage --profile mev-bot --region us-east-1 --time-period "Start=$START,End=$END" \
-    --granularity MONTHLY --metrics UnblendedCost --group-by Type=DIMENSION,Key=SERVICE --output json 2>&1); then
+    --granularity MONTHLY --metrics UnblendedCost --group-by Type=DIMENSION,Key=RECORD_TYPE --output json 2>&1); then
   python3 -c '
 import sys, json
 d = json.loads(sys.stdin.read())
-g = sorted(d["ResultsByTime"][0]["Groups"], key=lambda g: -float(g["Metrics"]["UnblendedCost"]["Amount"]))
-tot = sum(float(x["Metrics"]["UnblendedCost"]["Amount"]) for x in g)
-for x in g[:6]: print("  AWS %-34s %8.2f" % (x["Keys"][0][:34], float(x["Metrics"]["UnblendedCost"]["Amount"])))
-print("  AWS total (before credits)%24.2f" % tot)' <<<"$OUT"
+g = {x["Keys"][0]: float(x["Metrics"]["UnblendedCost"]["Amount"]) for x in d["ResultsByTime"][0]["Groups"]}
+use, cred = g.get("Usage", 0.0), g.get("Credit", 0.0)
+print("  AWS usage %8.2f   credits %8.2f   net billed %8.2f   (Cost Explorer lags up to a day)" % (use, cred, use + cred))' <<<"$OUT"
 else
   echo "  AWS cost unavailable: ${OUT%%$'\n'*} (run: aws login --profile mev-bot)"
 fi
