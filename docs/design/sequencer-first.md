@@ -121,7 +121,7 @@ shadow soak with would-have-won against actual next-round winners; per-stage p50
 1. Phases 2-6 build the new stack in new crates, **shadow only**, side by side with the legacy bot (no shared state, no shared keys).
 2. A comparator logs legacy vs new opportunity sets and state agreement per block (cheap, async).
 3. Gate at Phase 6 (replay passes) → continue to Phases 7-10 in shadow → gate before any signing path.
-4. The new engine runs `EXECUTION_MODE=shadow` (throwaway key) until the human decides otherwise; the legacy live bot is untouched and remains the production path.
+4. The new engine runs `EXECUTION_MODE=shadow` (throwaway key) until the human decides otherwise. The live bot remains the production path **and is held to the same invariants** (owner decision 2026-10-07): compliance quick wins go into it as small reviewed PRs (audit §6), deployed only with the owner's go.
 5. Only if the new path demonstrates would-have-won rates and PnL in shadow does the human switch; legacy `mev-dex/state/search/engine` are removed afterwards, not before.
 6. Liquidations stay on the legacy stack (out of this spec); they can later consume the same market store for DEX routes.
 
@@ -130,14 +130,14 @@ shadow soak with would-have-won against actual next-round winners; per-stage p50
 - Fast Feed receipt/log JSON keys and whether it really leads the standard feed per tx (needs a ticket).
 - PGA activation date (docs say "some time after the vote"); ordering behavior must be re-checked before Phase 7.
 - Whether Fast Feed + exact local math beats co-located competitors at all: our evidence is 0/155 wins and a timing loss of ~9 queue places in 42 % of the races with tip data. The design removes known latency sources; it does not prove we can win.
-- Integer rewrite scope: every pricing/search/bid path (≈ 140 `f64` sites, audit §2) moves to `U256` in new crates; legacy keeps `f64` until retired (invariant 1 applies to the new engine only).
+- Integer rewrite scope: every pricing/search/bid path (≈ 140 `f64` sites, audit §2) moves to `U256` in new crates; the live bot is non-compliant on invariant 1 until the new stack replaces it (audit §6).
 
 ## 13. Decisions needed from the human at this gate
 
 1. **Fast Feed cost vs budget.** ≥ 17 USDG per ticket-day (F4/F8): ≈ $510/month for one connection, ≈ $1,020 for two (spec wants two). Project budget is $200 capital / ~$0 infra. Options: (a) fund tickets only for **experiments and shadow soaks** (a day at a time, $17 each); (b) fund continuously only once shadow shows it pays; (c) run Phases 2-6 against the standard feed + node only (loses the logs-in-receipt advantage; needs local execution, slower, and doubtful).
 2. **Experiment 0 (recommended before the big build):** one ticket (17 USDG), run the existing Fast Feed client in measure-only mode next to the standard feed, hash-match every tx, and record `fast_feed_arrival − standard_feed_arrival` per tx plus receipt/log shape. If the lead is ≳ 100 ms median, the premise holds and the rebuild is justified; if not, we save weeks. The bot cannot buy tickets itself (no funding of wallets): this needs your action.
 3. **Node for the correctness path and replay tests.** Spec assumes a local Nitro node. Building one is paused (cost, ~10 TiB). Alternatives: the existing Chainstack plan (async path tolerates latency; archive access and request quota unverified), or a short-lived node for the replay tests only.
-4. **Scope of the invariants file.** Stored at `docs/tasks/sequencer-first-invariants.md`; I scoped it to the new engine and listed legacy violations (audit §2). Confirm, or tell me the live bot must meet them too (would mean rewriting it).
+4. **Scope of the invariants: DECIDED 2026-10-07: they bind the live bot too.** Compliance matrix in audit §6. Open consequence: invariant 4 forbids the RPC pre-send verification that prevents phantom sends (audit §6, last paragraph), so full compliance needs the local exact path first.
 5. **Throwaway shadow key and a separate host/port** for the new engine's shadow runs (I will not create production keys, fund wallets, or change `EXECUTION_MODE`).
 
 ## 14. Next (after approval)

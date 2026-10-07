@@ -25,12 +25,14 @@ Read this file first in every session. Update at the end of every phase.
 3. **Conditional submission claims** (checks against the prior 1-2 s, rate-limited): not in the docs; bounds are an **L1** block-number window. Left as a measured experiment (Phase 12).
 4. **"A round in progress cannot be interrupted":** docs describe early block finalization when a block fills. Treat 125 ms as an upper bound.
 5. **PGA activation date** is not stated ("some time after the vote"); the repo's on-chain observation says tip-ordered since late September. Re-check before Phase 7.
-6. **Invariant 5 / "never set live" vs the existing bot**, which is live in production. Scoped: invariants bind the new engine; legacy is listed in the audit and untouched.
+6. **Invariants vs the existing live bot.** DECIDED by the owner 2026-10-07 ("all live"): the invariants bind the live bot too. Compliance matrix: audit §6 (compliant: #5, #8; partial: #2, #6; violated: #1, #3, #4, #7). Tension: invariant 4 forbids the RPC pre-send verification that stops phantom sends; full compliance needs the local exact path first.
 
 ## Open items for the human (Phase 1 gate)
 
-See `docs/design/sequencer-first.md` §13: Fast Feed ticket policy and **experiment 0** (one ticket, measure Fast Feed lead over the standard feed),
-the node for the correctness path and replay tests, confirmation of the invariants' scope, throwaway shadow key and host for shadow runs.
+See `docs/design/sequencer-first.md` §13. **Decided:** invariants scope (they bind the live bot too).
+**Still open:** Fast Feed ticket policy and **experiment 0** (one ticket, measure the Fast Feed lead over the standard feed), the node for the correctness path
+and replay tests, a throwaway shadow key and host for shadow runs, and whether to start the live-bot compliance quick wins now
+(audit §6: async metrics, off-loop refresh, `StateCorrection` events, opportunity version stamps, `EXECUTION_MODE` alias).
 
 ## What the next phase needs (Phase 2: feed clients)
 

@@ -1,11 +1,10 @@
 # Standing invariants: Arbitrum sequencer-first MEV engine
 
 (Supplied by the project owner as the `CLAUDE.md` for the sequencer-first build. Stored here so the
-repo's own `CLAUDE.md` keeps its project rules; `CLAUDE.md` links to this file. **Scope:** these
-invariants bind the new sequencer-first engine and everything written for it. The existing live bot
-(`crates/mev-engine` and friends, running on `mev-ohio`) is *legacy* and predates them: `docs/design/sequencer-first.md`
-lists where it violates each invariant, and the migration plan keeps it running until the new path passes
-its gates. Confirm this scoping at the Phase 1 gate.)
+repo's own `CLAUDE.md` keeps its project rules; `CLAUDE.md` links to this file. **Scope (decided by the owner
+2026-10-07, "all live"):** these invariants bind **everything**, including the bot that is live on `mev-ohio`.
+The live bot predates them; `docs/design/audit-sequencer-first.md` §6 is the compliance matrix (status per invariant,
+remediation, and what blocks it). Changes to the running bot are made in small reviewed PRs and deployed only with the owner's go.)
 
 The full build spec lives in `docs/tasks/sequencer-first-engine.md`; progress lives in
 `docs/PROGRESS.md`. Read both at the start of each session before doing anything.
