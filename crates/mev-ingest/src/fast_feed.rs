@@ -112,6 +112,17 @@ pub fn decode(text: &str, received: Instant) -> Result<FastFeedTx> {
     })
 }
 
+/// The JSON text carried by a data frame: Fast Feed messages arrive in **binary** frames (docs),
+/// text frames are accepted as well. Anything else (ping, pong, close) carries no message.
+pub fn frame_text(msg: &tokio_tungstenite::tungstenite::Message) -> Option<String> {
+    use tokio_tungstenite::tungstenite::Message;
+    match msg {
+        Message::Text(t) => Some(t.to_string()),
+        Message::Binary(b) => String::from_utf8(b.to_vec()).ok(),
+        _ => None,
+    }
+}
+
 /// What a message says about stream continuity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Continuity {
@@ -212,10 +223,31 @@ pub async fn run(
     out: mpsc::UnboundedSender<FastFeedTx>,
     stats: Arc<FastFeedStats>,
 ) {
+    run_with_samples(url, api_key, out, stats, None).await
+}
+
+/// `run`, additionally forwarding every raw message text to `samples` (recorded as test fixtures).
+pub async fn run_with_samples(
+    url: String,
+    api_key: String,
+    out: mpsc::UnboundedSender<FastFeedTx>,
+    stats: Arc<FastFeedStats>,
+    samples: Option<mpsc::UnboundedSender<String>>,
+) {
     let mut backoff = Backoff::new(Duration::from_millis(250), Duration::from_secs(30));
     let mut gaps = GapDetector::default();
     while !out.is_closed() {
-        match stream_once(&url, &api_key, &out, &stats, &mut gaps, &mut backoff).await {
+        match stream_once(
+            &url,
+            &api_key,
+            &out,
+            &stats,
+            &mut gaps,
+            &mut backoff,
+            &samples,
+        )
+        .await
+        {
             Ok(()) => return,
             Err(e) => {
                 stats.reconnects.fetch_add(1, Relaxed);
@@ -235,6 +267,7 @@ async fn stream_once(
     stats: &FastFeedStats,
     gaps: &mut GapDetector,
     backoff: &mut Backoff,
+    samples: &Option<mpsc::UnboundedSender<String>>,
 ) -> Result<()> {
     use futures::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::HeaderValue};
@@ -256,15 +289,24 @@ async fn stream_once(
             .context("fast feed: stream ended")?
             .context("fast feed: read error")?;
         let received = Instant::now();
-        let text = match msg {
-            Message::Text(t) => t,
+        match &msg {
             Message::Ping(p) => {
-                ws.send(Message::Pong(p)).await.ok();
+                ws.send(Message::Pong(p.clone())).await.ok();
                 continue;
             }
             Message::Close(_) => anyhow::bail!("fast feed closed by server"),
-            _ => continue,
+            _ => {}
+        }
+        // The docs: "a JSON object inside a binary WebSocket frame". Text frames are accepted too.
+        let Some(text) = frame_text(&msg) else {
+            if matches!(msg, Message::Binary(_) | Message::Text(_)) {
+                stats.decode_errors.fetch_add(1, Relaxed);
+            }
+            continue;
         };
+        if let Some(s) = samples {
+            let _ = s.send(text.clone());
+        }
         let tx = match decode(&text, received) {
             Ok(t) => t,
             Err(_) => {
@@ -306,6 +348,26 @@ mod tests {
                              "receipt": { "status": "0x1" } }
         })
         .to_string()
+    }
+
+    #[test]
+    fn json_in_a_binary_frame_is_read_like_text() {
+        use tokio_tungstenite::tungstenite::Message;
+        let body = msg(512_000_000.into(), 3.into());
+        let bin =
+            frame_text(&Message::Binary(body.clone().into_bytes().into())).expect("binary frame");
+        let txt = frame_text(&Message::Text(body.clone().into())).expect("text frame");
+        assert_eq!(bin, body);
+        assert_eq!(txt, body);
+        assert!(
+            decode(&bin, Instant::now()).is_ok(),
+            "a binary frame decodes"
+        );
+        assert!(frame_text(&Message::Ping(vec![1].into())).is_none());
+        assert!(
+            frame_text(&Message::Binary(vec![0xff, 0xfe].into())).is_none(),
+            "not UTF-8"
+        );
     }
 
     #[test]

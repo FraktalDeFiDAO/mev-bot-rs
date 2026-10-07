@@ -23,6 +23,7 @@ Read this file first in every session. Update at the end of every phase.
 - **Wave 1 shipped in PR "compliance wave 1" (DECISIONS #78):** async metrics, background maintenance, guarded refresh + `state_correction` events, opportunity version stamps, `EXECUTION_MODE`, stub check.
   Verified by unit tests (metrics burst/drop, version bump semantics, refresh vs newer event), `scripts/check.sh`, and `scripts/test-e2e-crash.sh` (5/5 in 4 s).
 - **Wave 2 (next, no new money/hardware needed):** pool busy-marking review (#6), per-pool confidence from read failures (#7 interim), correction reason classification.
+- **Experiment 0 tooling ready (DECISIONS #80, `docs/runbooks/fast-feed-experiment.md`):** `mev-feedlead`, `scripts/fast-feed-ticket.sh`, Fast Feed client fixed for binary frames and covered by a mock-server test. Waiting on the operator to buy one ticket (next round starts 2026-10-08 17:00 UTC; a ticket bought now is active then).
 - **Blocked on human decisions:** Fast Feed ticket (experiment 0), node for replay/reconciliation, shadow key + host. Phases 2+ proceed with recorded fixtures where they can.
 
 ## Conflicts between the spec and verified facts (recorded, design adapted)
