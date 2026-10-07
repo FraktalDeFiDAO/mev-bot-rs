@@ -4,9 +4,9 @@
 
 use std::collections::HashMap;
 
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{Address, B256, Bytes, U256, keccak256};
 use anyhow::Result;
-use mev_bindings::IUniswapV3Pool;
+use mev_bindings::{IPoolManager, IUniswapV3Pool, decode_v4_slot0, v4_slot_plus, v4_state_slot};
 use mev_dex::{Pool, PoolState, TickMap, tick_spacing};
 use mev_rpc::{Rpc, call};
 use mev_types::PoolKind;
@@ -54,66 +54,187 @@ fn current_tick(pool: &Pool) -> Option<i32> {
     (sqrt_price > 0.0).then(|| ((sqrt_price * sqrt_price).ln() / 1.0001f64.ln()).floor() as i32)
 }
 
-/// Tick maps for the V3-style pools in `pools` (others are skipped). A pool whose reads fail is
-/// left out and keeps the bucket model.
+/// A mapping slot: `keccak256(key (sign-extended to 32 bytes) ++ slot)`.
+pub fn mapping_slot(key: i32, slot: B256) -> B256 {
+    let mut buf = [if key < 0 { 0xff } else { 0 }; 64];
+    buf[28..32].copy_from_slice(&key.to_be_bytes());
+    buf[32..].copy_from_slice(slot.as_slice());
+    keccak256(buf)
+}
+
+/// `liquidityNet` of a V4 `TickInfo` first word: `liquidityGross` in the low 128 bits, the signed
+/// `liquidityNet` in the high 128.
+pub fn v4_liquidity_net(word: &[u8]) -> Option<f64> {
+    let raw = i128::from_be_bytes(word.get(..16)?.try_into().ok()?);
+    Some(raw as f64)
+}
+
+/// How a pool's ticks are read: its own contract (V3-style) or the V4 PoolManager's storage.
+#[derive(Clone, Copy)]
+enum Style {
+    V3,
+    V4 {
+        manager: Address,
+        base: B256,
+        flipped: bool,
+    },
+}
+
+struct Plan {
+    pool: Address,
+    style: Style,
+    spacing: i32,
+    lo: i32,
+    hi: i32,
+    words: Vec<i32>,
+}
+
+impl Plan {
+    fn slot0_call(&self) -> (Address, Bytes) {
+        match self.style {
+            Style::V3 => call(self.pool, IUniswapV3Pool::slot0Call {}),
+            Style::V4 { manager, base, .. } => {
+                call(manager, IPoolManager::extsloadCall { slot: base })
+            }
+        }
+    }
+
+    fn bitmap_call(&self, word: i32) -> (Address, Bytes) {
+        match self.style {
+            Style::V3 => call(
+                self.pool,
+                IUniswapV3Pool::tickBitmapCall {
+                    wordPosition: word as i16,
+                },
+            ),
+            Style::V4 { manager, base, .. } => call(
+                manager,
+                IPoolManager::extsloadCall {
+                    slot: mapping_slot(word, v4_slot_plus(base, 5)),
+                },
+            ),
+        }
+    }
+
+    fn tick_call(&self, tick: i32) -> (Address, Bytes) {
+        match self.style {
+            Style::V3 => call(
+                self.pool,
+                IUniswapV3Pool::ticksCall {
+                    tick: tick.try_into().expect("tick fits int24"),
+                },
+            ),
+            Style::V4 { manager, base, .. } => call(
+                manager,
+                IPoolManager::extsloadCall {
+                    slot: mapping_slot(tick, v4_slot_plus(base, 4)),
+                },
+            ),
+        }
+    }
+
+    /// `(sqrt price, tick)` as the pool reports them, in the pool's own orientation.
+    fn parse_slot0(&self, ret: &[u8]) -> Option<(f64, i32)> {
+        match self.style {
+            Style::V3 => slot0_hint(ret),
+            Style::V4 { .. } => {
+                let (sqrt, tick, _, _) = decode_v4_slot0(B256::try_from(ret.get(..32)?).ok()?);
+                Some((mev_dex::sqrt_price_from_x96(f64::from(sqrt)), tick))
+            }
+        }
+    }
+
+    fn parse_net(&self, ret: &[u8]) -> Option<f64> {
+        match self.style {
+            Style::V3 => liquidity_net(ret),
+            Style::V4 { .. } => v4_liquidity_net(ret),
+        }
+    }
+
+    /// Our model's view of what the pool reported: V4 pools whose token order we flipped are mirrored
+    /// (price inverted, `tick -> -tick`, `liquidityNet -> -liquidityNet`; the price sits in
+    /// `(b^-(t+1), b^-t]` so the tick containing it is `-t - 1`).
+    fn finish(&self, ticks: Vec<(i32, f64)>, hint: (f64, i32)) -> TickMap {
+        let flipped = matches!(self.style, Style::V4 { flipped: true, .. });
+        if !flipped {
+            return TickMap {
+                ticks,
+                lo: self.lo,
+                hi: self.hi,
+                hint: Some(hint),
+            };
+        }
+        let mut ticks: Vec<(i32, f64)> = ticks.into_iter().map(|(t, n)| (-t, -n)).collect();
+        ticks.sort_by_key(|(t, _)| *t);
+        TickMap {
+            ticks,
+            lo: -self.hi,
+            hi: -self.lo,
+            hint: Some((1.0 / hint.0, -hint.1 - 1)),
+        }
+    }
+}
+
+/// Tick maps for the concentrated-liquidity pools in `pools`: V3-style (Uniswap V3, PancakeV3) and
+/// Uniswap V4. Others are skipped; a pool whose reads fail is left out and keeps the bucket model.
 pub async fn load_ticks(
     rpc: &Rpc,
     pools: &[Pool],
     half_window: i32,
 ) -> Result<HashMap<Address, TickMap>> {
-    struct Plan {
-        pool: Address,
-        spacing: i32,
-        lo: i32,
-        hi: i32,
-        words: Vec<i32>,
-    }
     let mut plans = Vec::new();
     for p in pools {
-        if !matches!(
-            p.info.kind,
-            PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. }
-        ) {
-            continue;
-        }
-        let Some(tick) = current_tick(p) else {
-            continue;
+        let (style, tick) = match p.info.kind {
+            PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. } => match current_tick(p) {
+                Some(t) => (Style::V3, t),
+                None => continue,
+            },
+            // The V4 tick comes from its own slot0 below; this one only places the window, in the
+            // pool's orientation (mirrored back for flipped pools).
+            PoolKind::UniV4 {
+                id,
+                manager,
+                flipped,
+                ..
+            } => match current_tick(p) {
+                Some(t) => (
+                    Style::V4 {
+                        manager,
+                        base: v4_state_slot(id),
+                        flipped,
+                    },
+                    if flipped { -t } else { t },
+                ),
+                None => continue,
+            },
+            _ => continue,
         };
         let spacing = tick_spacing(&p.info.kind) as i32;
         let (words, lo, hi) = window(tick, spacing, half_window);
         plans.push(Plan {
             pool: p.info.address,
+            style,
             spacing,
             lo,
             hi,
             words,
         });
     }
-    // Round 1: every bitmap word.
+    // Round 1: slot0 and every bitmap word.
     let calls: Vec<_> = plans
         .iter()
         .flat_map(|pl| {
-            let slot0 = call(pl.pool, IUniswapV3Pool::slot0Call {});
-            let words = pl.words.iter().map(|w| {
-                call(
-                    pl.pool,
-                    IUniswapV3Pool::tickBitmapCall {
-                        wordPosition: *w as i16,
-                    },
-                )
-            });
-            std::iter::once(slot0).chain(words)
+            std::iter::once(pl.slot0_call()).chain(pl.words.iter().map(|w| pl.bitmap_call(*w)))
         })
         .collect();
     let res = rpc.multicall(&calls).await?;
-    // Round 2: `ticks(t)` for every set bit; a pool with any failed bitmap read is dropped.
+    // Round 2: the tick info of every set bit; a pool with any failed read is dropped.
     let mut i = 0;
-    let mut wanted: Vec<(usize, i32)> = Vec::new(); // (plan index, tick)
+    let mut wanted: Vec<(usize, i32)> = Vec::new();
     let mut broken = vec![false; plans.len()];
     let mut hints: Vec<Option<(f64, i32)>> = vec![None; plans.len()];
     for (pi, pl) in plans.iter().enumerate() {
-        // slot0: sqrtPriceX96 (word 0) and the pool's own tick (word 1).
-        hints[pi] = res[i].as_ref().and_then(|b| slot0_hint(b));
+        hints[pi] = res[i].as_ref().and_then(|b| pl.parse_slot0(b));
         broken[pi] = hints[pi].is_none();
         i += 1;
         for w in &pl.words {
@@ -133,39 +254,24 @@ pub async fn load_ticks(
     wanted.retain(|(pi, _)| !broken[*pi]);
     let calls: Vec<_> = wanted
         .iter()
-        .map(|(pi, t)| {
-            call(
-                plans[*pi].pool,
-                IUniswapV3Pool::ticksCall {
-                    tick: (*t).try_into().expect("tick fits int24"),
-                },
-            )
-        })
+        .map(|(pi, t)| plans[*pi].tick_call(*t))
         .collect();
     let res = rpc.multicall(&calls).await?;
     let mut maps: HashMap<usize, Vec<(i32, f64)>> = HashMap::new();
     for ((pi, t), r) in wanted.iter().zip(&res) {
-        match r.as_ref().and_then(|b| liquidity_net(b)) {
+        match r.as_ref().and_then(|b| plans[*pi].parse_net(b)) {
             Some(net) => maps.entry(*pi).or_default().push((*t, net)),
             None => broken[*pi] = true,
         }
     }
     let mut out = HashMap::new();
     for (pi, pl) in plans.iter().enumerate() {
-        if broken[pi] {
+        let (false, Some(hint)) = (broken[pi], hints[pi]) else {
             continue;
-        }
+        };
         let mut ticks = maps.remove(&pi).unwrap_or_default();
         ticks.sort_by_key(|(t, _)| *t);
-        out.insert(
-            pl.pool,
-            TickMap {
-                ticks,
-                lo: pl.lo,
-                hi: pl.hi,
-                hint: hints[pi],
-            },
-        );
+        out.insert(pl.pool, pl.finish(ticks, hint));
     }
     Ok(out)
 }
@@ -203,5 +309,47 @@ mod tests {
         ret[32..64].copy_from_slice(&[0xff; 32]); // -1 sign-extended
         assert_eq!(liquidity_net(&ret), Some(-1.0));
         assert_eq!(liquidity_net(&[0u8; 40]), None);
+    }
+
+    #[test]
+    fn mapping_slots_sign_extend_negative_keys() {
+        let base = B256::repeat_byte(7);
+        // keccak(key ++ slot) with key = -1 as 32 bytes of 0xff.
+        let mut buf = [0xffu8; 64];
+        buf[32..].copy_from_slice(base.as_slice());
+        assert_eq!(mapping_slot(-1, base), keccak256(buf));
+        let mut buf = [0u8; 64];
+        buf[31] = 5;
+        buf[32..].copy_from_slice(base.as_slice());
+        assert_eq!(mapping_slot(5, base), keccak256(buf));
+    }
+
+    #[test]
+    fn v4_liquidity_net_is_the_signed_high_half() {
+        let mut w = [0u8; 32];
+        w[..16].copy_from_slice(&(-7i128).to_be_bytes());
+        w[16..].copy_from_slice(&9u128.to_be_bytes()); // gross
+        assert_eq!(v4_liquidity_net(&w), Some(-7.0));
+    }
+
+    #[test]
+    fn a_flipped_pool_is_mirrored() {
+        let pl = Plan {
+            pool: Address::ZERO,
+            style: Style::V4 {
+                manager: Address::ZERO,
+                base: B256::ZERO,
+                flipped: true,
+            },
+            spacing: 10,
+            lo: -100,
+            hi: 300,
+            words: vec![],
+        };
+        // Position [-20, 60) with L = 5 (+5 at -20, -5 at 60); the pool's price is 2.0 at tick 40.
+        let m = pl.finish(vec![(-20, 5.0), (60, -5.0)], (2.0, 40));
+        assert_eq!(m.ticks, vec![(-60, 5.0), (20, -5.0)]);
+        assert_eq!((m.lo, m.hi), (-300, 100));
+        assert_eq!(m.hint, Some((0.5, -41)));
     }
 }

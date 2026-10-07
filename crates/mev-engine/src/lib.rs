@@ -285,20 +285,7 @@ impl Engine {
                 mev_discovery::v4::discover(&cfg, v4, &data_dir.join("v4_pools.json")).await,
             );
         }
-        let mut pools = mev_discovery::load_pools(&rpc, infos).await?;
-        if cfg.ticks.enabled {
-            match mev_discovery::ticks::load_ticks(&rpc, &pools, cfg.ticks.window_ticks).await {
-                Ok(mut maps) => {
-                    info!(pools = maps.len(), "tick maps loaded");
-                    for p in &mut pools {
-                        if let Some(m) = maps.remove(&p.info.address) {
-                            p.ticks = Some(std::sync::Arc::new(m));
-                        }
-                    }
-                }
-                Err(e) => warn!(error = %e, "tick maps unavailable, using the one-bucket model"),
-            }
-        }
+        let pools = mev_discovery::load_pools(&rpc, infos).await?;
         let tokens: Vec<Address> = pools
             .iter()
             .flat_map(|p| [p.info.token0, p.info.token1])
@@ -309,7 +296,7 @@ impl Engine {
             .collect();
         let decimals = mev_discovery::token_decimals(&rpc, &tokens).await?;
         let usd_decimals = *decimals.get(&usd).context("USD token decimals")?;
-        let store = mev_discovery::build_store(
+        let mut store = mev_discovery::build_store(
             pools,
             cfg.min_pool_liquidity_usd,
             usd,
@@ -318,6 +305,13 @@ impl Engine {
         );
         if store.is_empty() {
             bail!("no pools passed discovery");
+        }
+        // Tick maps only for the pools that passed the liquidity filter.
+        if cfg.ticks.enabled {
+            match mev_discovery::refresh_ticks(&rpc, &mut store, cfg.ticks.window_ticks).await {
+                Ok(n) => info!(pools = n, "tick maps loaded"),
+                Err(e) => warn!(error = %e, "tick maps unavailable, using the one-bucket model"),
+            }
         }
 
         let loan_tokens: Vec<Address> = cfg

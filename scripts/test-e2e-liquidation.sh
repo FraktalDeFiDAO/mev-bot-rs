@@ -11,6 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.foundry/bin:$HOME/.cargo/bin:$PATH"
+export ETH_RPC_TIMEOUT=240   # a cold fork fetches state from the upstream node on first touch
 if [[ -z ${E2E_FORK_URL:-} && -f .env ]]; then
   E2E_FORK_URL=$(grep -E '^ARBITRUM_HTTP_URL=' .env | head -1 | cut -d= -f2-)
 fi
@@ -31,8 +32,16 @@ AAVE_ORACLE=0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7
 pids=()
 cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; rm -rf "$WORK"; }
 trap cleanup EXIT
-fail() { echo "E2E-LIQ FAIL: $*"; echo "--- bot log tail:"; tail -30 "$WORK/bot.log" 2>/dev/null || true; exit 1; }
-send() { cast send "$@" --rpc-url "$RPC" >/dev/null || fail "tx failed: $*"; }
+fail() { echo "E2E-LIQ FAIL: $*"; echo "--- executor ${EXEC:-unset}: $(cast code "${EXEC:-0x0}" --rpc-url "$RPC" 2>&1 | wc -c) chars of code; owner: $(cast call "${EXEC:-0x0}" "owner()(address)" --rpc-url "$RPC" 2>&1 | tail -1)"; echo "--- bot log tail:"; tail -30 "$WORK/bot.log" 2>/dev/null || true; exit 1; }
+# `cast send` exits 0 even when the transaction reverts, so read the receipt status; retry a transient failure.
+send() {
+  local out try
+  for try in 1 2 3; do
+    out=$(cast send "$@" --rpc-url "$RPC" 2>&1) && ! grep -qE '^status +0' <<<"$out" && return 0
+    sleep 2
+  done
+  fail "tx failed after 3 tries: $* :: $(tail -2 <<<"$out" | tr '\n' ' ')"
+}
 
 echo "[1/6] anvil fork (chain id 31337)"
 anvil --fork-url "$FORK_URL" --chain-id 31337 --port "$PORT" --silent &
@@ -64,10 +73,11 @@ src = src.replace("chain_id = 42161", "chain_id = 31337")
 src = re.sub(r'(?m)^sequencer_rpc = .*$', '', src)
 src = re.sub(r'(?m)^sequencer_feed = .*$', '', src)
 src = re.sub(r'(?ms)^pairs = \[.*?\n\]\n', 'pairs = [["WETH", "USDC"]]\n', src)
-for section in ("auto_discovery", "compound_v3", "morpho", "fluid"):
-    src = re.sub(rf'(?ms)^\[{section}\]\nenabled = true', f'[{section}]\nenabled = false', src)
+for section in ("auto_discovery", "compound_v3", "morpho", "fluid", "uniswap_v4", "ticks", "atlas", "presim"):
+    src = re.sub(rf'(?ms)^(\[{section}\]\n(?:#[^\n]*\n)*)enabled = true', r'\1enabled = false', src)
 src = re.sub(r'(?m)^scan_rpc = .*$', f'scan_rpc = "{rpc}"', src)
 src = re.sub(r'(?m)^sweep_rpc = .*$', f'sweep_rpc = "{rpc}"', src)
+src = re.sub(r'(?m)^sweep_rpc_fallbacks = .*$', 'sweep_rpc_fallbacks = []', src)   # public mainnet RPCs would answer without the fork's state
 src = re.sub(r'(?m)^sweep_secs = .*$', 'sweep_secs = 5', src)
 src = re.sub(r'(?m)^fallback_poll_secs = .*$', 'fallback_poll_secs = 2', src)
 src = re.sub(r'(?m)^from_block = 7700000.*$', f'from_block = {fork_block - 5}', src)
@@ -76,12 +86,14 @@ keep = [b for b in re.split(r'(?m)^(?=\[\[dexes\]\])', src) if not b.startswith(
 open(out, "w").write("".join(keep))
 PY
 ! grep -q "sequencer_rpc" "$WORK/e2e.toml" || fail "sequencer broadcast must be removed"
-env -i PATH="$PATH" HOME="$HOME" NO_COLOR=1 RUST_LOG=info \
+# Run from a scratch dir: the bot loads ./.env, whose extra mainnet endpoints would leak into the fork test.
+ROOT="$PWD"
+(cd "$WORK" && exec env -i PATH="$PATH" HOME="$HOME" NO_COLOR=1 RUST_LOG=info \
   ARBITRUM_HTTP_URL="$RPC" ARBITRUM_WS_URL="ws://127.0.0.1:$PORT" \
   PRIVATE_KEY="$OWNER_KEY" EXECUTOR_ADDRESS="$EXEC" PROFIT_RECEIVER="$RECEIVER" \
-  ./target/release/mev-bot --mode live --config "$WORK/e2e.toml" --data-dir "$WORK/data" > "$WORK/bot.log" 2>&1 &
+  "$ROOT/target/release/mev-bot" --mode live --config "$WORK/e2e.toml" --data-dir "$WORK/data" > "$WORK/bot.log" 2>&1) &
 pids+=($!)
-for _ in $(seq 240); do grep -q 'sweep protocol="aave-v3" accounts=[1-9]' "$WORK/bot.log" && break; sleep 1; done
+for _ in $(seq 900); do grep -q 'sweep protocol="aave-v3" accounts=[1-9]' "$WORK/bot.log" && break; sleep 1; done
 grep -q 'sweep protocol="aave-v3" accounts=[1-9]' "$WORK/bot.log" || fail "bot never indexed the borrower"
 
 echo "[5/6] crash ETH/USD to 70% via a mock price source"
@@ -96,7 +108,7 @@ python3 -c "import sys; sys.exit(0 if int('$HF') < 10**18 else 1)" || fail "posi
 BEFORE=$(cast call "$USDC" 'balanceOf(address)(uint256)' "$RECEIVER" --rpc-url "$RPC" | cut -d' ' -f1)
 
 echo "[6/6] wait for the bot to liquidate"
-for _ in $(seq 120); do grep -q '"landed"' "$WORK/data/arbitrum/events-"*.jsonl 2>/dev/null && break; sleep 1; done
+for _ in $(seq 300); do grep -q '"landed"' "$WORK/data/arbitrum/events-"*.jsonl 2>/dev/null && break; sleep 1; done
 EV=$(cat "$WORK/data/arbitrum/events-"*.jsonl 2>/dev/null || true)
 echo "$EV" | grep -q '"liq_sim_ok"' || fail "no successful liquidation simulation ($(echo "$EV" | grep -o '"kind":"liq_[a-z_]*"' | sort | uniq -c | tr '\n' ' '))"
 echo "$EV" | grep '"sent"' | grep -q '"liquidation"' || fail "bot did not send the liquidation"

@@ -4,43 +4,39 @@ Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~4
 
 ---
 
-**Updated:** 2026-10-05
-**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot`, build 9d952c0 (main through #33). It
-still sends **zero-tip** transactions: PGA bidding lives on branch
-`claude/arbitrum-timeboost-successor-cihu0f` (not merged, no PR yet, nothing deployed from it).
-**Built, not enabled:** batching (`ArbExecutor.batch`, `[batch]`, needs executor redeploy + `executor_batch = true`) and the Atlas solver (`[atlas]`, runbook `docs/research/ATLAS.md`, observing since 2026-10-06).
-**Built, awaiting executor redeploy:** Uniswap V4 hops (`executor_v4`, `[uniswap_v4]`; routes are only logged as `v4_candidate` until then) together with `batch`. Redeploy with `scripts/deploy-executor.sh --redeploy`, then set `executor_batch = true` and `executor_v4 = true`.
-**Executor:** `0xb793f66e4e3D1fFfd7c095E3AC2D863BfBB336A2` (flash swaps + `liquidateViaAave`; 8
-lending targets). PR #34 (enable `executor_aave_flash`) open. Hot wallet ~0.006 ETH.
-**Deploy:** `scripts/deploy.sh live --yes` builds from the working tree: don't switch branches while
-it runs. The user merges PRs and runs `deploy-executor.sh` in a real terminal (it prompts).
-**RPC:** keyed Chainstack endpoints in `.env` (`ARBITRUM_SWEEP_URL_n`, `_PRESIM_URL_n`,
-`_WS_FALLBACK_n`).
+**Updated:** 2026-10-07
+**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot` (sole host; Contabo stopped, rollback only),
+build from `main` (see `git log`; deploy tags `deploy-YYYYMMDD-HHMMSS`). Hot wallet ~0.005 ETH (low).
+**Executor:** `0x17357E33012e8c05E654a7D1CC7D9dedd6B63acf` (redeployed 2026-10-06: V4 hops, `batch`,
+`liquidateViaAave`, flash swaps). `executor_v4 = true`, `executor_batch = true`; `[batch] enabled = false`.
+**On:** PGA bidding + per-route tip books, win-rate gate (#54), sim back-off for failed routes (120 s),
+V4 (79 hookless pools, `presimulate = true`, `ModifyLiquidity` applied), tick-aware V3/Pancake/V4
+pricing (`[ticks]`, window ±800, reload 300 s), triangles (~62k cycles), V4 race detection.
+**Observe-only:** Atlas solver (`[atlas] enabled, bid=false`; needs ~0.1 ETH bond, `docs/research/ATLAS.md`).
+**Deploy:** `scripts/deploy.sh live --yes` builds from the working tree (stash `docs/knowledge/` first;
+run in background, it takes 10-15 min). The user merges PRs and runs `deploy-executor.sh` himself.
+**Ops:** `scripts/report.sh` (PnL, AWS spend, health), `scripts/watchdog.sh` (on the host: container,
+heartbeat, kill switch, wallet gas, cap events; optional webhook file `data/arbitrum/alert_webhook`),
+`scripts/test-e2e-crash.sh` (N borrowers liquidated in one crash, batching on).
+**RPC:** keyed Chainstack endpoints in `.env`; arb1 public RPC rate-limits the dev IP (Ohio is fine).
 
-## Ordering: Priority Gas Auction (DECISIONS #59)
+## Facts that decide what to build
 
-Arbitrum One orders each 125 ms round (2 per 250 ms block) by effective priority fee, ties by
-arrival; Timeboost is gone. Verified on-chain (tip ordering 3.4:1 end of September vs 0.9:1 mid
-September). Our 40 reverted arbs tipped 0; txs ahead of them tipped 0.001–0.26 gwei. The branch adds:
-- `mev_risk::bid`: `BidPolicy` (≤ 30 % of net, ≤ $0.25/tx, never net < 0), `TipBook` (competition
-  from race-report winner tips), `TipBudget` ($0.50/min, $2/day).
-- `mev-exec`: `Fees` on every tx (explicit `maxPriorityFeePerGas`, `maxFee ≥ tip`).
-- `mev-engine`: bid at submission for arbs, backruns, simulated liquidations; on-chain `minProfit`
-  includes the tip; metrics (bids placed/skipped/won/lost, tip $, sends within/over one round).
-- `mev_ingest::fast_feed`: paid feed client (off; `ARBITRUM_FAST_FEED_KEY`), merged and deduped.
-- `mev_sim::pga` + `pga_replay` test; `mev-pnl` (net PnL per strategy after tips).
+- Results so far: ~180 landed sends, 0 wins, ~$4–5 gas+tips; net PnL negative (see `report.sh`).
+  Arbitrum orders each 125 ms round by priority fee; we land in the winners' round and lose on tips.
+- Real arb edges are $0.03–$0.8 and contested; the thin-pool "edges" were phantoms (DECISIONS #73).
+- Calm days have ~no liquidations reachable without the Atlas auction; crash days are the upside.
+- AWS: usage ≈ credits (net $0); Chainstack $49/mo is the real fixed cost. The stopped Nitro node's EBS
+  volumes live in another account (not visible from profile `mev-bot`): user to confirm they're deleted.
 
-## User goal
+## Open (needs the user)
 
-Profit enough for own RPC nodes (~$800/mo), $200/mo tools, living costs. Status: no profit yet.
-Calm days have ~no liquidations; crash days are large (DECISIONS #51).
+1. Atlas bond (~0.1 ETH) to bid on auctions; wallet top-up (watchdog alerts below 0.003 ETH).
+2. `[batch] enabled`: run `scripts/test-e2e-crash.sh` first, then decide.
+3. Fast Feed key; a second host only once there is profit to protect.
+4. Stopped-node disks and the `docs/knowledge/` untracked churn.
 
-## Next
+## Next (engineering)
 
-1. User: review the PGA branch; PR when asked. Then shadow-run it (default mode stays shadow),
-   compare bid/skip counts, then live.
-2. Tune from data: win rate vs tip (`winner_tip_wei` in race reports); round latency (sends take
-   ~150–250 ms from trigger: usually over one round).
-3. #34 merge → deploy (Aave-funded liquidations).
-4. Open: activation date, minimum priority fee and replacement rules aren't in the primary sources.
-5. Audit items #54–#57 (win-rate gating, off-loop awaits, shorter in-flight wait, per-venue EV).
+Watch for the first profitable landed arb or a V4 race with a known winner (`race` events);
+tune per-route bids from `route_tips`; consider tick-aware Algebra pools; liquidation census over more lenders.
