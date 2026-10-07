@@ -22,6 +22,10 @@ pub async fn pool_logs(
     let filter = Filter::new().address(pools).event_signature(vec![
         IUniswapV2Pair::Sync::SIGNATURE_HASH,
         IUniswapV3Pool::Swap::SIGNATURE_HASH,
+        // Liquidity added or removed changes active liquidity and the tick table (Uniswap V3, Pancake
+        // V3 and Algebra v1 share these signatures).
+        IUniswapV3Pool::Mint::SIGNATURE_HASH,
+        IUniswapV3Pool::Burn::SIGNATURE_HASH,
         IPancakeV3Pool::Swap::SIGNATURE_HASH,
         IPoolManager::Swap::SIGNATURE_HASH,
         IPoolManager::ModifyLiquidity::SIGNATURE_HASH,
