@@ -90,6 +90,13 @@ impl PoolStore {
         }
     }
 
+    /// Replace a pool's tick map (concentrated-liquidity pricing across tick boundaries).
+    pub fn set_ticks(&mut self, addr: &Address, ticks: mev_dex::TickMap) {
+        if let Some(p) = self.pools.get_mut(addr) {
+            p.ticks = Some(std::sync::Arc::new(ticks));
+        }
+    }
+
     pub fn set_state(&mut self, addr: &Address, state: PoolState) {
         if let Some(p) = self.pools.get_mut(addr) {
             p.state = state;
