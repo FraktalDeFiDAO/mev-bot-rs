@@ -18,60 +18,75 @@ use std::{
 };
 
 use alloy::{
-    eips::{BlockId, BlockNumberOrTag},
+    primitives::B256,
     providers::{DynProvider, Provider},
-    rpc::types::{Log, TransactionReceipt},
 };
 use futures::StreamExt;
 use mev_presim::record::TxRecorder;
 use tracing::{info, warn};
 
-/// `(kind, class)` of a log, if it is one we keep (the table lives in `mev-decode`).
-pub fn classify(log: &Log) -> Option<(&'static str, &'static str)> {
-    let t0 = log.topics().first()?;
-    mev_decode::events::classify(t0).map(|k| (k.name, k.class.as_str()))
+/// `(kind, class)` of an event with this `topic0`, if it is one we keep (the table lives in `mev-decode`).
+pub fn classify(topic0: &B256) -> Option<(&'static str, &'static str)> {
+    mev_decode::events::classify(topic0).map(|k| (k.name, k.class.as_str()))
 }
 
-/// Logs worth keeping from a receipt, as JSON, with the classes present.
-fn interesting(logs: &[Log]) -> (Vec<serde_json::Value>, Vec<&'static str>) {
+fn hex_u64(v: &serde_json::Value) -> Option<u64> {
+    u64::from_str_radix(v.as_str()?.trim_start_matches("0x"), 16).ok()
+}
+
+/// Logs worth keeping from a receipt's `logs` array, as JSON, with the classes present.
+///
+/// Receipts are read as raw JSON, not as the standard Ethereum receipt type: Arbitrum receipts include chain-specific
+/// transaction types (for example the internal system transaction, type `0x6a`) that the standard parser rejects.
+fn interesting(logs: &[serde_json::Value]) -> (Vec<serde_json::Value>, Vec<&'static str>) {
     let mut out = Vec::new();
     let mut classes: Vec<&'static str> = Vec::new();
     for l in logs {
-        let Some((kind, class)) = classify(l) else {
+        let topics: Vec<&str> = l["topics"]
+            .as_array()
+            .map(|t| t.iter().filter_map(|x| x.as_str()).collect())
+            .unwrap_or_default();
+        let Some(t0) = topics.first().and_then(|t| t.parse::<B256>().ok()) else {
+            continue;
+        };
+        let Some((kind, class)) = classify(&t0) else {
             continue;
         };
         if !classes.contains(&class) {
             classes.push(class);
         }
-        let data = l.data().data.as_ref();
+        let data = l["data"].as_str().unwrap_or("0x").trim_start_matches("0x");
         out.push(serde_json::json!({
-            "addr": format!("{:#x}", l.address()),
+            "addr": l["address"],
             "kind": kind,
-            "topics": l.topics().iter().map(|t| format!("{t:#x}")).collect::<Vec<_>>(),
-            "data": alloy::hex::encode(&data[..data.len().min(256)]),
+            "topics": topics,
+            "data": &data[..data.len().min(512)],
         }));
     }
     (out, classes)
 }
 
-/// The line for a receipt, or `None` if it is neither a recorded feed transaction nor an event we keep.
-pub fn outcome_line(r: &TransactionReceipt, feed: &TxRecorder) -> Option<serde_json::Value> {
-    let hash = format!("{:#x}", r.transaction_hash);
+/// The line for a raw receipt, or `None` if it is neither a recorded feed transaction nor an event we keep.
+pub fn outcome_line(r: &serde_json::Value, feed: &TxRecorder) -> Option<serde_json::Value> {
+    let hash = r["transactionHash"].as_str()?.to_lowercase();
     let was_candidate = feed.was_recorded(&hash);
-    let (logs, classes) = interesting(r.logs());
+    let empty = Vec::new();
+    let all_logs = r["logs"].as_array().unwrap_or(&empty);
+    let (logs, classes) = interesting(all_logs);
     if !was_candidate && logs.is_empty() {
         return None;
     }
     Some(serde_json::json!({
         "hash": hash,
-        "block": r.block_number,
-        "index": r.transaction_index,
-        "from": format!("{:#x}", r.from),
-        "to": r.to.map(|a| format!("{a:#x}")),
-        "status": r.status(),
-        "gas_used": r.gas_used,
-        "gas_price": r.effective_gas_price.to_string(),
-        "n_logs": r.logs().len(),
+        "block": hex_u64(&r["blockNumber"]),
+        "index": hex_u64(&r["transactionIndex"]),
+        "from": r["from"],
+        "to": r["to"],
+        "type": r["type"],
+        "status": hex_u64(&r["status"]).map(|s| s == 1),
+        "gas_used": hex_u64(&r["gasUsed"]),
+        "gas_price": hex_u64(&r["effectiveGasPrice"]),
+        "n_logs": all_logs.len(),
         "candidate": was_candidate,
         "classes": classes,
         "logs": logs,
@@ -87,10 +102,13 @@ struct Counters {
     empty: AtomicU64,
 }
 
-async fn fetch(ws: &DynProvider, n: u64) -> Option<Vec<TransactionReceipt>> {
+async fn fetch(ws: &DynProvider, n: u64) -> Option<Vec<serde_json::Value>> {
     for attempt in 0..4 {
         match ws
-            .get_block_receipts(BlockId::Number(BlockNumberOrTag::Number(n)))
+            .raw_request::<_, Option<Vec<serde_json::Value>>>(
+                "eth_getBlockReceipts".into(),
+                (format!("{n:#x}"),),
+            )
             .await
         {
             Ok(Some(r)) => return Some(r),
@@ -138,7 +156,7 @@ pub async fn run(ws: DynProvider, feed: Arc<TxRecorder>, out: Arc<TxRecorder>, e
                         c.blocks.fetch_add(1, Relaxed);
                         c.txs.fetch_add(receipts.len() as u64, Relaxed);
                         for r in &receipts {
-                            if !r.status() {
+                            if r["status"].as_str() != Some("0x1") {
                                 c.reverted.fetch_add(1, Relaxed);
                             }
                             if let Some(line) = outcome_line(r, &feed) {
@@ -169,29 +187,71 @@ pub async fn run(ws: DynProvider, feed: Arc<TxRecorder>, out: Arc<TxRecorder>, e
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{Address, B256, Bytes, LogData};
 
-    fn log(topic0: B256, topics_extra: usize) -> Log {
-        let mut topics = vec![topic0];
-        topics.extend(std::iter::repeat_n(B256::ZERO, topics_extra));
-        Log {
-            inner: alloy::primitives::Log {
-                address: Address::with_last_byte(7),
-                data: LogData::new_unchecked(topics, Bytes::from(vec![1u8; 32])),
-            },
-            ..Default::default()
-        }
+    fn swap_topic() -> String {
+        format!("{:#x}", mev_decode::events::kinds()[4].topic0) // swap_v3
+    }
+
+    fn receipt(hash: &str, status: &str, ty: &str, logs: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "transactionHash": hash, "blockNumber": "0x1f4", "transactionIndex": "0x3",
+            "from": "0x0000000000000000000000000000000000000001", "to": "0x0000000000000000000000000000000000000002",
+            "type": ty, "status": status, "gasUsed": "0x5208", "effectiveGasPrice": "0x989680", "logs": logs,
+        })
+    }
+
+    fn recorder(tag: &str) -> Arc<TxRecorder> {
+        let d = std::env::temp_dir().join(format!("outcomes-test-{tag}-{}", std::process::id()));
+        TxRecorder::open(d, 7).unwrap()
     }
 
     #[test]
-    fn logs_are_classified_and_unknown_ones_ignored() {
-        let swap = log(mev_decode::events::kinds()[4].topic0, 2); // swap_v3
-        let junk = log(B256::repeat_byte(0x11), 0);
-        assert_eq!(classify(&swap), Some(("swap_v3", "swap")));
-        assert_eq!(classify(&junk), None);
-        let (kept, classes) = interesting(&[swap, junk]);
+    fn swap_logs_are_kept_and_unknown_ones_ignored() {
+        let logs = serde_json::json!([
+            { "address": "0xpool", "topics": [swap_topic()], "data": "0x01" },
+            { "address": "0xother", "topics": [format!("{:#x}", B256::repeat_byte(0x11))], "data": "0x" },
+        ]);
+        let (kept, classes) = interesting(logs.as_array().unwrap());
         assert_eq!(kept.len(), 1);
         assert_eq!(classes, vec!["swap"]);
         assert_eq!(kept[0]["kind"], "swap_v3");
+    }
+
+    #[test]
+    fn an_arbitrum_internal_transaction_type_does_not_break_reading() {
+        // Type 0x6a (106) is what the standard Ethereum receipt parser rejects ("Unexpected type flag. Got 106").
+        let rec = recorder("internal");
+        let r = receipt("0xaa", "0x1", "0x6a", serde_json::json!([]));
+        assert!(
+            outcome_line(&r, &rec).is_none(),
+            "neither a candidate nor an event we keep"
+        );
+        rec.record(&serde_json::json!({ "hash": "0xaa" }));
+        let line = outcome_line(&r, &rec).expect("a recorded candidate is kept");
+        assert_eq!(line["type"], "0x6a");
+        assert_eq!(line["status"], true);
+        assert_eq!(line["gas_used"], 21000);
+        assert_eq!(line["block"], 500);
+        assert_eq!(line["index"], 3);
+        assert_eq!(line["candidate"], true);
+    }
+
+    #[test]
+    fn reverted_candidates_and_uncovered_event_emitters_are_both_recorded() {
+        let rec = recorder("both");
+        rec.record(&serde_json::json!({ "hash": "0xbb" }));
+        let reverted = receipt("0xBB", "0x0", "0x2", serde_json::json!([])); // upper-case hash still matches
+        let line = outcome_line(&reverted, &rec).unwrap();
+        assert_eq!(line["status"], false);
+        assert_eq!(line["candidate"], true);
+        let event_only = receipt(
+            "0xcc",
+            "0x1",
+            "0x2",
+            serde_json::json!([{ "address": "0xpool", "topics": [swap_topic()], "data": "0x" }]),
+        );
+        let line = outcome_line(&event_only, &rec).unwrap();
+        assert_eq!(line["candidate"], false);
+        assert_eq!(line["classes"], serde_json::json!(["swap"]));
     }
 }
