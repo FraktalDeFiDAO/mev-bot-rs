@@ -103,6 +103,9 @@ mod race;
 /// Unsimulated, so the limit is generous; unused gas isn't charged.
 /// A long-tail route's successful simulation is trusted for this long.
 const SIM_OK_TTL: Duration = Duration::from_secs(300);
+/// Presim-applied state not confirmed by a real log within this long is rolled back (a block arrives within about
+/// a second; a pending transaction that reverted or never landed leaves no log).
+const TENTATIVE_TTL: Duration = Duration::from_secs(3);
 /// A pending feed transaction's call is kept this long for verifying trades it triggers.
 const TRIGGER_CALL_KEEP: Duration = Duration::from_secs(20);
 /// A pool is re-read after a failed simulation at most this often.
@@ -613,6 +616,7 @@ impl Engine {
             tokio::time::interval(Duration::from_secs(self.cfg.ticks.refresh_secs.max(30)));
         tick_reload.tick().await; // the first tick is immediate; bootstrap just loaded them
         let mut summary = tokio::time::interval(Duration::from_secs(60));
+        let mut tentative_sweep = tokio::time::interval(Duration::from_millis(500));
         let (maint_tx, mut maint_rx) = mpsc::unbounded_channel::<Maint>();
         let busy = MaintBusy::default();
         let mut backoff = Backoff::default();
@@ -674,7 +678,7 @@ impl Engine {
                         }
                         // Same path as block logs, a block early; the real logs overwrite it.
                         for log in &pre.logs {
-                            if let Some(pool) = self.store.apply_log(log) {
+                            if let Some(pool) = self.store.apply_log_tentative(log, Instant::now()) {
                                 self.metrics.update(|c| c.presim_updates += 1);
                                 let trigger = Trigger { tx: Some(pre.tx), source: "presim", seen: pre.received };
                                 self.on_pool_update(pool, trigger, &tx_done).await;
@@ -696,6 +700,7 @@ impl Engine {
                         self.spawn_tick_reload(&maint_tx, &busy);
                     }
                     Some(m) = maint_rx.recv() => self.apply_maint(m),
+                    _ = tentative_sweep.tick() => self.roll_back_unconfirmed(),
                     _ = summary.tick() => self.log_summary(),
                     _ = &mut shutdown => {
                         info!("shutting down");
@@ -1174,6 +1179,22 @@ impl Engine {
             let _ = tx.send(Maint::Cycles { index, watch });
             flag.store(false, SeqCst);
         });
+    }
+
+    /// Presim state is applied from a *pending* transaction; if no real log confirmed it within `TENTATIVE_TTL`
+    /// (the transaction reverted or never landed) the confirmed state is restored and the miss is recorded.
+    fn roll_back_unconfirmed(&mut self) {
+        for r in self.store.expire_tentative(Instant::now(), TENTATIVE_TTL) {
+            self.record_overwrite(
+                &mev_state::Overwrite {
+                    pool: r.pool,
+                    predicted: r.tentative,
+                    actual: r.restored,
+                },
+                "presim_unconfirmed",
+                "FastFeedTxLost",
+            );
+        }
     }
 
     /// Apply a finished background task. Quick: no I/O, no enumeration.
