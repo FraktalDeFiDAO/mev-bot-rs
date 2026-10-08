@@ -45,6 +45,12 @@ pub struct RiskConfig {
     /// trades that turn out unprofitable, so a stale model costs gas, not capital.
     #[serde(default)]
     pub arb_presimulate: bool,
+    /// Speed over accuracy for live sends: skip *every* pre-send simulation (the `arb_presimulate`, inexact-route,
+    /// unvetted-route and V4 checks all stay configured but are bypassed) and send on the local model. The
+    /// executor's `minProfit` still reverts a trade that turns out unprofitable, so a wrong model costs gas, not
+    /// capital. Turn off once an own node makes the check cheap (DECISIONS #88).
+    #[serde(default)]
+    pub fast_send: bool,
     /// Transactions in flight at once (arbitrages on disjoint pools). Default 1.
     #[serde(default = "default_max_concurrent_sends")]
     pub max_concurrent_sends: u32,
@@ -698,7 +704,11 @@ mod tests {
         );
         assert!(
             c.risk.arb_presimulate,
-            "live arbs are simulated before sending: with tick maps most routes count as exact"
+            "the pre-send simulation stays configured; fast_send bypasses it while there is no own node"
+        );
+        assert!(
+            c.risk.fast_send,
+            "live sends skip the pre-send eth_call (speed over accuracy, DECISIONS #88)"
         );
         assert!(
             c.pga.market_quantile < c.pga.competition_quantile && c.pga.route_min_observations >= 1,

@@ -1436,12 +1436,14 @@ impl Engine {
         // (the race is decided in ~100s of ms). Shadow always simulates to keep measuring it.
         // Live sends on the model only when it is exact for this route (no V3 tick crossed);
         // otherwise the executor eth_call confirms it first (a crossed tick can mean less output).
+        // `risk.fast_send` bypasses all of those checks (they stay configured for when an own node makes them cheap).
         let presimulate = !self.sending(true)
-            || self.cfg.risk.arb_presimulate
-            || !opp.exact
-            || self.unvetted(&opp, key)
-            || (self.cfg.uniswap_v4.as_ref().is_some_and(|v| v.presimulate)
-                && opp.hops.iter().any(|h| matches!(h.kind, 3 | 4)));
+            || (!self.cfg.risk.fast_send
+                && (self.cfg.risk.arb_presimulate
+                    || !opp.exact
+                    || self.unvetted(&opp, key)
+                    || (self.cfg.uniswap_v4.as_ref().is_some_and(|v| v.presimulate)
+                        && opp.hops.iter().any(|h| matches!(h.kind, 3 | 4)))));
         let (profit_usd, gas) = if presimulate {
             self.metrics.update(|c| c.simulated += 1);
             // A trade triggered by a pending feed transaction only exists once that transaction has
