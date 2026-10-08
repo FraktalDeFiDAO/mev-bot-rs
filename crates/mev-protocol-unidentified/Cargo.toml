@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-unidentified"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Two unidentified swap contracts that account for most pool-moving feed transactions (decoded from landed transactions)"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-compound-v3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Compound III (Comet): absorb events and absorb calldata"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

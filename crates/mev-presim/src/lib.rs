@@ -331,10 +331,12 @@ fn tx_line(
             "pool": match &s.pool {
                 decode::PoolRef::Address(a) => format!("{a:#x}"),
                 decode::PoolRef::Pair { token_a, token_b, fee } => format!("{token_a:#x}/{token_b:#x}/{fee}"),
+                decode::PoolRef::PairV2 { token_a, token_b } => format!("v2:{token_a:#x}/{token_b:#x}"),
             },
             "token_in": format!("{:#x}", s.token_in),
             "amount_in": s.amount_in.to_string(),
             "limit_x96": s.sqrt_limit_x96.map(|l| l.to_string()),
+            "hops": s.hops,
         })
     });
     serde_json::json!({

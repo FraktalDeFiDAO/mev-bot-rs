@@ -6,7 +6,7 @@
 //!   mev-decode feed [--url wss://arb1.arbitrum.io/feed] [--limit N] [--decoded-only]
 
 use alloy::primitives::{Address, U256};
-use mev_decode::{Decoded, PoolRef, SwapIntent, events, known_contract};
+use mev_decode::{Decoded, LiquidationIntent, PoolRef, SwapIntent, events, known_contract};
 use serde_json::{Value, json};
 
 fn swap_json(s: &SwapIntent) -> Value {
@@ -15,10 +15,24 @@ fn swap_json(s: &SwapIntent) -> Value {
         "pool": match &s.pool {
             PoolRef::Address(a) => json!({ "address": format!("{a:#x}") }),
             PoolRef::Pair { token_a, token_b, fee } => json!({ "token_a": format!("{token_a:#x}"), "token_b": format!("{token_b:#x}"), "fee": fee }),
+            PoolRef::PairV2 { token_a, token_b } => json!({ "v2_token_a": format!("{token_a:#x}"), "v2_token_b": format!("{token_b:#x}") }),
         },
         "token_in": format!("{:#x}", s.token_in),
         "amount_in": s.amount_in.to_string(),
         "sqrt_price_limit_x96": s.sqrt_limit_x96.map(|l: U256| l.to_string()),
+        "hops": s.hops,
+    })
+}
+
+fn liquidation_json(l: &LiquidationIntent) -> Value {
+    json!({
+        "kind": "liquidation",
+        "protocol": l.protocol,
+        "borrowers": l.borrowers.iter().map(|b| format!("{b:#x}")).collect::<Vec<_>>(),
+        "collateral": l.collateral.map(|a| format!("{a:#x}")),
+        "debt": l.debt.map(|a| format!("{a:#x}")),
+        "amount": l.amount.map(|a| a.to_string()),
+        "market": l.market.map(|m| format!("{m:#x}")),
     })
 }
 
@@ -28,7 +42,10 @@ fn describe(to: Option<Address>, input: &[u8]) -> Value {
         "to": to.map(|a| format!("{a:#x}")),
         "selector": input.get(..4).map(alloy::hex::encode),
         "known_contract": to.and_then(known_contract).map(|c| json!({ "name": c.name, "decoded": c.decoded })),
-        "decoded": decoded.map(|Decoded::Swap(s)| swap_json(&s)),
+        "decoded": decoded.map(|d| match d {
+            Decoded::Swap(s) => swap_json(&s),
+            Decoded::Liquidation(l) => liquidation_json(&l),
+        }),
     })
 }
 

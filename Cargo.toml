@@ -60,6 +60,17 @@ mev-sequencer = { path = "crates/mev-sequencer" }
 mev-presim = { path = "crates/mev-presim" }
 mev-outcomes = { path = "crates/mev-outcomes" }
 mev-decode = { path = "crates/mev-decode", default-features = false }
+mev-protocol = { path = "crates/mev-protocol" }
+mev-protocol-uniswap-v2 = { path = "crates/mev-protocol-uniswap-v2" }
+mev-protocol-uniswap-v3 = { path = "crates/mev-protocol-uniswap-v3" }
+mev-protocol-uniswap-v4 = { path = "crates/mev-protocol-uniswap-v4" }
+mev-protocol-uniswap-router = { path = "crates/mev-protocol-uniswap-router" }
+mev-protocol-pancake-v3 = { path = "crates/mev-protocol-pancake-v3" }
+mev-protocol-balancer = { path = "crates/mev-protocol-balancer" }
+mev-protocol-aave-v3 = { path = "crates/mev-protocol-aave-v3" }
+mev-protocol-morpho-blue = { path = "crates/mev-protocol-morpho-blue" }
+mev-protocol-compound-v3 = { path = "crates/mev-protocol-compound-v3" }
+mev-protocol-unidentified = { path = "crates/mev-protocol-unidentified" }
 mev-atlas = { path = "crates/mev-atlas" }
 mev-localsim = { path = "crates/mev-localsim" }
 

@@ -189,7 +189,14 @@ mod tests {
     use super::*;
 
     fn swap_topic() -> String {
-        format!("{:#x}", mev_decode::events::kinds()[4].topic0) // swap_v3
+        format!(
+            "{:#x}",
+            mev_decode::events::kinds()
+                .iter()
+                .find(|k| k.name == "swap_v3")
+                .unwrap()
+                .topic0
+        )
     }
 
     fn receipt(hash: &str, status: &str, ty: &str, logs: serde_json::Value) -> serde_json::Value {

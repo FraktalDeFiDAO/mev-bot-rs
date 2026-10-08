@@ -79,7 +79,18 @@ mev-bot/
 | Layer | Crate | Responsibility |
 |---|---|---|
 | L1 | `mev-sequencer` | Arbitrum sequencer feed client: Nitro L2 message decoding → alloy `TxEnvelope` stream (~0.9 s ahead of RPC receipts) |
-| L0 | `mev-decode` | Standalone decoding, usable alone (`mev-decode` CLI) or as a library: swaps from calldata, swap/liquidity/liquidation/state event table, prices from logs, identified contracts. No RPC/engine/state dependencies |
+| L0 | `mev-decode` | Registry over the `mev-protocol-*` crates and the `mev-decode` CLI; standalone decoding, usable alone (`mev-decode` CLI) or as a library: swaps from calldata, swap/liquidity/liquidation/state event table, prices from logs, identified contracts. No RPC/engine/state dependencies |
+| L0 | `mev-protocol` | Core types for protocol crates: `Protocol` trait, `EventKind`, `SwapIntent`, `LiquidationIntent`, `PoolRef`, `PriceUpdate`, ABI word helpers |
+| L0 | `mev-protocol-uniswap-v2` | V2-style pair events (Uniswap, Sushi, Camelot V2): swap, sync, mint, burn |
+| L0 | `mev-protocol-uniswap-v3` | V3-style pool events (Uniswap, Sushi, Algebra topic) and position-manager liquidity events |
+| L0 | `mev-protocol-uniswap-v4` | V4 PoolManager swap and modify-liquidity events |
+| L0 | `mev-protocol-uniswap-router` | Calldata of SwapRouter02, SwapRouter v1 and the Universal Router: exact-in V2/V3 swaps, multicall, commands |
+| L0 | `mev-protocol-pancake-v3` | PancakeSwap V3 swap event |
+| L0 | `mev-protocol-balancer` | Balancer V2 Vault swap event |
+| L0 | `mev-protocol-aave-v3` | Aave V3 `LiquidationCall` event and `liquidationCall` calldata |
+| L0 | `mev-protocol-morpho-blue` | Morpho Blue `Liquidate` event and `liquidate` calldata (with market id) |
+| L0 | `mev-protocol-compound-v3` | Compound III absorb events and `absorb` calldata on the four configured comets |
+| L0 | `mev-protocol-unidentified` | The two unidentified swap contracts (A, B) read from landed transactions |
 | L2 | `mev-outcomes` | Chain-side ground truth: sampled `eth_getBlockReceipts` → `chaintx-DATE.jsonl` (status, gas, block position, swap/liquidity/liquidation events) joined to the feed recording on the tx hash; coverage audit of the decoders |
 | L1 | `mev-oracle` | Resolve price sources (Chainlink proxies, Aave CAPO adapters, Morpho oracles) to aggregators; `FeedWatcher` matches feed txs incl. Chainlink forwarder `forward(aggregator, …)` |
 | L1 | `mev-lending` | **The `LiquidationAdapter` trait** + `Plan`/`ProtocolCall`/`Health`/`AccountRef` — every venue implements it |
