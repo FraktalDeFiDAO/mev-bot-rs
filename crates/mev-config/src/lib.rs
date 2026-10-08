@@ -723,8 +723,8 @@ mod tests {
             "the pre-send simulation stays configured; fast_send bypasses it while there is no own node"
         );
         assert!(
-            c.risk.fast_send,
-            "live sends skip the pre-send eth_call (speed over accuracy, DECISIONS #88)"
+            !c.risk.fast_send,
+            "fast_send is off: live sends are checked before sending (DECISIONS #93)"
         );
         assert!(
             c.pga.market_quantile < c.pga.competition_quantile && c.pga.route_min_observations >= 1,
