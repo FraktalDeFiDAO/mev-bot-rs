@@ -33,6 +33,11 @@ Docs index used: `https://docs.arbitrum.io/llms.txt`. Pages are cited by path un
 | F7 | To stay connected across rounds, buy a ticket for the next round before `roundEnd` with the same API-key hash. | use-fast-feed | verified |
 | F8 | **Cost:** at the 17 USDG floor that is ≥ $17/day ≈ **$510/month per connection** (two connections for redundancy ≈ $1,020). The project budget is $200 capital and ~$0/month infra (`CLAUDE.md`). | derived from F4 | **CONFLICT with the project budget; needs a human decision (see design doc §13).** |
 
+| F9 | **Grandfather period:** "Each round opens with a grandfather period that covers about half its length. During that period, only subscribers from the previous round can buy, up to the number of tickets they held." On chain: `grandfatherPeriodFraction()` = 128 (of 256), `roundDuration()` = 86400, `roundStart()`/`roundEnd()`. A first-time buyer therefore buys in the second half of a round. | fast-feed page; Tickets contract reads 2026-10-08 | verified (docs + chain) |
+| F10 | Pricing: EIP-4844 style, target 100 / max 200 tickets per round, floor 17 USDG, `priceUpdateFraction` 144 (next round's price within about half to double of this one). Round length, capacity, price parameters and the grandfather fraction are controlled by the Arbitrum DAO and change at round boundaries. | fast-feed page; contract reads | verified |
+| F11 | Tickets are tracked per buyer **address**: `thisRoundTicketCount(address)`, `grandfatherCount(address)`, `tokenBalance(address)`; the API-key hash is supplied at purchase. A **smart contract can be the subscriber** (fork-tested: deposit, `purchaseTickets`, next-round renewal). | Tickets contract bytecode selectors; `contracts/test/FastFeedTicketVault.t.sol` | verified on a fork |
+| F12 | Foundry 1.8.4 has no environment variable for a raw private key (`--private-key` only); it supports keystores (`--keystore`, `--account`, `--password-file`). Do not set `ETH_PASSWORD` globally: it makes non-signing `cast` calls demand a keystore. | `cast send --help`, tests | verified |
+
 ## Standard sequencer feed
 
 | # | Fact | Source | Status |

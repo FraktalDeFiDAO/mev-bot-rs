@@ -22,26 +22,61 @@ Everything we rely on is recorded with its source in `docs/arbitrum-facts.md` (F
 is the USDG address above (6 decimals), round 14, price 17 USDG. **Not in the docs:** where to acquire USDG (swap into it on an Arbitrum One DEX; check
 liquidity yourself) and refunds.
 
+## When you can buy (verified on chain 2026-10-07/08)
+
+- Rounds are 24 h (`roundDuration()` = 86400; **DAO-settable**, so scripts read it each time). Round 14 started 2026-10-07 17:00 UTC.
+- **Grandfather period:** for the first half of every round (`grandfatherPeriodFraction()` = 128 of 256) only the previous round's subscribers may
+  buy, up to the number they held. A **first-time buyer can buy only in the second half**: today **05:00-17:00 UTC (2026-10-08)**.
+- A ticket bought in round N is active for round N+1 only. Bought today, it is live **2026-10-08 17:00 UTC to 2026-10-09 17:00 UTC**.
+- To keep the subscription you must renew each round, and renewing in the *first* half of the next round is guaranteed (grandfather right);
+  waiting for the second half risks the round selling out (target 100, max 200 tickets).
+- Tickets are tracked **per buyer address** (`thisRoundTicketCount`, `grandfatherCount`). The price floats between roughly half and double of the
+  previous round's, set by demand (EIP-4844 style, `priceUpdateFraction` 144), never below the 17 USDG floor.
+
 ## What you need
 
-- A **separate wallet** (not the bot's hot wallet) with **≥ 40-50 USDG** (price 17, "can rise up to about two times between rounds", deposit for several rounds) and a little ETH on Arbitrum One for three transactions.
-- Foundry (`cast`) and `openssl` on the machine you run it from.
-- Time: a ticket bought during round N is active for round N+1 only. `scripts/fast-feed-ticket.sh status` prints when that is.
+- A **separate wallet** (not the bot's hot wallet) with **≥ 40-50 USDG** (price 17, may double) and a little ETH on Arbitrum One for gas.
+- Foundry (`cast`, `forge`) and `openssl`.
+- **A keystore account, not a raw key.** `cast wallet import ff-owner --interactive` (paste the key once; it is stored encrypted in `~/.foundry/keystores`).
+  The scripts take only `FF_*_ACCOUNT=<name>`. Raw keys are refused on purpose: Foundry 1.8 has no environment variable for them, so every use would
+  put the key on a command line, visible to anything that can list processes. (An earlier draft of these scripts claimed otherwise; that was wrong and is fixed.)
 
-## Steps (you run these; the agent never handles keys or funds)
+## Path A: one ticket for the experiment (simplest)
 
 ```bash
-scripts/fast-feed-ticket.sh status                      # round, price, when a new ticket becomes active
-scripts/fast-feed-ticket.sh keygen                      # API key -> ~/.config/mev-bot/fast-feed.key (0600); prints its hash
-export FF_BUYER_PRIVATE_KEY=0x...                       # the separate wallet; only in this shell
-scripts/fast-feed-ticket.sh status <wallet-address>     # check USDG + ETH balances
-scripts/fast-feed-ticket.sh buy --tickets 1 --deposit-usdg 40          # DRY RUN: prints the plan, sends nothing
-scripts/fast-feed-ticket.sh buy --tickets 1 --deposit-usdg 40 --yes    # asks you to type 'buy', then approve + deposit + purchase
-unset FF_BUYER_PRIVATE_KEY
+scripts/fast-feed-ticket.sh status                       # round, price, and WHEN A FIRST-TIME BUYER CAN BUY
+scripts/fast-feed-ticket.sh keygen                       # API key -> ~/.config/mev-bot/fast-feed.key (0600); prints its hash
+export FF_BUYER_ACCOUNT=ff-owner
+scripts/fast-feed-ticket.sh status <wallet-address>      # USDG + ETH balances
+scripts/fast-feed-ticket.sh buy --tickets 1 --deposit-usdg 40          # DRY RUN: refuses with a clear message before the window opens
+scripts/fast-feed-ticket.sh buy --tickets 1 --deposit-usdg 40 --yes    # typed confirmation, then approve + deposit + purchase
 ```
 
-After the round ends (time printed by `status`), run the measurement for an hour, from the host you care about (the leads are differences between
-two feeds seen from the same place, so a workstation works; the Ohio host is the most representative):
+## Path B: a vault that renews by itself (for continuous use)
+
+`contracts/src/FastFeedTicketVault.sol` is the subscriber. It holds the USDG deposit and buys tickets **as itself**, so the renewal priority belongs to
+its address. `renew()` is callable by **anyone** but can only buy the owner-configured number of tickets for the owner-configured key hash, at no
+more than the owner's price cap, once per round, while a renewals budget lasts. Only the owner can fund, change settings, or withdraw. So the
+unattended **keeper account needs gas ETH only** and cannot touch the money.
+
+```bash
+export FF_OWNER_ACCOUNT=ff-owner
+scripts/fast-feed-vault.sh deploy --yes                    # you deploy it (dry run without --yes); note the address
+scripts/fast-feed-vault.sh setup <vault> --tickets 1 --max-price 40 --renewals 7 --deposit 150   # dry run; add --yes
+# keeper: a SEPARATE keystore account holding ~0.002 ETH of gas, nothing else
+cast wallet import ff-keeper --interactive
+export FF_KEEPER_ACCOUNT=ff-keeper FF_PASSWORD_FILE=~/.config/mev-bot/keeper.pw   # file mode 600 with the keystore password
+scripts/fast-feed-vault.sh keeper <vault> --loop 300       # every 5 min: renew if the contract says it can (use systemd/cron for production)
+scripts/fast-feed-vault.sh status <vault>                  # anyone: deposit, renewals left, can renew now
+scripts/fast-feed-vault.sh withdraw <vault> 50 --yes       # owner takes unused deposit back
+```
+The worst case spend is `renewals x tickets x max-price`, and never more than the deposit. Set `--renewals 0` (via `setConfig`) to stop automation.
+**The contract is not audited and is not deployed.** It is ~150 lines, no proxy, no upgrade path, no admin backdoor, covered by 11 fork tests against the real
+Tickets contract (`forge test --match-contract FastFeedTicketVaultForkTest`) and an end-to-end script run on a fork. Deploy it with a small deposit first.
+
+## Measure (after the ticket is live)
+
+From the host you care about (the lead is a difference between two feeds seen from the same place; the Ohio host is the most representative):
 
 ```bash
 export ARBITRUM_FAST_FEED_KEY=$(cat ~/.config/mev-bot/fast-feed.key)
@@ -61,9 +96,9 @@ Phase 2 decoder; contains no secrets).
 ## Safety
 
 - The API key is a bearer secret: keep the file at mode 600, never commit it, never paste it into chats or logs (the bot redacts URL keys, not this).
-- `buy` moves real USDG. It is a dry run unless `--yes`, and still asks for a typed confirmation. The paying key is read from `FF_BUYER_PRIVATE_KEY`
-  and handed to `cast` through `ETH_PRIVATE_KEY`, so it never appears on a command line.
-- Unused deposit stays in your Tickets balance: `scripts/fast-feed-ticket.sh withdraw <usdg>`.
+- Everything that moves money is a dry run unless `--yes` and still asks for a typed word. Signing uses keystore accounts only (no raw keys anywhere).
+- The vault's keeper account holds gas only; if its key leaks, the worst outcome is someone calling `renew()` early, which the owner configured anyway.
+- Unused deposit stays in your Tickets balance (path A: `scripts/fast-feed-ticket.sh withdraw <usdg>`) or the vault's (path B: `scripts/fast-feed-vault.sh withdraw`).
 - `mev-feedlead` is read-only: it opens two WebSocket connections and writes files under the output directory.
 
 ## What was verified without a ticket
