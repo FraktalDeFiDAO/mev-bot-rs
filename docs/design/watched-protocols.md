@@ -71,6 +71,7 @@ Share of the feed transactions that moved a watched pool (10 minutes, 669 transa
 |---|---|---|---|---|
 | `0x278d858f...F8D2` | `a00597a0` | 57% | unidentified (swap with price limit and deadline) | yes (`ROUTER_A`) |
 | `0x96DaA0B8...ab73` | `000000e7` | 24% | unidentified (swap to a price limit) | yes (`ROUTER_B`) |
+| `0x93c30e6e...dd17` | `b2460c48`, `b42ebb63`, `b7f49f3f` (32-byte packed argument) | 23% of swap transactions (not in the table below: invisible to the address filter until now) | unidentified packed-calldata bot | **yes** (router D; `6bfd6286` not) |
 | `0x68b34658...Fc45` | `b858183f` | 13% | **Uniswap SwapRouter02** `exactInput` (verified: selector and ABI layout match the documented function) | **yes**, multi-hop (first hop), plus `exactInputSingle`, V2 `swapExactTokensForTokens`, `multicall` |
 | `0xA51afAFe...81a3` | `3593564c` | 1% | Uniswap Universal Router `execute` | **yes** (V2/V3 exact-in commands) |
 | `0xE592427A...1564` | `414bf389` | <1% | Uniswap V3 SwapRouter v1 `exactInputSingle` | **yes** |

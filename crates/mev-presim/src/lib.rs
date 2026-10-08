@@ -53,6 +53,17 @@ pub fn mentions_any(input: &[u8], watch: &std::collections::HashSet<[u8; 20]>) -
         .any(|w| watch.contains(<&[u8; 20]>::try_from(w).unwrap()))
 }
 
+/// Whether a feed transaction should be simulated: its calldata names a watched pool or token, or the decoder reads a
+/// swap from it (packed calldata names nothing, yet one such contract alone was 23% of swap transactions on
+/// 2026-10-08, invisible to the address filter).
+pub fn wants_simulation(
+    to: Option<alloy::primitives::Address>,
+    input: &[u8],
+    watch: &std::collections::HashSet<[u8; 20]>,
+) -> bool {
+    mentions_any(input, watch) || to.is_some_and(|t| decode::decode(t, input).is_some())
+}
+
 /// Topic0 of the pool events the engine consumes (V2 `Sync`, V3/Algebra `Swap`, PancakeV3 `Swap`).
 pub fn is_pool_event(topic0: &B256) -> bool {
     *topic0 == IUniswapV2Pair::Sync::SIGNATURE_HASH
@@ -397,8 +408,9 @@ pub async fn run(
         if !is_candidate(&st) {
             continue;
         }
-        // Can't move a watched pool unless it names one of its tokens (or the pool itself).
-        if !mentions_any(&st.input, &watch.read().unwrap()) {
+        // Can't move a watched pool unless it names one of its tokens (or the pool itself), except when the decoder
+        // reads a swap from the call: packed calldata (an index into the contract's own pool table) names nothing.
+        if !wants_simulation(st.to, &st.input, &watch.read().unwrap()) {
             stats.unrelated.fetch_add(1, Relaxed);
             continue;
         }
@@ -572,5 +584,48 @@ mod tests {
         assert!(!already_included(Some(98), 100));
         // Unknown block number: do not discard.
         assert!(!already_included(None, 100));
+    }
+
+    #[test]
+    fn a_decodable_swap_is_simulated_even_when_it_names_no_watched_address() {
+        use alloy::primitives::{Address, U256, address};
+        let watch: std::collections::HashSet<[u8; 20]> = [[7u8; 20]].into_iter().collect();
+        let b = decode::ROUTER_B;
+        let word = |v: U256| v.to_be_bytes::<32>().to_vec();
+        let addr_word = |a: Address| {
+            let mut o = vec![0u8; 12];
+            o.extend_from_slice(a.as_slice());
+            o
+        };
+        let mut call = decode::SELECTOR_B.to_vec();
+        call.extend(addr_word(address!(
+            "c6962004f452be9203591991d15f6b388e09e8d0"
+        )));
+        call.extend(word(U256::ZERO));
+        call.extend(word(U256::from(1000u64)));
+        call.extend(word(U256::from(5u64)));
+        call.extend(addr_word(address!(
+            "af88d065e77c8cC2239327C5EDb3A432268e5831"
+        )));
+        assert!(
+            !mentions_any(&call, &watch),
+            "the address filter alone would drop it"
+        );
+        assert!(wants_simulation(Some(b), &call, &watch));
+        // The same bytes to another contract, or an unrelated call, are still dropped.
+        assert!(!wants_simulation(
+            Some(Address::with_last_byte(1)),
+            &call,
+            &watch
+        ));
+        assert!(!wants_simulation(None, &call, &watch));
+        // An address on the watchlist still qualifies without any decoding.
+        let mut watched = vec![0u8; 36];
+        watched[10..30].copy_from_slice(&[7u8; 20]);
+        assert!(wants_simulation(
+            Some(Address::with_last_byte(1)),
+            &watched,
+            &watch
+        ));
     }
 }
