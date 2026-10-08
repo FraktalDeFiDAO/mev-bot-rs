@@ -681,8 +681,13 @@ impl Engine {
                             );
                         }
                         // Shadow only: would reading the calldata have predicted what the node simulation says?
-                        let verdict = decode_check::check(&self.store, &pre.call, &pre.logs);
+                        let (verdict, detail) = decode_check::check_detailed(&self.store, &pre.call, &pre.logs);
                         self.decode_stats.lock().unwrap().record(verdict);
+                        if let (decode_check::Verdict::Compared { price_diff_bps }, Some(d)) = (verdict, detail)
+                            && price_diff_bps.abs() >= 0.5
+                        {
+                            self.metrics.event("decode_differ", d);
+                        }
                         // Same path as block logs, a block early; the real logs overwrite it.
                         for log in &pre.logs {
                             if let Some(pool) = self.store.apply_log_tentative(log, Instant::now()) {
