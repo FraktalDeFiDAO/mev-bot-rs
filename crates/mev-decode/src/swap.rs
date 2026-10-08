@@ -1,10 +1,10 @@
-//! Read a feed transaction's swap straight from its calldata, without a node.
+//! Read a transaction's swap straight from its calldata, without a node.
 //!
-//! Three non-public contracts account for about 94% of the feed transactions that move a watched pool
-//! (measured 2026-10-08, DECISIONS #89). Each runs a single exact-input swap on one Uniswap-V3-style pool with the
-//! amount, token and (for two of them) a sqrt-price limit in fixed calldata words. Layouts were read from
-//! landed transactions and checked against their `Swap` events (the router address is a measured fact, not a
-//! documented interface: if a layout changes, `decode` returns `None` or the shadow comparison reports it).
+//! Three contracts account for about 94% of the feed transactions that move a watched pool (measured 2026-10-08,
+//! DECISIONS #89): Uniswap's own `SwapRouter02` (`exactInput`, a documented interface) and two unidentified
+//! contracts, **A** and **B**, whose layouts were read from landed transactions and checked against their `Swap`
+//! events (measured facts about contracts we do not control: if a layout changes, `decode` returns `None` or the
+//! shadow comparison reports it). Each is a single exact-input swap on one Uniswap-V3-style pool.
 
 use alloy::primitives::{Address, U256, address};
 
@@ -12,9 +12,24 @@ use alloy::primitives::{Address, U256, address};
 pub const ROUTER_A: Address = address!("278d858f05b94576C1E6f73285886876ff6eF8D2");
 /// Contract with selector `0x000000e7`: `(pool, 0, amountIn, sqrtPriceLimitX96, tokenIn)`.
 pub const ROUTER_B: Address = address!("96DaA0B8a5499EA9323421ED0Cda06B345caab73");
-/// Contract with selector `0xb858183f`: `(0x20, 0x80, recipient, amountIn, amountOutMin, 0x2b, path)` with
-/// `path = tokenIn(20) fee(3) tokenOut(20)`; the pool is found by tokens and fee.
-pub const ROUTER_C: Address = address!("68b3465833fb72A70ecDF485E0e4C7bD8665Fc45");
+/// Uniswap `SwapRouter02` on Arbitrum, selector `0xb858183f` = `exactInput((bytes path,address recipient,uint256
+/// amountIn,uint256 amountOutMinimum))`, ABI-encoded as `(0x20, 0x80, recipient, amountIn, amountOutMin, pathLen,
+/// path)` with `path = tokenIn(20) fee(3) tokenOut(20)` for one hop; the pool is found by tokens and fee.
+pub const SWAP_ROUTER_02: Address = address!("68b3465833fb72A70ecDF485E0e4C7bD8665Fc45");
+/// Former name of [`SWAP_ROUTER_02`], kept for the shadow-comparison labels.
+pub const ROUTER_C: Address = SWAP_ROUTER_02;
+
+pub const SELECTOR_A: [u8; 4] = [0xa0, 0x05, 0x97, 0xa0];
+pub const SELECTOR_B: [u8; 4] = [0x00, 0x00, 0x00, 0xe7];
+/// `exactInput((bytes,address,uint256,uint256))` on SwapRouter02.
+pub const SELECTOR_EXACT_INPUT: [u8; 4] = [0xb8, 0x58, 0x18, 0x3f];
+
+/// Whether calls to `to` with this selector are decoded (the address and selector pairing, not the arguments).
+pub fn decodes_selector(to: Address, sel: [u8; 4]) -> bool {
+    (to == ROUTER_A && sel == SELECTOR_A)
+        || (to == ROUTER_B && sel == SELECTOR_B)
+        || (to == SWAP_ROUTER_02 && sel == SELECTOR_EXACT_INPUT)
+}
 
 /// Which pool a swap is aimed at.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +71,7 @@ fn uint(d: &[u8], i: usize) -> Option<U256> {
 /// The swap a call to `to` with `input` performs, if it is one of the contracts above and the layout matches.
 pub fn decode(to: Address, input: &[u8]) -> Option<SwapIntent> {
     let (sel, d) = (input.get(..4)?, input.get(4..)?);
-    if to == ROUTER_A && sel == [0xa0, 0x05, 0x97, 0xa0] {
+    if to == ROUTER_A && sel == SELECTOR_A {
         return Some(SwapIntent {
             amount_in: uint(d, 0)?,
             sqrt_limit_x96: Some(uint(d, 1)?),
@@ -64,7 +79,7 @@ pub fn decode(to: Address, input: &[u8]) -> Option<SwapIntent> {
             pool: PoolRef::Address(addr(d, 4)?),
         });
     }
-    if to == ROUTER_B && sel == [0x00, 0x00, 0x00, 0xe7] {
+    if to == ROUTER_B && sel == SELECTOR_B {
         return Some(SwapIntent {
             pool: PoolRef::Address(addr(d, 0)?),
             amount_in: uint(d, 2)?,
@@ -72,7 +87,7 @@ pub fn decode(to: Address, input: &[u8]) -> Option<SwapIntent> {
             token_in: addr(d, 4)?,
         });
     }
-    if to == ROUTER_C && sel == [0xb8, 0x58, 0x18, 0x3f] {
+    if to == SWAP_ROUTER_02 && sel == SELECTOR_EXACT_INPUT {
         if uint(d, 5)? != U256::from(43u8) {
             return None; // a multi-hop path or another layout
         }
@@ -179,7 +194,7 @@ mod tests {
                 path,
             ],
         );
-        let s = decode(ROUTER_C, &input).unwrap();
+        let s = decode(SWAP_ROUTER_02, &input).unwrap();
         assert_eq!(s.token_in, WETH);
         assert_eq!(s.amount_in, U256::from(0x11f2b19548fb5bcu64));
         assert_eq!(
@@ -227,6 +242,6 @@ mod tests {
                 w(U256::from(66)),
             ],
         );
-        assert!(decode(ROUTER_C, &multi).is_none());
+        assert!(decode(SWAP_ROUTER_02, &multi).is_none());
     }
 }

@@ -13,5 +13,5 @@ futures = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-mev-bindings = { workspace = true }
+mev-decode = { workspace = true }
 mev-presim = { workspace = true }

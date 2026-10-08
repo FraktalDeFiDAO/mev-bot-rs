@@ -8,7 +8,8 @@
 //! Measured from the bot's server (2026-10-04): PublicNode answers in ~16 ms on a warm
 //! connection (dRPC ~70 ms, arb1 ~120 ms), with the same head block as arb1.
 
-pub mod decode;
+/// The calldata decoder lives in its own crate (`mev-decode`); re-exported here for the callers that used this path.
+pub use mev_decode::swap as decode;
 pub mod record;
 
 use alloy::{

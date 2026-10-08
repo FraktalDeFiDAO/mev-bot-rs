@@ -1,0 +1,26 @@
+[package]
+name = "mev-decode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Standalone decoding of Arbitrum transactions and pool/lending events: swaps and liquidations from calldata, event kinds and prices from logs. No engine, state or RPC dependencies."
+
+[features]
+# `mev-decode` command-line tool (decode one call, or stream the sequencer feed). Library users turn this off.
+default = ["cli"]
+cli = ["dep:mev-sequencer", "dep:tokio", "dep:serde_json"]
+
+[[bin]]
+name = "mev-decode"
+required-features = ["cli"]
+
+[dependencies]
+alloy = { workspace = true }
+mev-sequencer = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+mev-bindings = { workspace = true }
+serde_json = { workspace = true }
