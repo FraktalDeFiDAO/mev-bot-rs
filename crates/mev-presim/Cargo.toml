@@ -9,6 +9,7 @@ description = "Simulate sequencer-feed transactions before they are in a block (
 [dependencies]
 alloy = { workspace = true, features = ["k256"] }
 anyhow = { workspace = true }
+chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

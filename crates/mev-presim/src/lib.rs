@@ -9,6 +9,7 @@
 //! connection (dRPC ~70 ms, arb1 ~120 ms), with the same head block as arb1.
 
 pub mod decode;
+pub mod record;
 
 use alloy::{
     consensus::{Transaction, TxEnvelope, transaction::SignerRecoverable},
@@ -313,6 +314,49 @@ impl PresimStats {
     }
 }
 
+/// One analysis record for a feed transaction: what it is, what it pays, what we decoded, and what the simulation said.
+fn tx_line(
+    st: &SequencedTx,
+    outcome: &str,
+    sim_ms: Option<u64>,
+    pools_moved: usize,
+) -> serde_json::Value {
+    use alloy::consensus::Transaction as _;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let swap = st.to.and_then(|to| decode::decode(to, &st.input)).map(|s| {
+        serde_json::json!({
+            "pool": match &s.pool {
+                decode::PoolRef::Address(a) => format!("{a:#x}"),
+                decode::PoolRef::Pair { token_a, token_b, fee } => format!("{token_a:#x}/{token_b:#x}/{fee}"),
+            },
+            "token_in": format!("{:#x}", s.token_in),
+            "amount_in": s.amount_in.to_string(),
+            "limit_x96": s.sqrt_limit_x96.map(|l| l.to_string()),
+        })
+    });
+    serde_json::json!({
+        "t_ms": now.saturating_sub(st.received.elapsed().as_millis() as u64),
+        "hash": format!("{:#x}", st.hash),
+        "block": st.block(),
+        "seq": st.seq,
+        "from": st.tx.recover_signer().ok().map(|a| format!("{a:#x}")),
+        "to": st.to.map(|a| format!("{a:#x}")),
+        "sel": st.selector().map(alloy::hex::encode),
+        "len": st.input.len(),
+        "nonce": st.tx.nonce(),
+        "gas_limit": st.tx.gas_limit(),
+        "max_fee": st.tx.max_fee_per_gas().to_string(),
+        "tip": st.tx.max_priority_fee_per_gas().map(|t| t.to_string()),
+        "value": st.tx.value().to_string(),
+        "swap": swap,
+        "presim": outcome,
+        "sim_ms": sim_ms,
+        "pools_moved": pools_moved,
+    })
+}
+
 /// Pool logs a feed transaction is about to emit, and when the feed delivered it.
 #[derive(Debug, Clone)]
 pub struct Presimulated {
@@ -329,6 +373,7 @@ pub struct Presimulated {
 /// Simulate candidate feed transactions (at most `max_in_flight` at once; extras are skipped,
 /// their block logs still arrive later) and forward the pool logs of those that move a pool.
 /// Runs until the feed or the receiver closes.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     mut feed: tokio::sync::mpsc::UnboundedReceiver<SequencedTx>,
     p: DynProvider,
@@ -337,6 +382,7 @@ pub async fn run(
     out: tokio::sync::mpsc::UnboundedSender<Presimulated>,
     stats: std::sync::Arc<PresimStats>,
     watch: Watchlist,
+    rec: Option<std::sync::Arc<record::TxRecorder>>,
 ) {
     use std::sync::atomic::Ordering::Relaxed;
     let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(max_in_flight.max(1)));
@@ -356,9 +402,12 @@ pub async fn run(
         stats.candidates.fetch_add(1, Relaxed);
         let Ok(permit) = slots.clone().try_acquire_owned() else {
             stats.skipped_busy.fetch_add(1, Relaxed);
+            if let Some(r) = &rec {
+                r.record(&tx_line(&st, "busy", None, 0));
+            }
             continue;
         };
-        let (p, out, stats) = (p.clone(), out.clone(), stats.clone());
+        let (p, out, stats, rec) = (p.clone(), out.clone(), stats.clone(), rec.clone());
         tokio::spawn(async move {
             let t = std::time::Instant::now();
             let res = tokio::time::timeout(timeout, simulate_logs_block(&p, &st.tx, None)).await;
@@ -366,10 +415,16 @@ pub async fn run(
             let logs = match res {
                 Err(_) => {
                     stats.timeouts.fetch_add(1, Relaxed);
+                    if let Some(r) = &rec {
+                        r.record(&tx_line(&st, "timeout", None, 0));
+                    }
                     return;
                 }
                 Ok(Err(_)) => {
                     stats.errors.fetch_add(1, Relaxed);
+                    if let Some(r) = &rec {
+                        r.record(&tx_line(&st, "error", None, 0));
+                    }
                     return;
                 }
                 Ok(Ok((logs, sim_block))) => {
@@ -377,6 +432,9 @@ pub async fn run(
                     // answers, the node's latest block may already contain it.
                     if already_included(sim_block, st.block()) {
                         stats.already_included.fetch_add(1, Relaxed);
+                        if let Some(r) = &rec {
+                            r.record(&tx_line(&st, "already_included", None, 0));
+                        }
                         return;
                     }
                     logs
@@ -387,6 +445,11 @@ pub async fn run(
                 .fetch_add(t.elapsed().as_millis() as u64, Relaxed);
             let logs: Vec<_> = pool_events(&logs).map(to_rpc_log).collect();
             stats.tally(&st.tx, !logs.is_empty());
+            if let Some(r) = &rec {
+                let ms = t.elapsed().as_millis() as u64;
+                let outcome = if logs.is_empty() { "none" } else { "moved" };
+                r.record(&tx_line(&st, outcome, Some(ms), logs.len()));
+            }
             if logs.is_empty() {
                 stats.no_pool_effect.fetch_add(1, Relaxed);
             } else {

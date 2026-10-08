@@ -513,6 +513,20 @@ impl Engine {
                 } else {
                     feed
                 };
+                let recorder = if pc.record_feed {
+                    match mev_presim::record::TxRecorder::open(
+                        data_dir.clone(),
+                        i64::from(pc.record_keep_days),
+                    ) {
+                        Ok(r) => Some(r),
+                        Err(e) => {
+                            warn!(error = %e, "feed transaction recorder disabled");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
                 tokio::spawn(mev_presim::run(
                     rpc_feed,
                     p,
@@ -521,6 +535,7 @@ impl Engine {
                     tx,
                     presim_stats.clone(),
                     presim_watch.clone(),
+                    recorder,
                 ));
                 info!(
                     rpcs = presim_urls.len(),
