@@ -417,6 +417,16 @@ pub struct PresimConfig {
     /// chain agreed, so the decision is tested before it is acted on (DECISIONS #86).
     #[serde(default)]
     pub rollback_unconfirmed: bool,
+    /// Keep every candidate feed transaction (with what we decoded and what the simulation said) in
+    /// `feedtx-YYYY-MM-DD.jsonl` for later analysis; files older than `record_keep_days` are deleted.
+    #[serde(default)]
+    pub record_feed: bool,
+    #[serde(default = "default_record_keep_days")]
+    pub record_keep_days: u32,
+}
+
+fn default_record_keep_days() -> u32 {
+    7
 }
 
 fn default_max_cycles() -> usize {
