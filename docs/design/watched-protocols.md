@@ -69,7 +69,8 @@ Share of the feed transactions that moved a watched pool (10 minutes, 669 transa
 
 | Destination | Selector | Share | Identity | Decoded |
 |---|---|---|---|---|
-| `0x278d858f...F8D2` | `a00597a0` | 57% | unidentified (swap with price limit and deadline) | yes (`ROUTER_A`) |
+| `0x278d858f...F8D2` | `a00597a0` (V3), `669dc5b6` (V4) | 57% | unidentified (swap with price limit and deadline) | yes (`ROUTER_A`; V4 since DECISIONS #96) |
+| `0xea845931...61a2` | `755f317c` (V3), `4fd7c9b7` (V4) | ~3% | unidentified | **yes** (router E, DECISIONS #96) |
 | `0x96DaA0B8...ab73` | `000000e7` | 24% | unidentified (swap to a price limit) | yes (`ROUTER_B`) |
 | `0x93c30e6e...dd17` | `b2460c48`, `b42ebb63`, `b7f49f3f` (32-byte packed argument) | 23% of swap transactions (not in the table below: invisible to the address filter until now) | unidentified packed-calldata bot | **yes** (router D; `6bfd6286` not) |
 | `0x68b34658...Fc45` | `b858183f` | 13% | **Uniswap SwapRouter02** `exactInput` (verified: selector and ABI layout match the documented function) | **yes**, multi-hop (first hop), plus `exactInputSingle`, V2 `swapExactTokensForTokens`, `multicall` |

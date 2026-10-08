@@ -37,9 +37,12 @@ def swap_inputs(log):
     if kind == "swap_v2" and len(words) >= 4:
         return log["addr"].lower(), max(int(words[0], 16), int(words[1], 16))
     if kind == "swap_v4" and len(words) >= 2:
-        # V4 amounts are from the swapper's side: negative is what it pays in.
+        # V4 pools have no contract: the event comes from the PoolManager and names the pool by id (topic 1). Decoders
+        # name a V4 pool by its stand-in address, the last 20 bytes of the id. Which sign is "in" depends on whose side
+        # the amounts are quoted from, so the input is taken as the larger magnitude on the negative side, else either.
         a0, a1 = signed(words[0]), signed(words[1])
-        return log["addr"].lower(), max(-a0, -a1, 0)
+        pool = "0x" + log["topics"][1][-40:]
+        return pool.lower(), max(-a0, -a1, 0) or max(abs(a0), abs(a1))
     return None
 
 feed = {r["hash"]: r for r in lines("feedtx-*.jsonl") if r.get("swap")}

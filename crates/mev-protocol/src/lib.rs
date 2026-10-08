@@ -171,6 +171,52 @@ pub mod abi {
     }
 }
 
+/// Uniswap V4 pool identity.
+pub mod v4 {
+    use alloy::primitives::{Address, B256, address, keccak256};
+
+    /// The V4 PoolManager on Arbitrum One (the singleton every V4 pool lives in).
+    pub const MANAGER: Address = address!("360e68faccca8ca495c1b759fd9eee466db9fb32");
+
+    fn address_word(a: Address) -> [u8; 32] {
+        let mut w = [0u8; 32];
+        w[12..].copy_from_slice(a.as_slice());
+        w
+    }
+
+    /// A pool's id: `keccak256(abi.encode(currency0, currency1, fee, tickSpacing, hooks))`. `currency0 < currency1`;
+    /// native ETH is the zero address.
+    pub fn pool_id(
+        currency0: Address,
+        currency1: Address,
+        fee: u32,
+        tick_spacing: i32,
+        hooks: Address,
+    ) -> B256 {
+        let mut b = Vec::with_capacity(160);
+        b.extend_from_slice(&address_word(currency0));
+        b.extend_from_slice(&address_word(currency1));
+        let mut f = [0u8; 32];
+        f[28..].copy_from_slice(&fee.to_be_bytes());
+        b.extend_from_slice(&f);
+        let mut t = if tick_spacing < 0 {
+            [0xffu8; 32]
+        } else {
+            [0u8; 32]
+        };
+        t[28..].copy_from_slice(&tick_spacing.to_be_bytes());
+        b.extend_from_slice(&t);
+        b.extend_from_slice(&address_word(hooks));
+        keccak256(b)
+    }
+
+    /// The address the pool store files a V4 pool under: the last 20 bytes of its id (the same convention as
+    /// `mev_types::v4_pool_address`; V4 pools have no contract of their own).
+    pub fn stand_in(id: B256) -> Address {
+        Address::from_slice(&id[12..])
+    }
+}
+
 /// The price update carried by a concentrated-liquidity `Swap` log's data (`amount0, amount1, sqrtPriceX96,
 /// liquidity, tick`, each a 32-byte word). Shared by V3, Pancake, Algebra and V4.
 pub fn sqrt_price_update(data: &[u8]) -> Option<PriceUpdate> {
@@ -240,5 +286,45 @@ mod tests {
             abi::split(&[1, 2, 3, 4, 5]),
             Some(([1, 2, 3, 4], &[5u8][..]))
         );
+    }
+
+    #[test]
+    fn v4_pool_ids_match_ids_seen_in_real_swap_events() {
+        use alloy::primitives::{address, b256};
+        // (key from the PoolManager.swap call in a trace, id carried by the same transaction's Swap event topic)
+        let cases = [
+            (
+                address!("2f2a2543b76a4166549f7aab2e75bef0aefc5b0f"),
+                address!("912ce59144191c1204e64559fe8253a0e49e6548"),
+                3000,
+                60,
+                b256!("7ce794cc087b39c0066d1ab9fe93d5b276d3071f53276a2368d946e5c0bdb79a"),
+            ),
+            (
+                address!("82af49447d8a07e3bd95bd0d56f35241523fbab1"),
+                address!("af88d065e77c8cc2239327c5edb3a432268e5831"),
+                500,
+                10,
+                b256!("fc7b3ad139daaf1e9c3637ed921c154d1b04286f8a82b805a6c352da57028653"),
+            ),
+            (
+                address!("2f2a2543b76a4166549f7aab2e75bef0aefc5b0f"),
+                address!("fd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9"),
+                500,
+                10,
+                b256!("41b1e6b28a39199365f5348a2bf71d0f785167e920d05254b3f2efd1b9487db5"),
+            ),
+            (
+                address!("af88d065e77c8cc2239327c5edb3a432268e5831"),
+                address!("f97f4df75117a78c1a5a0dbb814af92458539fb4"),
+                3000,
+                60,
+                b256!("69dc51302b48199311568c0e7ab6e0a2a961b1ba52d9bd006003d59efd123b75"),
+            ),
+        ];
+        for (c0, c1, fee, ts, id) in cases {
+            assert_eq!(v4::pool_id(c0, c1, fee, ts, Address::ZERO), id);
+            assert_eq!(v4::stand_in(id).as_slice(), &id[12..]);
+        }
     }
 }
