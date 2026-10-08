@@ -120,21 +120,31 @@ fn simulated_end(logs: &[Log], pool: Address) -> Option<(f64, f64)> {
     ))
 }
 
-/// Compare the decoder's prediction for `call` (an `eth_simulateV1` call object) with the simulated `logs`.
-pub fn check(store: &PoolStore, call: &serde_json::Value, logs: &[Log]) -> Verdict {
+/// Test helper: only the verdict.
+#[cfg(test)]
+fn check(store: &PoolStore, call: &serde_json::Value, logs: &[Log]) -> Verdict {
+    check_detailed(store, call, logs).0
+}
+
+/// `check`, plus the numbers behind a comparison (for the mismatch event).
+pub fn check_detailed(
+    store: &PoolStore,
+    call: &serde_json::Value,
+    logs: &[Log],
+) -> (Verdict, Option<serde_json::Value>) {
     let hex = |k: &str| {
         call.get(k)
             .and_then(|v| v.as_str())
             .and_then(|s| alloy::hex::decode(s.trim_start_matches("0x")).ok())
     };
     let (Some(to), Some(input)) = (hex("to").filter(|t| t.len() == 20), hex("input")) else {
-        return Verdict::NotDecoded;
+        return (Verdict::NotDecoded, None);
     };
     let Some(intent) = decode(Address::from_slice(&to), &input) else {
-        return Verdict::NotDecoded;
+        return (Verdict::NotDecoded, None);
     };
     let Some(addr) = pool_for(store, &intent) else {
-        return Verdict::UnknownPool;
+        return (Verdict::UnknownPool, None);
     };
     let pool = store.get(&addr).expect("found above");
     let limit = intent
@@ -142,18 +152,54 @@ pub fn check(store: &PoolStore, call: &serde_json::Value, logs: &[Log]) -> Verdi
         .map(|l| mev_dex::sqrt_price_from_x96(f64::from(l)));
     let Some(predicted) = pool.state_after(intent.token_in, f64::from(intent.amount_in), limit)
     else {
-        return Verdict::NoPrediction;
+        return (Verdict::NoPrediction, None);
     };
-    let mev_dex::PoolState::V3 { sqrt_price, .. } = predicted else {
-        return Verdict::NoPrediction;
+    let mev_dex::PoolState::V3 {
+        sqrt_price: pred_sqrt,
+        liquidity: pred_liq,
+    } = predicted
+    else {
+        return (Verdict::NoPrediction, None);
     };
-    let Some((actual, _)) = simulated_end(logs, addr) else {
-        return Verdict::NoActual;
+    let Some((actual, actual_liq)) = simulated_end(logs, addr) else {
+        return (Verdict::NoActual, None);
     };
-    let ratio = sqrt_price / actual;
-    Verdict::Compared {
-        price_diff_bps: (ratio * ratio - 1.0) * 1e4,
-    }
+    let ratio = pred_sqrt / actual;
+    let bps = (ratio * ratio - 1.0) * 1e4;
+    let before = match pool.state {
+        mev_dex::PoolState::V3 {
+            sqrt_price,
+            liquidity,
+        } => Some((sqrt_price, liquidity)),
+        _ => None,
+    };
+    let detail = serde_json::json!({
+        "router": format!("{:#x}", Address::from_slice(&to)),
+        "selector": alloy::hex::encode(&input[..4]),
+        "pool": format!("{addr:#x}"),
+        "dex": pool.info.dex,
+        "token_in_is_token0": intent.token_in == pool.info.token0,
+        "amount_in": f64::from(intent.amount_in),
+        "has_limit": limit.is_some(),
+        "before_sqrt": before.map(|b| b.0),
+        "before_liq": before.map(|b| b.1),
+        "predicted_sqrt": pred_sqrt,
+        "predicted_liq": pred_liq,
+        "actual_sqrt": actual,
+        "actual_liq": actual_liq,
+        "limit_sqrt": limit,
+        "fee0": pool.fee0,
+        "fee1": pool.fee1,
+        "ticks_lo": pool.ticks.as_ref().map(|t| t.lo),
+        "ticks_hi": pool.ticks.as_ref().map(|t| t.hi),
+        "diff_bps": bps,
+    });
+    (
+        Verdict::Compared {
+            price_diff_bps: bps,
+        },
+        Some(detail),
+    )
 }
 
 #[cfg(test)]
