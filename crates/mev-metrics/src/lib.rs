@@ -303,7 +303,9 @@ mod tests {
             m.event("burst", json!({ "i": i }));
         }
         assert!(
-            t.elapsed() < Duration::from_secs(10),
+            // A blocking queue would hang for as long as the disk is slow; this only needs to tell "returns" from
+            // "hangs", and a debug build under a loaded test run is slow (11 s seen with the 10 s bound).
+            t.elapsed() < Duration::from_secs(60),
             "event() must not wait on the disk"
         );
         m.flush();

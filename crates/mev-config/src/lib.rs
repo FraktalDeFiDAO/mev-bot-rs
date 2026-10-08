@@ -423,6 +423,12 @@ pub struct PresimConfig {
     pub record_feed: bool,
     #[serde(default = "default_record_keep_days")]
     pub record_keep_days: u32,
+    /// With `record_feed`: also fetch every `chain_sample_every`-th block's receipts and write `chaintx-DATE.jsonl`
+    /// (status, gas, position, swap/liquidity/liquidation events) for recorded feed transactions and for any
+    /// transaction emitting such an event. 0 turns it off. One `eth_getBlockReceipts` call per sampled block
+    /// (Arbitrum makes ~4 blocks/s, so 4 means ~1 call/s).
+    #[serde(default)]
+    pub chain_sample_every: u64,
 }
 
 fn default_record_keep_days() -> u32 {

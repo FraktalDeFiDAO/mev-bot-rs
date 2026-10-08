@@ -3131,6 +3131,7 @@ dependencies = [
  "mev-liquidate",
  "mev-localsim",
  "mev-metrics",
+ "mev-outcomes",
  "mev-presim",
  "mev-risk",
  "mev-rpc",
@@ -3383,6 +3384,20 @@ dependencies = [
  "futures",
  "mev-bindings",
  "mev-rpc",
+ "tracing",
+]
+
+[[package]]
+name = "mev-outcomes"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "futures",
+ "mev-bindings",
+ "mev-presim",
+ "serde_json",
+ "tokio",
  "tracing",
 ]
 

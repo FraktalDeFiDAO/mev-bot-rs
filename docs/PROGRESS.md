@@ -10,6 +10,13 @@ Read this file first in every session. Update at the end of every phase.
 | 1 Audit + design doc | **done, awaiting human approval (GATE)** | `docs/design/audit-sequencer-first.md`, `docs/design/sequencer-first.md`, `docs/arbitrum-facts.md` |
 | 2-14 | not started | blocked on the Phase 1 gate |
 
+## Decoder workstream (owner go-ahead 2026-10-08, ahead of the Phase 1 gate)
+
+- Goal: decode every swap, liquidity change and liquidation seen on the sequencer feed, with coverage proved against chain receipts. See DECISIONS #89 (decoder, shadow), #90 (feed recorder), #91 (chain outcomes + coverage audit).
+- Done: calldata decoder for the three non-public contracts that make up 94% of pool movers (A and B end at their price limit; C is a single-hop exact input), shadow comparison with the node simulation (93% exact), feed recorder, chain outcome sampler, `scripts/analyze-outcomes.py`.
+- Limit stated plainly: a feed transaction's *success* is not knowable from the feed; chain state (block logs) stays the source of truth and decoded effects stay tentative.
+- Next: read the coverage report, then add decoders in descending order of uncovered volume (public routers, aggregators, position managers, V4, lending liquidations).
+
 ## Phase 1: what was done
 
 - Saved the spec and the standing invariants under `docs/tasks/`; linked the invariants from the repo `CLAUDE.md` without replacing its project rules.

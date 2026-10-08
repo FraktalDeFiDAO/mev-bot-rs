@@ -38,5 +38,6 @@ mev-lending-dolomite = { workspace = true }
 mev-lending-gearbox = { workspace = true }
 mev-sequencer = { workspace = true }
 mev-presim = { workspace = true }
+mev-outcomes = { workspace = true }
 mev-localsim = { workspace = true }
 mev-atlas = { workspace = true }
