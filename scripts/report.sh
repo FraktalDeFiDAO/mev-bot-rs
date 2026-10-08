@@ -47,6 +47,36 @@ for k, v in c.items(): print(\"  %-46s %d\" % (k, v))
 if late: print(\"  blocks between trigger and our landing: median %d, max %d\" % (sorted(late)[len(late)//2], max(late)))
 "' 2>&1 | head -10
 
+if [[ -n "${FF_VAULT:-}" ]]; then
+  echo "== Fast Feed vault (ticket spend and conversion drag, last 30 days)"
+  python3 - "${FF_RPC:-https://arb1.arbitrum.io/rpc}" "$FF_VAULT" <<'PY' 2>&1 | head -8
+import json, sys, urllib.request
+rpc, vault = sys.argv[1], sys.argv[2]
+def call(m, p):
+    r = urllib.request.Request(rpc, json.dumps({"jsonrpc": "2.0", "id": 1, "method": m, "params": p}).encode(), {"content-type": "application/json", "user-agent": "report"})
+    return json.load(urllib.request.urlopen(r, timeout=60))["result"]
+head = int(call("eth_blockNumber", []), 16)
+import os
+frame = int(os.environ.get("FF_REPORT_LOOKBACK_BLOCKS", 4 * 86400 * 30))  # about 30 days at 4 blocks/s
+frm = head - frame
+def logs(topic):
+    out = []
+    for lo in range(frm, head + 1, 9_000_000):
+        out += call("eth_getLogs", [{"address": vault, "topics": [topic], "fromBlock": hex(lo), "toBlock": hex(min(head, lo + 8_999_999))}])
+    return out
+w = lambda d, i: int(d[2 + 64 * i: 2 + 64 * (i + 1)], 16)
+renewed_topic = "0x5675981f7d0c04b92b1d6a02125be55a9463468beef1b58ac70c6be74a503407"  # keccak of Renewed(...)
+rn = logs(renewed_topic)
+paid = sum(w(l["data"], 2) for l in rn); tickets = sum(w(l["data"], 1) for l in rn)
+print(f"  ticket renewals {len(rn)}: {tickets} ticket(s), {paid/1e6:.2f} USDG paid (about ${paid/1e6/30:.2f}/day over 30 days)")
+converted_topic = "0x80aaefaf59d70d6ed6ecae25018f99e73b43f7dc60af403d422b060c6c1df02c"  # keccak of Converted(...)
+cv = logs(converted_topic)
+# Converted(token indexed, amountIn, out, minOut, expected): data words 0..3
+drag = sum(max(w(l["data"], 3) - w(l["data"], 1), 0) for l in cv); vol = sum(w(l["data"], 3) for l in cv)
+print(f"  conversions {len(cv)}: ${vol/1e6:.2f} converted, drag vs oracle value {drag/1e6:.4f} USDG" + (f" ({drag/vol*1e4:.1f} bps)" if vol else ""))
+PY
+fi
+
 echo "== infrastructure (month to date)"
 START="$(date -u +%Y-%m-01)"; END="$(date -u -d tomorrow +%Y-%m-%d)"
 if OUT=$(aws ce get-cost-and-usage --profile mev-bot --region us-east-1 --time-period "Start=$START,End=$END" \

@@ -18,12 +18,18 @@ Read this file first in every session. Update at the end of every phase.
 - Audited the existing bot (12 areas with verdicts; explicit file:line findings for every list item in spec §13).
 - Wrote the design doc (flows, state model, crate graph, per-protocol transitions, bid engine, reconciliation, migration plan).
 
+## PAUSED: Fast Feed spending (owner, 2026-10-08)
+
+No ticket, no vault deployment, no funding of anything for the Fast Feed **until the bot has landed a successful arbitrage or liquidation**.
+Experiment 0 tooling, the ticket helper and vault v2 (PR #74, undeployed, unaudited) stay prepared. Phases that need Fast Feed logs (Phase 2 against
+a live feed) wait; fixtures-based work and everything that costs nothing continue.
+
 ## Compliance workstream (owner: invariants bind the live bot)
 
 - **Wave 1 shipped in PR "compliance wave 1" (DECISIONS #78):** async metrics, background maintenance, guarded refresh + `state_correction` events, opportunity version stamps, `EXECUTION_MODE`, stub check.
   Verified by unit tests (metrics burst/drop, version bump semantics, refresh vs newer event), `scripts/check.sh`, and `scripts/test-e2e-crash.sh` (5/5 in 4 s).
 - **Wave 2 (next, no new money/hardware needed):** pool busy-marking review (#6), per-pool confidence from read failures (#7 interim), correction reason classification.
-- **Experiment 0 tooling ready (DECISIONS #80, `docs/runbooks/fast-feed-experiment.md`):** `mev-feedlead`, `scripts/fast-feed-ticket.sh`, Fast Feed client fixed for binary frames and covered by a mock-server test. Waiting on the operator to buy one ticket: a FIRST-TIME buyer can buy only in the second half of a round (grandfather period), i.e. 2026-10-08 05:00-17:00 UTC; the ticket is live 17:00 UTC that day for 24 h. Optional vault + keeper automation for renewals (DECISIONS #81, runbook path B).
+- **Experiment 0 tooling ready (DECISIONS #80, `docs/runbooks/fast-feed-experiment.md`):** `mev-feedlead`, `scripts/fast-feed-ticket.sh`, Fast Feed client fixed for binary frames and covered by a mock-server test. Waiting on the operator to buy one ticket: a FIRST-TIME buyer can buy only in the second half of a round (grandfather period), i.e. 2026-10-08 05:00-17:00 UTC; the ticket is live 17:00 UTC that day for 24 h. Optional vault v2 with a USDG converter and a gas-only keeper (DECISIONS #81-82, runbook path B): unaudited, undeployed; needs a mainnet canary.
 - **Blocked on human decisions:** Fast Feed ticket (experiment 0), node for replay/reconciliation, shadow key + host. Phases 2+ proceed with recorded fixtures where they can.
 
 ## Conflicts between the spec and verified facts (recorded, design adapted)
