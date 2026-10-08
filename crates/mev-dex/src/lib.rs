@@ -508,6 +508,21 @@ mod tests {
     }
 
     #[test]
+    fn walking_to_a_price_above_the_start_with_the_other_token_ends_exactly_there() {
+        let p = banded();
+        let limit = 1.0001f64.powf(30.0); // above the start, inside the first band
+        let PoolState::V3 {
+            sqrt_price,
+            liquidity,
+        } = p.state_after(B, 1e60, Some(limit)).unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(sqrt_price, limit);
+        assert_eq!(liquidity, 1e6);
+    }
+
+    #[test]
     fn state_after_crosses_a_tick_and_takes_the_new_liquidity() {
         let p = banded();
         let s100 = 1.0001f64.powf(-50.0);

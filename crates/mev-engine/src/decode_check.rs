@@ -227,7 +227,16 @@ pub fn check_detailed(
     };
     let state_bps = ((ours_before / node_before).powi(2) - 1.0) * 1e4;
     // With a limit: walk to the limit with unlimited input. Without one: the amount-based move.
-    let pinned = limit.and_then(|lm| pool.state_after(intent.token_in, 1e60, Some(lm)));
+    // Our start can already be beyond the bot's limit (the node's pool stood on the other side, or ours is stale):
+    // the swap still ends at the limit, so walk to it from wherever we are, in whichever direction that is.
+    let pinned = limit.and_then(|lm| {
+        let toward = if lm > ours_before {
+            pool.info.token1
+        } else {
+            pool.info.token0
+        };
+        pool.state_after(toward, 1e60, Some(lm))
+    });
     let (bps, pred_sqrt, pred_liq) = match pinned {
         Some(mev_dex::PoolState::V3 {
             sqrt_price,
