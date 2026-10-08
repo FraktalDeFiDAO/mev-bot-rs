@@ -52,27 +52,47 @@ scripts/fast-feed-ticket.sh buy --tickets 1 --deposit-usdg 40          # DRY RUN
 scripts/fast-feed-ticket.sh buy --tickets 1 --deposit-usdg 40 --yes    # typed confirmation, then approve + deposit + purchase
 ```
 
-## Path B: a vault that renews by itself (for continuous use)
+## Path B: a vault that renews by itself and accepts deposits in ETH / USDC (v2)
 
-`contracts/src/FastFeedTicketVault.sol` is the subscriber. It holds the USDG deposit and buys tickets **as itself**, so the renewal priority belongs to
-its address. `renew()` is callable by **anyone** but can only buy the owner-configured number of tickets for the owner-configured key hash, at no
-more than the owner's price cap, once per round, while a renewals budget lasts. Only the owner can fund, change settings, or withdraw. So the
-unattended **keeper account needs gas ETH only** and cannot touch the money.
+`contracts/src/FastFeedTicketVault.sol` (+ `UsdgConverter.sol`) is the subscriber. It **holds the money itself** (the Tickets contract is a DAO-governed
+upgradeable proxy that has been upgraded once; the vault deposits exactly `price x tickets` into it just before buying and takes back any leftover).
+
+- **Renewal:** `renew()` is callable by **anyone**, but can only buy the owner-configured number of tickets for the owner-configured key hash, at no
+  more than the price cap, once per round, within `renewals`, `budget` and `expiry`. It buys what the vault can afford (a partial seat beats losing it) and,
+  inside the grandfather window, only what the allowance permits (the Tickets contract reverts the whole purchase if you ask for more).
+- **Deposits:** send **USDG, USDC or ETH** to the vault address like to any wallet. A keeper (anyone) calls `convert(token, amount)`; ETH goes ETH -> WETH ->
+  USDC (Uniswap V3) -> USDG (the hooked Uniswap V4 pool, the only deep USDG liquidity). The contract computes the minimum USDG itself (Chainlink ETH/USD,
+  fresh and sequencer-up; USDC valued 1:1) and reverts unless it gets at least that: a keeper can only sandwich inside the bound (10 bps USDC, 100 bps ETH),
+  never steal. Any other token needs a route from the owner (`route`).
+- **Only the owner** can fund, configure, whitelist routes, withdraw, rotate the key, `exit()` or sweep. The keeper account holds gas only.
 
 ```bash
+# one-time: keystore accounts (the key is typed once, stored encrypted; raw keys are refused)
+cast wallet import ff-owner --interactive
+cast wallet import ff-keeper --interactive           # a SEPARATE account with ~0.002 ETH of gas and nothing else
 export FF_OWNER_ACCOUNT=ff-owner
-scripts/fast-feed-vault.sh deploy --yes                    # you deploy it (dry run without --yes); note the address
-scripts/fast-feed-vault.sh setup <vault> --tickets 1 --max-price 40 --renewals 7 --deposit 150   # dry run; add --yes
-# keeper: a SEPARATE keystore account holding ~0.002 ETH of gas, nothing else
-cast wallet import ff-keeper --interactive
-export FF_KEEPER_ACCOUNT=ff-keeper FF_PASSWORD_FILE=~/.config/mev-bot/keeper.pw   # file mode 600 with the keystore password
-scripts/fast-feed-vault.sh keeper <vault> --loop 300       # every 5 min: renew if the contract says it can (use systemd/cron for production)
-scripts/fast-feed-vault.sh status <vault>                  # anyone: deposit, renewals left, can renew now
-scripts/fast-feed-vault.sh withdraw <vault> 50 --yes       # owner takes unused deposit back
+
+scripts/fast-feed-vault.sh deploy --yes               # you deploy it (dry run without --yes); note the address
+scripts/fast-feed-vault.sh setup <vault> --tickets 1 --max-price 40 --renewals 7 --budget 150 --expiry-days 30 --deposit 50   # dry run; add --yes
+scripts/fast-feed-vault.sh route <vault> both --yes   # whitelist USDC and ETH deposits for conversion (dry run first)
+
+export FF_KEEPER_ACCOUNT=ff-keeper FF_PASSWORD_FILE=~/.config/mev-bot/keeper.pw    # file mode 600 with the keystore password
+scripts/fast-feed-vault.sh keeper <vault> --loop 300  # converts deposits when USDG is short, simulates, then renews (use systemd/cron in production)
+
+scripts/fast-feed-vault.sh status <vault>             # anyone: balances, renewals/budget left, ready to renew
+scripts/fast-feed-vault.sh rotate-key <vault> <new-key-file> --yes   # planned key change, used from the next renewal
+scripts/fast-feed-vault.sh withdraw <vault> 20 --yes  # take USDG back
+scripts/fast-feed-vault.sh exit <vault> --yes         # stop automation and return everything in USDG; other tokens: sweep / sweepEth
 ```
-The worst case spend is `renewals x tickets x max-price`, and never more than the deposit. Set `--renewals 0` (via `setConfig`) to stop automation.
-**The contract is not audited and is not deployed.** It is ~150 lines, no proxy, no upgrade path, no admin backdoor, covered by 11 fork tests against the real
-Tickets contract (`forge test --match-contract FastFeedTicketVaultForkTest`) and an end-to-end script run on a fork. Deploy it with a small deposit first.
+**Monitoring:** set `FF_VAULT` (and `FF_KEEPER_ADDRESS`) for `scripts/watchdog.sh`: it alerts when the next round has no ticket and < 2 h remain,
+when USDG cannot cover the next ticket, when renewals or budget run low, and when the keeper's gas is low. `scripts/report.sh` (with `FF_VAULT`) prints
+ticket spend and conversion drag.
+
+**Limits you should know.** The worst-case spend is `min(budget, renewals x tickets x max price)`. A leaked API key cannot be revoked mid-round (rotate and wait
+out the round). USDG has no price feed and is assumed = $1 (a depeg below $1 makes conversions revert; above $1 they return more). The USDG pool's hook is a
+135-byte proxy we cannot read: the bound protects every conversion, and `renew()` never depends on a conversion succeeding. **The contracts are unaudited and
+undeployed; 39 fork tests (21 ticket logic, 18 converter) plus fuzz and an end-to-end fork run pass. Start with a canary:** deploy, send 20 USDG, one renewal,
+confirm the `TicketsPurchased` event names the vault as buyer, then `exit`.
 
 ## Measure (after the ticket is live)
 

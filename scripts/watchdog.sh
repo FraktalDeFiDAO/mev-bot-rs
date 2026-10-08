@@ -3,7 +3,8 @@
 #   scripts/watchdog.sh             prints "ok" or one ALERT line per problem; exit 1 on any alert
 # Alerts are appended to data/arbitrum/ALERTS.log. Optional push: put a webhook URL in
 # data/arbitrum/alert_webhook (a file, never committed); each new alert is POSTed to it as JSON {"text": ...}.
-# Checks: container up + healthy, heartbeat fresh, kill switch, hot wallet gas balance, disk, cap/mode events.
+# Checks: container up + healthy, heartbeat fresh, kill switch, hot wallet gas balance, disk, cap/mode events; with FF_VAULT
+# set, also the Fast Feed ticket vault (ticket bought for the next round, funds, renewals, keeper gas).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 D=data/arbitrum
@@ -45,6 +46,40 @@ fi
 
 disk="$(df --output=pcent / | tail -1 | tr -dc 0-9)"
 (( disk < ${MAX_DISK_PCT:-85} )) || alerts+=("disk ${disk}% full (builds fail near 100%; podman image prune -f)")
+
+# Fast Feed ticket vault (optional): set FF_VAULT (and FF_KEEPER_ADDRESS for the gas check). Losing the seat is expensive
+# (nobody has ever come back after skipping a round), so alert early.
+if [[ -n "${FF_VAULT:-}" ]]; then
+  while IFS= read -r a; do [[ -n "$a" ]] && alerts+=("$a"); done < <(python3 - "$RPC" "$FF_VAULT" "${FF_KEEPER_ADDRESS:-}" <<'PY'
+import json, sys, time, urllib.request
+rpc, vault, keeper = sys.argv[1], sys.argv[2], sys.argv[3]
+def call(to, data):
+    r = urllib.request.Request(rpc, json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_call", "params": [{"to": to, "data": data}, "latest"]}).encode(), {"content-type": "application/json", "user-agent": "watchdog"})
+    return json.load(urllib.request.urlopen(r, timeout=20))["result"]
+def words(h): h = h[2:]; return [int(h[i:i + 64], 16) for i in range(0, len(h), 64)]
+try:
+    rnd, price, held, gf, usdg, inside, left, budget, can = words(call(vault, "0x200d2ed2"))
+    per_round = words(call(vault, "0x6e7687c2"))[0]
+    end = words(call("0x451DD62C26b753d07d6104aaC6865AaE73a6A598", "0xc02e580e"))[0]
+    hours = (end - time.time()) / 3600
+    if per_round and held < per_round and hours < 2:
+        print(f"Fast Feed vault: only {held} of {per_round} ticket(s) bought for the next round and {hours:.1f} h left in round {rnd}")
+    if per_round and usdg < price * max(per_round - held, 1) and held < per_round:
+        print(f"Fast Feed vault: {usdg/1e6:.2f} USDG cannot cover the next ticket ({price/1e6:.2f} USDG)")
+    if left <= 1:
+        print(f"Fast Feed vault: {left} renewal(s) left")
+    if budget < price:
+        print(f"Fast Feed vault: budget {budget/1e6:.2f} USDG is below one ticket")
+    if keeper:
+        r = urllib.request.Request(rpc, json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_getBalance", "params": [keeper, "latest"]}).encode(), {"content-type": "application/json", "user-agent": "watchdog"})
+        eth = int(json.load(urllib.request.urlopen(r, timeout=20))["result"], 16) / 1e18
+        if eth < 0.0005:
+            print(f"Fast Feed keeper gas low: {eth:.5f} ETH")
+except Exception as e:
+    print(f"Fast Feed vault check failed: {e}")
+PY
+)
+fi
 
 today="$D/events-$(date -u +%F).jsonl"
 if [[ -f $today ]]; then
