@@ -223,7 +223,16 @@ pub fn check_detailed(
         mev_dex::PoolState::V3 { sqrt_price, .. } => sqrt_price,
         _ => return (Verdict::NoPrediction, None),
     };
-    let token0_in = intent.token_in == pool.info.token0;
+    // A V4 swap names native ETH as the zero address; our store files the native side as WETH, on the side that
+    // `flipped` says (not flipped: ETH is currency0, so it is our token0).
+    let token0_in = match pool.info.kind {
+        PoolKind::UniV4 {
+            native: true,
+            flipped,
+            ..
+        } if intent.token_in == Address::ZERO => !flipped,
+        _ => intent.token_in == pool.info.token0,
+    };
     let fee = if token0_in { pool.fee0 } else { pool.fee1 };
     let Some(node_before) = implied_start(&sim, token0_in, fee) else {
         return (Verdict::NoPrediction, None);

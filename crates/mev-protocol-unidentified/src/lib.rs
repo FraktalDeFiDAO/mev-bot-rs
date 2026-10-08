@@ -5,6 +5,7 @@
 
 pub mod packed;
 pub mod packed_table;
+pub mod v4_bots;
 
 use alloy::primitives::{Address, address};
 use mev_protocol::{Contract, Decoded, PoolRef, Protocol, SwapIntent, abi};
@@ -13,22 +14,27 @@ use mev_protocol::{Contract, Decoded, PoolRef, Protocol, SwapIntent, abi};
 pub const ROUTER_A: Address = address!("278d858f05b94576C1E6f73285886876ff6eF8D2");
 /// Selector `0x000000e7`: `(pool, 0, amountIn, sqrtPriceLimitX96, tokenIn)`.
 pub const ROUTER_B: Address = address!("96DaA0B8a5499EA9323421ED0Cda06B345caab73");
-/// Router B's first word usually is the pool, but three wrapper contracts appear there instead; all three swap on the
-/// same pool, `0x360e68fa...`. Measured on chain (2026-10-08): 49 successful calls, every one emitted its `Swap` on that
-/// pool and on no other, none from the wrapper itself (`scripts/verify-decoder.py`). Resolved here so a decoded intent
-/// names the pool whose state moves. If this mapping is ever wrong the verification script reports `pool wrong` for it.
-pub const POOL_ALIASES: [(Address, Address); 3] = [
+/// Router B's first word usually is a V3-style pool, but four wrapper contracts appear there instead. Each swaps on one
+/// Uniswap V4 pool (the PoolManager is `0x360e68fa...`, which emitted the swap); mapped here to that pool's stand-in
+/// address (the last 20 bytes of its id), which is how pools without a contract are named elsewhere. Measured on chain
+/// (2026-10-08): every successful call through a wrapper emitted its V4 `Swap` for that id and no other
+/// (61 + 9 + 1 + 3 calls, `scripts/verify-decoder.py`).
+pub const POOL_ALIASES: [(Address, Address); 4] = [
     (
         address!("2f5ea801cdb6ac9aa7fba3d288491def251b7f7e"),
-        address!("360e68faccca8ca495c1b759fd9eee466db9fb32"),
+        address!("2308da953ff125b0f95015adbf89aaf579e903a8"),
     ),
     (
         address!("e8c4a103bdb3187b4f05577c115951f8826bfaaa"),
-        address!("360e68faccca8ca495c1b759fd9eee466db9fb32"),
+        address!("b8df2ccefad94553ec18f1c29143f0399c78f500"),
     ),
     (
         address!("af031ad1f20ad56dc9fbd83b20c0e7ed9dd57f26"),
-        address!("360e68faccca8ca495c1b759fd9eee466db9fb32"),
+        address!("3ea89c31b361a009f9c36a1de5c8f0afcc45bde8"),
+    ),
+    (
+        address!("056ba06ff14a87f7bb819c284a40fb0d5f038233"),
+        address!("9cc505ce20b36afffd297aef2dc17daafce3b140"),
     ),
 ];
 
@@ -72,6 +78,10 @@ impl Protocol for Unidentified {
                 token_in: abi::addr(d, 4)?,
                 hops: 1,
             }
+        } else if to == ROUTER_A && sel == v4_bots::SELECTOR_A_V4 {
+            v4_bots::decode_a_v4(d)?
+        } else if to == v4_bots::ROUTER_E {
+            v4_bots::decode_e(sel, d)?
         } else {
             return packed::decode(to, input).map(Decoded::Swap);
         };
@@ -82,12 +92,17 @@ impl Protocol for Unidentified {
         vec![
             Contract {
                 address: ROUTER_A,
-                name: "unidentified, selector a00597a0",
+                name: "unidentified, selectors a00597a0 (V3) and 669dc5b6 (V4)",
                 decoded: true,
             },
             Contract {
                 address: ROUTER_B,
                 name: "unidentified, selector 000000e7",
+                decoded: true,
+            },
+            Contract {
+                address: v4_bots::ROUTER_E,
+                name: "unidentified, selectors 755f317c (V3) and 4fd7c9b7 (V4)",
                 decoded: true,
             },
             Contract {
