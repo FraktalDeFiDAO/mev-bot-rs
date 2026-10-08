@@ -102,6 +102,7 @@ max_consecutive_failures = 10
 max_loan_usd = 50000.0
 max_concurrent_sends = 3      # arbs on disjoint pools; 7 profitable opps were dropped behind one in-flight tx (2026-10-05)
 arb_presimulate = true        # every live arb is eth_called through the executor first. Sending on the model alone lost $2 in an hour (2026-10-07, DECISIONS #75): with tick maps most routes count as exact, and 7 of 8 model-only sends would already have reverted one block earlier
+fast_send = true             # speed over accuracy: skip every pre-send eth_call (this, the inexact/unvetted-route and V4 checks stay configured but are bypassed); minProfit on chain still reverts losers. Set false once an own node exists (DECISIONS #88)
 
 [pga]
 # Priority-fee (tip) spend caps, USD. Daily gas stays capped by [risk] max_gas_usd_per_day.
