@@ -7,6 +7,16 @@ use mev_bindings::{IPancakeV3Pool, IPoolManager, IUniswapV2Pair, IUniswapV3Pool}
 use mev_dex::{Pool, PoolState, sqrt_price_from_x96};
 use mev_types::{Address, B256, PoolKind};
 
+/// A pool whose presim-applied (tentative) state never got confirmed by a real log and was rolled back.
+#[derive(Debug, Clone)]
+pub struct Rollback {
+    pub pool: Address,
+    /// The unconfirmed state that had been applied.
+    pub tentative: PoolState,
+    /// The confirmed state it was restored to.
+    pub restored: PoolState,
+}
+
 /// What a background state read changed in the store.
 #[derive(Debug, Default)]
 pub struct RefreshOutcome {
@@ -36,6 +46,18 @@ pub struct PoolStore {
     /// Uniswap V4 pool id -> the stand-in address it is stored under (their events come from the
     /// shared PoolManager and name the pool only by id).
     v4: HashMap<B256, Address>,
+    /// Pools holding a state applied from a **pending** feed transaction (presim), with the confirmed state and tick
+    /// table from before it and when it was last applied. A real block log, a resync or a replacement confirms the
+    /// pool and clears the entry; `expire_tentative` rolls back what nothing confirmed (a transaction that reverted
+    /// or never landed leaves no log).
+    tentative: HashMap<
+        Address,
+        (
+            PoolState,
+            Option<std::sync::Arc<mev_dex::TickMap>>,
+            std::time::Instant,
+        ),
+    >,
 }
 
 /// Relative tolerance below which two states are the same pool state (they differ only by floating-point
@@ -189,6 +211,7 @@ impl PoolStore {
     /// Replace an existing pool's state and fees (e.g. after a resync). Unknown pools are ignored.
     pub fn replace(&mut self, pool: Pool) {
         let addr = pool.info.address;
+        self.tentative.remove(&addr);
         if let Some(p) = self.pools.get_mut(&addr) {
             let changed = p.state != pool.state || p.fee0 != pool.fee0 || p.fee1 != pool.fee1;
             *p = pool;
@@ -210,6 +233,7 @@ impl PoolStore {
     }
 
     pub fn set_state(&mut self, addr: &Address, state: PoolState) {
+        self.tentative.remove(addr);
         if let Some(p) = self.pools.get_mut(addr) {
             let changed = p.state != state;
             p.state = state;
@@ -368,9 +392,71 @@ impl PoolStore {
         }
     }
 
-    /// Apply a pool event. Returns the pool it updated; the pool's version moves only when its
-    /// state actually changed (a real block log that repeats a pending tx's state is a no-op).
+    /// Apply a **real** pool event (a block log): it is absolute state from the chain, so it also confirms the pool
+    /// (any tentative presim state is dropped). Returns the pool it updated.
     pub fn apply_log(&mut self, log: &Log) -> Option<Address> {
+        let updated = self.apply_log_core(log);
+        if let Some(a) = updated {
+            self.tentative.remove(&a);
+        }
+        updated
+    }
+
+    /// Apply an event from a **pending** transaction (presim). The confirmed state is remembered; unless a real log,
+    /// a resync or a replacement confirms the pool, `expire_tentative` restores it.
+    pub fn apply_log_tentative(&mut self, log: &Log, now: std::time::Instant) -> Option<Address> {
+        let target = self.log_pool(log)?;
+        let snapshot = self
+            .pools
+            .get(&target)
+            .map(|p| (p.state.clone(), p.ticks.clone()))?;
+        let updated = self.apply_log_core(log)?;
+        self.tentative
+            .entry(updated)
+            .and_modify(|e| e.2 = now)
+            .or_insert((snapshot.0, snapshot.1, now));
+        Some(updated)
+    }
+
+    /// Roll back every tentative state older than `ttl` that nothing confirmed.
+    pub fn expire_tentative(
+        &mut self,
+        now: std::time::Instant,
+        ttl: std::time::Duration,
+    ) -> Vec<Rollback> {
+        let due: Vec<Address> = self
+            .tentative
+            .iter()
+            .filter(|(_, (_, _, at))| now.saturating_duration_since(*at) >= ttl)
+            .map(|(a, _)| *a)
+            .collect();
+        let mut out = Vec::new();
+        for a in due {
+            let Some((state, ticks, _)) = self.tentative.remove(&a) else {
+                continue;
+            };
+            let Some(p) = self.pools.get_mut(&a) else {
+                continue;
+            };
+            let tentative = std::mem::replace(&mut p.state, state.clone());
+            p.ticks = ticks;
+            self.bump(a);
+            out.push(Rollback {
+                pool: a,
+                tentative,
+                restored: state,
+            });
+        }
+        out
+    }
+
+    /// Pools currently holding unconfirmed (presim) state.
+    pub fn tentative_len(&self) -> usize {
+        self.tentative.len()
+    }
+
+    /// Shared by real and tentative application: the pool's version moves only when its state actually changed.
+    fn apply_log_core(&mut self, log: &Log) -> Option<Address> {
         let before = self
             .log_pool(log)
             .and_then(|a| self.pools.get(&a).map(|p| (a, p.state.clone())));
@@ -1147,5 +1233,175 @@ mod tests {
             materially_different(&a, &v2(1.0, 1.0)),
             "different kinds always differ"
         );
+    }
+
+    fn sync_log(addr: Address, r0: u64, r1: u64) -> Log {
+        rpc_log(
+            addr,
+            IUniswapV2Pair::Sync {
+                reserve0: U112::from(r0),
+                reserve1: U112::from(r1),
+            }
+            .encode_log_data(),
+        )
+    }
+
+    fn v2_store(addr_byte: u8) -> (PoolStore, Address) {
+        let mut s = PoolStore::default();
+        s.insert(pool(
+            addr_byte,
+            PoolKind::UniV2 { fee_bps: 30 },
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 100.0,
+                reserve1: 200.0,
+            },
+        ));
+        (s, Address::with_last_byte(addr_byte))
+    }
+
+    #[test]
+    fn a_tentative_state_is_rolled_back_when_nothing_confirms_it() {
+        let (mut s, addr) = v2_store(1);
+        let t0 = std::time::Instant::now();
+        let ttl = std::time::Duration::from_secs(3);
+        let v0 = s.version(&addr);
+        assert_eq!(
+            s.apply_log_tentative(&sync_log(addr, 150, 150), t0),
+            Some(addr)
+        );
+        assert_eq!(
+            s.get(&addr).unwrap().state,
+            PoolState::V2 {
+                reserve0: 150.0,
+                reserve1: 150.0
+            }
+        );
+        assert_eq!(s.tentative_len(), 1);
+        // Too early: nothing happens.
+        assert!(
+            s.expire_tentative(t0 + std::time::Duration::from_secs(2), ttl)
+                .is_empty()
+        );
+        // Past the limit: the confirmed state comes back and the version moves.
+        let rb = s.expire_tentative(t0 + ttl, ttl);
+        assert_eq!(rb.len(), 1);
+        assert_eq!(rb[0].pool, addr);
+        assert_eq!(
+            rb[0].tentative,
+            PoolState::V2 {
+                reserve0: 150.0,
+                reserve1: 150.0
+            }
+        );
+        assert_eq!(
+            rb[0].restored,
+            PoolState::V2 {
+                reserve0: 100.0,
+                reserve1: 200.0
+            }
+        );
+        assert_eq!(
+            s.get(&addr).unwrap().state,
+            PoolState::V2 {
+                reserve0: 100.0,
+                reserve1: 200.0
+            }
+        );
+        assert!(s.version(&addr) > v0);
+        assert_eq!(s.tentative_len(), 0);
+    }
+
+    #[test]
+    fn a_real_log_confirms_a_tentative_state_so_it_is_never_rolled_back() {
+        let (mut s, addr) = v2_store(1);
+        let t0 = std::time::Instant::now();
+        s.apply_log_tentative(&sync_log(addr, 150, 150), t0);
+        s.apply_log(&sync_log(addr, 150, 150)); // the block's own log for the same transaction
+        assert_eq!(s.tentative_len(), 0);
+        assert!(
+            s.expire_tentative(
+                t0 + std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(3)
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            s.get(&addr).unwrap().state,
+            PoolState::V2 {
+                reserve0: 150.0,
+                reserve1: 150.0
+            }
+        );
+    }
+
+    #[test]
+    fn a_resync_or_replacement_confirms_too_and_two_pending_txs_keep_the_first_confirmed_state() {
+        let (mut s, addr) = v2_store(1);
+        let t0 = std::time::Instant::now();
+        s.apply_log_tentative(&sync_log(addr, 150, 150), t0);
+        s.apply_log_tentative(
+            &sync_log(addr, 170, 130),
+            t0 + std::time::Duration::from_secs(1),
+        );
+        // The second application extends the clock but keeps the original confirmed state.
+        assert!(
+            s.expire_tentative(
+                t0 + std::time::Duration::from_secs(3),
+                std::time::Duration::from_secs(3)
+            )
+            .is_empty()
+        );
+        let rb = s.expire_tentative(
+            t0 + std::time::Duration::from_secs(4),
+            std::time::Duration::from_secs(3),
+        );
+        assert_eq!(
+            rb[0].restored,
+            PoolState::V2 {
+                reserve0: 100.0,
+                reserve1: 200.0
+            }
+        );
+        // A replacement (what a resync does) clears it.
+        let (mut s, addr) = v2_store(2);
+        s.apply_log_tentative(&sync_log(addr, 150, 150), t0);
+        s.replace(pool(
+            2,
+            PoolKind::UniV2 { fee_bps: 30 },
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 120.0,
+                reserve1: 180.0,
+            },
+        ));
+        assert_eq!(s.tentative_len(), 0);
+        assert!(
+            s.expire_tentative(
+                t0 + std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(3)
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            s.get(&addr).unwrap().state,
+            PoolState::V2 {
+                reserve0: 120.0,
+                reserve1: 180.0
+            }
+        );
+    }
+
+    #[test]
+    fn events_for_unknown_pools_leave_no_tentative_state() {
+        let (mut s, _) = v2_store(1);
+        let stranger = Address::with_last_byte(9);
+        assert_eq!(
+            s.apply_log_tentative(&sync_log(stranger, 1, 1), std::time::Instant::now()),
+            None
+        );
+        assert_eq!(s.tentative_len(), 0);
     }
 }
