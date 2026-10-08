@@ -3077,6 +3077,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-decode"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-bindings",
+ "mev-sequencer",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mev-dex"
 version = "0.1.0"
 dependencies = [
@@ -3394,7 +3405,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "futures",
- "mev-bindings",
+ "mev-decode",
  "mev-presim",
  "serde_json",
  "tokio",
@@ -3410,6 +3421,7 @@ dependencies = [
  "chrono",
  "futures",
  "mev-bindings",
+ "mev-decode",
  "mev-sequencer",
  "serde",
  "serde_json",

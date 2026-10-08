@@ -15,4 +15,5 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 mev-bindings = { workspace = true }
+mev-decode = { workspace = true }
 mev-sequencer = { workspace = true }

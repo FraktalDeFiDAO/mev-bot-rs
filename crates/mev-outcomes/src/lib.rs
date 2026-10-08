@@ -9,9 +9,6 @@
 //!
 //! Sampling keeps the RPC cost at `4 / every_n` calls a second (Arbitrum makes about 4 blocks a second).
 
-// `sol!` generates a constructor-like function per event; Morpho's `Liquidate` has 8 fields.
-#![allow(clippy::too_many_arguments)]
-
 use std::{
     sync::{
         Arc,
@@ -22,113 +19,17 @@ use std::{
 
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    primitives::B256,
     providers::{DynProvider, Provider},
     rpc::types::{Log, TransactionReceipt},
-    sol,
-    sol_types::SolEvent,
 };
 use futures::StreamExt;
-use mev_bindings::{IPancakeV3Pool, IPoolManager, IUniswapV2Pair, IUniswapV3Pool};
 use mev_presim::record::TxRecorder;
 use tracing::{info, warn};
 
-// Event shapes not in `mev-bindings`, each in its own interface so the event is named exactly `Swap`/`Mint`/...
-sol! {
-    interface IV2Events {
-        event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to);
-        event Mint(address indexed sender, uint256 amount0, uint256 amount1);
-        event Burn(address indexed sender, uint256 amount0, uint256 amount1, address indexed to);
-    }
-    interface IAaveEvents {
-        event LiquidationCall(address indexed collateralAsset, address indexed debtAsset, address indexed user, uint256 debtToCover, uint256 liquidatedCollateralAmount, address liquidator, bool receiveAToken);
-    }
-    interface IMorphoEvents {
-        event Liquidate(bytes32 indexed id, address indexed caller, address indexed borrower, uint256 repaidAssets, uint256 repaidShares, uint256 seizedAssets, uint256 badDebtAssets, uint256 badDebtShares);
-    }
-    interface ICometEvents {
-        event AbsorbCollateral(address indexed absorber, address indexed borrower, address indexed asset, uint256 collateralAbsorbed, uint256 usdValue);
-        event AbsorbDebt(address indexed absorber, address indexed borrower, uint256 basePaidOut, uint256 usdValue);
-    }
-    interface IBalancerEvents {
-        event Swap(bytes32 indexed poolId, address indexed tokenIn, address indexed tokenOut, uint256 amountIn, uint256 amountOut);
-    }
-    interface INftManagerEvents {
-        event IncreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1);
-        event DecreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1);
-    }
-}
-
-/// Event kinds worth keeping, by topic0. "swap"/"liquidity"/"liquidation" is the class a decoder must cover.
-pub fn kinds() -> &'static [(B256, &'static str, &'static str)] {
-    static T: std::sync::OnceLock<Vec<(B256, &'static str, &'static str)>> =
-        std::sync::OnceLock::new();
-    T.get_or_init(|| {
-        vec![
-            (IV2Events::Swap::SIGNATURE_HASH, "swap_v2", "swap"),
-            (IUniswapV2Pair::Sync::SIGNATURE_HASH, "sync_v2", "state"),
-            (IV2Events::Mint::SIGNATURE_HASH, "mint_v2", "liquidity"),
-            (IV2Events::Burn::SIGNATURE_HASH, "burn_v2", "liquidity"),
-            (IUniswapV3Pool::Swap::SIGNATURE_HASH, "swap_v3", "swap"),
-            (
-                IPancakeV3Pool::Swap::SIGNATURE_HASH,
-                "swap_v3_pancake",
-                "swap",
-            ),
-            (IUniswapV3Pool::Mint::SIGNATURE_HASH, "mint_v3", "liquidity"),
-            (IUniswapV3Pool::Burn::SIGNATURE_HASH, "burn_v3", "liquidity"),
-            (
-                INftManagerEvents::IncreaseLiquidity::SIGNATURE_HASH,
-                "increase_liquidity_nft",
-                "liquidity",
-            ),
-            (
-                INftManagerEvents::DecreaseLiquidity::SIGNATURE_HASH,
-                "decrease_liquidity_nft",
-                "liquidity",
-            ),
-            (IPoolManager::Swap::SIGNATURE_HASH, "swap_v4", "swap"),
-            (
-                IPoolManager::ModifyLiquidity::SIGNATURE_HASH,
-                "modify_liquidity_v4",
-                "liquidity",
-            ),
-            (
-                IBalancerEvents::Swap::SIGNATURE_HASH,
-                "swap_balancer",
-                "swap",
-            ),
-            (
-                IAaveEvents::LiquidationCall::SIGNATURE_HASH,
-                "liquidation_aave",
-                "liquidation",
-            ),
-            (
-                IMorphoEvents::Liquidate::SIGNATURE_HASH,
-                "liquidation_morpho",
-                "liquidation",
-            ),
-            (
-                ICometEvents::AbsorbCollateral::SIGNATURE_HASH,
-                "absorb_collateral_compound",
-                "liquidation",
-            ),
-            (
-                ICometEvents::AbsorbDebt::SIGNATURE_HASH,
-                "absorb_debt_compound",
-                "liquidation",
-            ),
-        ]
-    })
-}
-
-/// `(kind, class)` of a log, if it is one we keep.
+/// `(kind, class)` of a log, if it is one we keep (the table lives in `mev-decode`).
 pub fn classify(log: &Log) -> Option<(&'static str, &'static str)> {
     let t0 = log.topics().first()?;
-    kinds()
-        .iter()
-        .find(|(h, _, _)| h == t0)
-        .map(|(_, k, c)| (*k, *c))
+    mev_decode::events::classify(t0).map(|k| (k.name, k.class.as_str()))
 }
 
 /// Logs worth keeping from a receipt, as JSON, with the classes present.
@@ -268,7 +169,7 @@ pub async fn run(ws: DynProvider, feed: Arc<TxRecorder>, out: Arc<TxRecorder>, e
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{Address, Bytes, LogData, b256};
+    use alloy::primitives::{Address, B256, Bytes, LogData};
 
     fn log(topic0: B256, topics_extra: usize) -> Log {
         let mut topics = vec![topic0];
@@ -283,47 +184,8 @@ mod tests {
     }
 
     #[test]
-    fn well_known_event_hashes_match() {
-        // Known mainnet topic0 values, so a typo in an event definition cannot go unnoticed.
-        let known = [
-            (
-                "swap_v3",
-                b256!("c42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"),
-            ),
-            (
-                "swap_v2",
-                b256!("d78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"),
-            ),
-            (
-                "sync_v2",
-                b256!("1c411e9a96e071241c2f21f7726b17ae89e3cab4c78be50e062b03a9fffbbad1"),
-            ),
-            (
-                "liquidation_aave",
-                b256!("e413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286"),
-            ),
-        ];
-        for (name, hash) in known {
-            let found = kinds()
-                .iter()
-                .find(|(_, k, _)| *k == name)
-                .map(|(h, _, _)| *h);
-            assert_eq!(found, Some(hash), "{name}");
-        }
-    }
-
-    #[test]
-    fn every_kind_has_a_distinct_topic() {
-        let mut seen = std::collections::HashSet::new();
-        for (h, k, _) in kinds() {
-            assert!(seen.insert(*h), "duplicate topic for {k}");
-        }
-        assert!(kinds().len() >= 17);
-    }
-
-    #[test]
     fn logs_are_classified_and_unknown_ones_ignored() {
-        let swap = log(IUniswapV3Pool::Swap::SIGNATURE_HASH, 2);
+        let swap = log(mev_decode::events::kinds()[4].topic0, 2); // swap_v3
         let junk = log(B256::repeat_byte(0x11), 0);
         assert_eq!(classify(&swap), Some(("swap_v3", "swap")));
         assert_eq!(classify(&junk), None);

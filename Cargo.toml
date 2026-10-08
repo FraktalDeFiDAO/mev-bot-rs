@@ -59,6 +59,7 @@ mev-engine = { path = "crates/mev-engine" }
 mev-sequencer = { path = "crates/mev-sequencer" }
 mev-presim = { path = "crates/mev-presim" }
 mev-outcomes = { path = "crates/mev-outcomes" }
+mev-decode = { path = "crates/mev-decode", default-features = false }
 mev-atlas = { path = "crates/mev-atlas" }
 mev-localsim = { path = "crates/mev-localsim" }
 

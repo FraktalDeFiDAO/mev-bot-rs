@@ -79,6 +79,7 @@ mev-bot/
 | Layer | Crate | Responsibility |
 |---|---|---|
 | L1 | `mev-sequencer` | Arbitrum sequencer feed client: Nitro L2 message decoding → alloy `TxEnvelope` stream (~0.9 s ahead of RPC receipts) |
+| L0 | `mev-decode` | Standalone decoding, usable alone (`mev-decode` CLI) or as a library: swaps from calldata, swap/liquidity/liquidation/state event table, prices from logs, identified contracts. No RPC/engine/state dependencies |
 | L2 | `mev-outcomes` | Chain-side ground truth: sampled `eth_getBlockReceipts` → `chaintx-DATE.jsonl` (status, gas, block position, swap/liquidity/liquidation events) joined to the feed recording on the tx hash; coverage audit of the decoders |
 | L1 | `mev-oracle` | Resolve price sources (Chainlink proxies, Aave CAPO adapters, Morpho oracles) to aggregators; `FeedWatcher` matches feed txs incl. Chainlink forwarder `forward(aggregator, …)` |
 | L1 | `mev-lending` | **The `LiquidationAdapter` trait** + `Plan`/`ProtocolCall`/`Health`/`AccountRef` — every venue implements it |
