@@ -18,6 +18,12 @@ Read this file first in every session. Update at the end of every phase.
 - Audited the existing bot (12 areas with verdicts; explicit file:line findings for every list item in spec §13).
 - Wrote the design doc (flows, state model, crate graph, per-protocol transitions, bid engine, reconciliation, migration plan).
 
+## PAUSED: Fast Feed spending (owner, 2026-10-08)
+
+No ticket, no vault deployment, no funding of anything for the Fast Feed **until the bot has landed a successful arbitrage or liquidation**.
+Experiment 0 tooling, the ticket helper and vault v2 (PR #74, undeployed, unaudited) stay prepared. Phases that need Fast Feed logs (Phase 2 against
+a live feed) wait; fixtures-based work and everything that costs nothing continue.
+
 ## Compliance workstream (owner: invariants bind the live bot)
 
 - **Wave 1 shipped in PR "compliance wave 1" (DECISIONS #78):** async metrics, background maintenance, guarded refresh + `state_correction` events, opportunity version stamps, `EXECUTION_MODE`, stub check.

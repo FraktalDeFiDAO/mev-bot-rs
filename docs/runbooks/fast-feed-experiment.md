@@ -1,5 +1,10 @@
 # Runbook: Experiment 0, does the paid Fast Feed lead the free feed?
 
+> **PAUSED (owner decision 2026-10-08): no Fast Feed spending until the bot has landed a successful arbitrage or liquidation.**
+> Do not buy a ticket, deploy the vault, or fund anything here until the owner lifts the pause. Everything below is prepared and tested
+> so it can start the day the pause is lifted; nothing in it runs by itself. The free work (off-chain pricing, state accuracy, compliance
+> waves) continues. See DECISIONS #83.
+
 **Question:** how much earlier does the Fast Feed deliver each transaction than the standard sequencer feed we use today?
 **Why:** 0 wins in 155 races; the winners reach the feed in the same message as us, in the block after the trigger, and 10 of the 24 races
 with tip data were lost on timing despite a higher tip. The standard feed is per block; the Fast Feed publishes each transaction as soon as
