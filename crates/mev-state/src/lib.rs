@@ -38,6 +38,40 @@ pub struct PoolStore {
     v4: HashMap<B256, Address>,
 }
 
+/// Relative tolerance below which two states are the same pool state (they differ only by floating-point
+/// rounding in how they were derived); such a read is applied but not recorded as a correction.
+const SAME_STATE_REL: f64 = 1e-12;
+
+/// Do two states of one pool differ by more than rounding?
+pub fn materially_different(a: &PoolState, b: &PoolState) -> bool {
+    let far = |x: f64, y: f64| {
+        (x - y).abs() > SAME_STATE_REL * x.abs().max(y.abs()).max(f64::MIN_POSITIVE)
+    };
+    match (a, b) {
+        (
+            PoolState::V2 {
+                reserve0: a0,
+                reserve1: a1,
+            },
+            PoolState::V2 {
+                reserve0: b0,
+                reserve1: b1,
+            },
+        ) => far(*a0, *b0) || far(*a1, *b1),
+        (
+            PoolState::V3 {
+                sqrt_price: ap,
+                liquidity: al,
+            },
+            PoolState::V3 {
+                sqrt_price: bp,
+                liquidity: bl,
+            },
+        ) => far(*ap, *bp) || far(*al, *bl),
+        _ => true,
+    }
+}
+
 fn pair_key(a: Address, b: Address) -> (Address, Address) {
     if a < b { (a, b) } else { (b, a) }
 }
@@ -88,7 +122,7 @@ impl PoolStore {
                 continue;
             }
             p.ticks = old.ticks.clone();
-            if old.state != p.state {
+            if materially_different(&old.state, &p.state) {
                 out.overwrites.push(Overwrite {
                     pool: addr,
                     predicted: old.state.clone(),
@@ -1080,5 +1114,38 @@ mod tests {
         s.apply_log(&v3_liquidity_log(addr, true, 40, 400, 5));
         assert_eq!(net(&s).last(), Some(&(40, 5.0)));
         assert!(!net(&s).iter().any(|(t, _)| *t == 400));
+    }
+
+    #[test]
+    fn rounding_noise_is_not_a_correction_but_a_real_change_is() {
+        let a = PoolState::V3 {
+            sqrt_price: 0.003_420_211_04,
+            liquidity: 1.535e22,
+        };
+        let noise = PoolState::V3 {
+            sqrt_price: 0.003_420_211_04 * (1.0 + 1e-15),
+            liquidity: 1.535e22,
+        };
+        let step = PoolState::V3 {
+            sqrt_price: 0.003_420_705_68,
+            liquidity: 1.535e22,
+        };
+        let liq = PoolState::V3 {
+            sqrt_price: 0.003_420_211_04,
+            liquidity: 1.4e22,
+        };
+        assert!(!materially_different(&a, &noise));
+        assert!(materially_different(&a, &step));
+        assert!(materially_different(&a, &liq));
+        let v2 = |r0, r1| PoolState::V2 {
+            reserve0: r0,
+            reserve1: r1,
+        };
+        assert!(!materially_different(&v2(5.0, 7.0), &v2(5.0, 7.0)));
+        assert!(materially_different(&v2(5.0, 7.0), &v2(5.0, 7.5)));
+        assert!(
+            materially_different(&a, &v2(1.0, 1.0)),
+            "different kinds always differ"
+        );
     }
 }
