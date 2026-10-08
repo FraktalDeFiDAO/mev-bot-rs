@@ -236,6 +236,7 @@ factory = "0x1a3c9B1d2F0529D97f2afC5136Cc23e58f1FD35B"
 enabled = true
 rpc_urls = ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"]   # not dRPC: reserved for diffs
 max_in_flight = 32   # 16 skipped ~23 % of candidates as busy (2026-10-05); keyed Chainstack endpoints take the load
+rollback_unconfirmed = false   # presim state no real log confirmed within 3 s: false = only record what would be rolled back (DECISIONS #86); the resync then shows if it was right
 timeout_ms = 250
 # In-process simulation (revm, mev-localsim): every feed tx runs locally on a state cache kept
 # exact by per-block prestate diffs; rpc_urls above only serve candidates not cached yet.

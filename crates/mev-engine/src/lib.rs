@@ -1184,14 +1184,27 @@ impl Engine {
     /// Presim state is applied from a *pending* transaction; if no real log confirmed it within `TENTATIVE_TTL`
     /// (the transaction reverted or never landed) the confirmed state is restored and the miss is recorded.
     fn roll_back_unconfirmed(&mut self) {
-        for r in self.store.expire_tentative(Instant::now(), TENTATIVE_TTL) {
+        let restore = self
+            .cfg
+            .presim
+            .as_ref()
+            .is_some_and(|p| p.rollback_unconfirmed);
+        let source = if restore {
+            "presim_unconfirmed"
+        } else {
+            "presim_unconfirmed_observed"
+        };
+        for r in self
+            .store
+            .expire_tentative(Instant::now(), TENTATIVE_TTL, restore)
+        {
             self.record_overwrite(
                 &mev_state::Overwrite {
                     pool: r.pool,
                     predicted: r.tentative,
                     actual: r.restored,
                 },
-                "presim_unconfirmed",
+                source,
                 "FastFeedTxLost",
             );
         }

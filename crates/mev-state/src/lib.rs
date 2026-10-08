@@ -418,11 +418,13 @@ impl PoolStore {
         Some(updated)
     }
 
-    /// Roll back every tentative state older than `ttl` that nothing confirmed.
+    /// Expire every tentative state older than `ttl` that nothing confirmed. With `restore` the confirmed state
+    /// comes back; without it the state is left as it is and only the miss is reported (observe-only).
     pub fn expire_tentative(
         &mut self,
         now: std::time::Instant,
         ttl: std::time::Duration,
+        restore: bool,
     ) -> Vec<Rollback> {
         let due: Vec<Address> = self
             .tentative
@@ -438,9 +440,14 @@ impl PoolStore {
             let Some(p) = self.pools.get_mut(&a) else {
                 continue;
             };
-            let tentative = std::mem::replace(&mut p.state, state.clone());
-            p.ticks = ticks;
-            self.bump(a);
+            let tentative = if restore {
+                let t = std::mem::replace(&mut p.state, state.clone());
+                p.ticks = ticks;
+                self.bump(a);
+                t
+            } else {
+                p.state.clone()
+            };
             out.push(Rollback {
                 pool: a,
                 tentative,
@@ -1281,11 +1288,11 @@ mod tests {
         assert_eq!(s.tentative_len(), 1);
         // Too early: nothing happens.
         assert!(
-            s.expire_tentative(t0 + std::time::Duration::from_secs(2), ttl)
+            s.expire_tentative(t0 + std::time::Duration::from_secs(2), ttl, true)
                 .is_empty()
         );
         // Past the limit: the confirmed state comes back and the version moves.
-        let rb = s.expire_tentative(t0 + ttl, ttl);
+        let rb = s.expire_tentative(t0 + ttl, ttl, true);
         assert_eq!(rb.len(), 1);
         assert_eq!(rb[0].pool, addr);
         assert_eq!(
@@ -1323,7 +1330,8 @@ mod tests {
         assert!(
             s.expire_tentative(
                 t0 + std::time::Duration::from_secs(60),
-                std::time::Duration::from_secs(3)
+                std::time::Duration::from_secs(3),
+                true,
             )
             .is_empty()
         );
@@ -1349,13 +1357,15 @@ mod tests {
         assert!(
             s.expire_tentative(
                 t0 + std::time::Duration::from_secs(3),
-                std::time::Duration::from_secs(3)
+                std::time::Duration::from_secs(3),
+                true,
             )
             .is_empty()
         );
         let rb = s.expire_tentative(
             t0 + std::time::Duration::from_secs(4),
             std::time::Duration::from_secs(3),
+            true,
         );
         assert_eq!(
             rb[0].restored,
@@ -1381,7 +1391,8 @@ mod tests {
         assert!(
             s.expire_tentative(
                 t0 + std::time::Duration::from_secs(60),
-                std::time::Duration::from_secs(3)
+                std::time::Duration::from_secs(3),
+                true,
             )
             .is_empty()
         );
@@ -1403,5 +1414,40 @@ mod tests {
             None
         );
         assert_eq!(s.tentative_len(), 0);
+    }
+
+    #[test]
+    fn observe_only_reports_the_miss_without_touching_the_state() {
+        let (mut s, addr) = v2_store(1);
+        let t0 = std::time::Instant::now();
+        let ttl = std::time::Duration::from_secs(3);
+        s.apply_log_tentative(&sync_log(addr, 150, 150), t0);
+        let v = s.version(&addr);
+        let rb = s.expire_tentative(t0 + ttl, ttl, false);
+        assert_eq!(rb.len(), 1);
+        assert_eq!(
+            rb[0].tentative,
+            PoolState::V2 {
+                reserve0: 150.0,
+                reserve1: 150.0
+            }
+        );
+        assert_eq!(
+            rb[0].restored,
+            PoolState::V2 {
+                reserve0: 100.0,
+                reserve1: 200.0
+            }
+        );
+        assert_eq!(
+            s.get(&addr).unwrap().state,
+            PoolState::V2 {
+                reserve0: 150.0,
+                reserve1: 150.0
+            },
+            "left as it was"
+        );
+        assert_eq!(s.version(&addr), v, "and not versioned as a change");
+        assert_eq!(s.tentative_len(), 0, "the mark is dropped either way");
     }
 }

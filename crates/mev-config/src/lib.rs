@@ -406,6 +406,11 @@ pub struct PresimConfig {
     /// State reads at a block for cache misses.
     #[serde(default)]
     pub fill_rpc_urls: Vec<String>,
+    /// Roll back presim-applied state that no real log confirmed within a few seconds. Off: the bot only
+    /// records what it *would* roll back (`presim_unconfirmed_observed`) and the next resync shows whether the
+    /// chain agreed, so the decision is tested before it is acted on (DECISIONS #86).
+    #[serde(default)]
+    pub rollback_unconfirmed: bool,
 }
 
 fn default_max_cycles() -> usize {
