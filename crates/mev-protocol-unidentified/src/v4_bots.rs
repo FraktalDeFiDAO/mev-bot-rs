@@ -23,24 +23,29 @@ pub const SELECTOR_E_V3: [u8; 4] = [0x75, 0x5f, 0x31, 0x7c];
 pub const SELECTOR_E_V4: [u8; 4] = [0x4f, 0xd7, 0xc9, 0xb7];
 const WETH: Address = address!("82aF49447D8a07e3bd95BD0d56f35241523fBab1");
 
-fn small(d: &[u8], i: usize) -> Option<u32> {
+pub(crate) fn small(d: &[u8], i: usize) -> Option<u32> {
     u32::try_from(abi::uint(d, i)?).ok()
 }
 
-fn non_zero(v: U256) -> Option<U256> {
+pub(crate) fn non_zero(v: U256) -> Option<U256> {
     (!v.is_zero()).then_some(v)
 }
 
 /// A V4 pool key.
-struct Key {
-    currency0: Address,
-    currency1: Address,
-    fee: u32,
-    tick_spacing: u32,
-    hooks: Address,
+pub(crate) struct Key {
+    pub(crate) currency0: Address,
+    pub(crate) currency1: Address,
+    pub(crate) fee: u32,
+    pub(crate) tick_spacing: u32,
+    pub(crate) hooks: Address,
 }
 
-fn v4_swap(k: Key, zero_for_one: bool, amount_in: U256, limit: U256) -> Option<SwapIntent> {
+pub(crate) fn v4_swap(
+    k: Key,
+    zero_for_one: bool,
+    amount_in: U256,
+    limit: U256,
+) -> Option<SwapIntent> {
     if k.currency0 >= k.currency1
         || k.fee > 0xff_ffff
         || k.tick_spacing == 0

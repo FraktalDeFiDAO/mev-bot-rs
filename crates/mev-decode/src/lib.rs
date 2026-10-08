@@ -18,7 +18,8 @@ pub mod swap;
 use alloy::primitives::{Address, address};
 
 pub use mev_protocol::{
-    Class, Contract, Decoded, LiquidationIntent, PoolRef, PriceUpdate, Protocol, SwapIntent,
+    Class, Contract, Decoded, LiquidationIntent, LiquidityAction, LiquidityIntent, PoolRef,
+    PriceUpdate, Protocol, SwapIntent,
 };
 
 /// Every protocol crate, in a fixed order. Adding a protocol means adding it here.

@@ -85,6 +85,10 @@ Measured accuracy of the decoder against the node simulation for A and B: 93% ex
 are judged on the size of the move. Revert rates are not measured yet (B reverted in 6 of 12 sampled transactions); the
 chain-outcome sampler fills that in.
 
+Further decoded since the table above was measured (DECISIONS #95-#97): `0x93c30e6e...` (23% of swap transactions;
+packed, three of four selectors), `0xe6b82c6e...` (two of three selectors), `0xea845931...` (both selectors), router A's
+V4 selector, and the V3 position manager (liquidity). Remaining swap gaps are listed in DECISIONS #97.
+
 ## 5. What needs to be added, in order
 
 Selectors were computed with `cast sig`. The ranking is by observed share of pool-moving transactions first, then by

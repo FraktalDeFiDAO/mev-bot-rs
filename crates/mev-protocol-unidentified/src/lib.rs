@@ -5,6 +5,7 @@
 
 pub mod packed;
 pub mod packed_table;
+pub mod router_f;
 pub mod v4_bots;
 
 use alloy::primitives::{Address, address};
@@ -82,6 +83,8 @@ impl Protocol for Unidentified {
             v4_bots::decode_a_v4(d)?
         } else if to == v4_bots::ROUTER_E {
             v4_bots::decode_e(sel, d)?
+        } else if to == router_f::ROUTER_F {
+            router_f::decode(sel, d)?
         } else {
             return packed::decode(to, input).map(Decoded::Swap);
         };
@@ -103,6 +106,11 @@ impl Protocol for Unidentified {
             Contract {
                 address: v4_bots::ROUTER_E,
                 name: "unidentified, selectors 755f317c (V3) and 4fd7c9b7 (V4)",
+                decoded: true,
+            },
+            Contract {
+                address: router_f::ROUTER_F,
+                name: "unidentified packed bot (00000002 V3, 00000011 V4 decoded; 00000001 multi-leg not)",
                 decoded: true,
             },
             Contract {

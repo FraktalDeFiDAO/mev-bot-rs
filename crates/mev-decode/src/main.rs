@@ -6,7 +6,9 @@
 //!   mev-decode feed [--url wss://arb1.arbitrum.io/feed] [--limit N] [--decoded-only]
 
 use alloy::primitives::{Address, U256};
-use mev_decode::{Decoded, LiquidationIntent, PoolRef, SwapIntent, events, known_contract};
+use mev_decode::{
+    Decoded, LiquidationIntent, LiquidityIntent, PoolRef, SwapIntent, events, known_contract,
+};
 use serde_json::{Value, json};
 
 fn swap_json(s: &SwapIntent) -> Value {
@@ -21,6 +23,25 @@ fn swap_json(s: &SwapIntent) -> Value {
         "amount_in": s.amount_in.to_string(),
         "sqrt_price_limit_x96": s.sqrt_limit_x96.map(|l: U256| l.to_string()),
         "hops": s.hops,
+    })
+}
+
+fn liquidity_json(l: &LiquidityIntent) -> Value {
+    json!({
+        "kind": "liquidity",
+        "protocol": l.protocol,
+        "action": format!("{:?}", l.action).to_lowercase(),
+        "pool": l.pool.as_ref().map(|p| match p {
+            PoolRef::Address(a) => json!({ "address": format!("{a:#x}") }),
+            PoolRef::Pair { token_a, token_b, fee } => json!({ "token_a": format!("{token_a:#x}"), "token_b": format!("{token_b:#x}"), "fee": fee }),
+            PoolRef::PairV2 { token_a, token_b } => json!({ "v2_token_a": format!("{token_a:#x}"), "v2_token_b": format!("{token_b:#x}") }),
+        }),
+        "token_id": l.token_id.map(|t| t.to_string()),
+        "tick_lower": l.tick_lower,
+        "tick_upper": l.tick_upper,
+        "amount0": l.amount0.map(|a| a.to_string()),
+        "amount1": l.amount1.map(|a| a.to_string()),
+        "liquidity": l.liquidity.map(|a| a.to_string()),
     })
 }
 
@@ -44,6 +65,7 @@ fn describe(to: Option<Address>, input: &[u8]) -> Value {
         "known_contract": to.and_then(known_contract).map(|c| json!({ "name": c.name, "decoded": c.decoded })),
         "decoded": decoded.map(|d| match d {
             Decoded::Swap(s) => swap_json(&s),
+            Decoded::Liquidity(l) => liquidity_json(&l),
             Decoded::Liquidation(l) => liquidation_json(&l),
         }),
     })
