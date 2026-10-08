@@ -98,8 +98,24 @@ fn pool_for(store: &PoolStore, intent: &SwapIntent) -> Option<Address> {
     }
 }
 
-/// `(sqrtPriceX96, liquidity)` from the last V3-style `Swap` event the simulation emitted for `pool`.
-fn simulated_end(logs: &[Log], pool: Address) -> Option<(f64, f64)> {
+/// What the simulation's last V3-style `Swap` event for a pool says.
+struct SimSwap {
+    amount0: f64,
+    amount1: f64,
+    sqrt_price: f64,
+    liquidity: f64,
+}
+
+fn signed(w: &[u8]) -> f64 {
+    let v = U256::from_be_slice(w);
+    if w[0] & 0x80 != 0 {
+        -f64::from(U256::ZERO.wrapping_sub(v))
+    } else {
+        f64::from(v)
+    }
+}
+
+fn simulated_swap(logs: &[Log], pool: Address) -> Option<SimSwap> {
     let swap: [B256; 2] = [
         IUniswapV3Pool::Swap::SIGNATURE_HASH,
         IPancakeV3Pool::Swap::SIGNATURE_HASH,
@@ -112,12 +128,27 @@ fn simulated_end(logs: &[Log], pool: Address) -> Option<(f64, f64)> {
     if d.len() < 128 {
         return None;
     }
-    let price = U256::from_be_slice(&d[64..96]);
-    let liq = U256::from_be_slice(&d[96..128]);
-    Some((
-        mev_dex::sqrt_price_from_x96(f64::from(price)),
-        f64::from(liq),
-    ))
+    Some(SimSwap {
+        amount0: signed(&d[0..32]),
+        amount1: signed(&d[32..64]),
+        sqrt_price: mev_dex::sqrt_price_from_x96(f64::from(U256::from_be_slice(&d[64..96]))),
+        liquidity: f64::from(U256::from_be_slice(&d[96..128])),
+    })
+}
+
+/// The pool price the simulation started from, recovered from its own swap: with liquidity `L` unchanged over the
+/// swap, `1/s_before = 1/s_after - dx/L` (token0 in) or `s_before = s_after - dy/L` (token1 in), where dx/dy is the
+/// input net of the fee. Inexact only when the swap crossed a tick.
+fn implied_start(sw: &SimSwap, token0_in: bool, fee: f64) -> Option<f64> {
+    if sw.liquidity <= 0.0 {
+        return None;
+    }
+    let start = if token0_in {
+        1.0 / (1.0 / sw.sqrt_price - sw.amount0.max(0.0) * (1.0 - fee) / sw.liquidity)
+    } else {
+        sw.sqrt_price - sw.amount1.max(0.0) * (1.0 - fee) / sw.liquidity
+    };
+    (start.is_finite() && start > 0.0).then_some(start)
 }
 
 /// Test helper: only the verdict.
@@ -161,11 +192,26 @@ pub fn check_detailed(
     else {
         return (Verdict::NoPrediction, None);
     };
-    let Some((actual, actual_liq)) = simulated_end(logs, addr) else {
+    let Some(sim) = simulated_swap(logs, addr) else {
         return (Verdict::NoActual, None);
     };
-    let ratio = pred_sqrt / actual;
-    let bps = (ratio * ratio - 1.0) * 1e4;
+    let (actual, actual_liq) = (sim.sqrt_price, sim.liquidity);
+    // Where our pool stood before this swap, and where the node's simulation stood.
+    let ours_before = match pool.state {
+        mev_dex::PoolState::V3 { sqrt_price, .. } => sqrt_price,
+        _ => return (Verdict::NoPrediction, None),
+    };
+    let token0_in = intent.token_in == pool.info.token0;
+    let fee = if token0_in { pool.fee0 } else { pool.fee1 };
+    let Some(node_before) = implied_start(&sim, token0_in, fee) else {
+        return (Verdict::NoPrediction, None);
+    };
+    // The decoder is judged on the size of the move it predicts, not the absolute price: our state and the node's
+    // can differ (staleness, other pending transactions applied on one side only), which is not the decoder's error.
+    let ours_move = (pred_sqrt / ours_before).powi(2);
+    let node_move = (actual / node_before).powi(2);
+    let bps = (ours_move / node_move - 1.0) * 1e4;
+    let state_bps = ((ours_before / node_before).powi(2) - 1.0) * 1e4;
     let before = match pool.state {
         mev_dex::PoolState::V3 {
             sqrt_price,
@@ -193,6 +239,9 @@ pub fn check_detailed(
         "ticks_lo": pool.ticks.as_ref().map(|t| t.lo),
         "ticks_hi": pool.ticks.as_ref().map(|t| t.hi),
         "diff_bps": bps,
+        "state_diff_bps": state_bps,
+        "amount0": sim.amount0,
+        "amount1": sim.amount1,
     });
     (
         Verdict::Compared {
@@ -242,5 +291,48 @@ mod tests {
             check(&store, &serde_json::Value::Null, &[]),
             Verdict::NotDecoded
         );
+    }
+
+    #[test]
+    fn the_simulations_start_price_is_recovered_from_its_own_swap() {
+        // Token1 in: dy = 1_000 at L = 1e6 with a 0.05% fee moves sqrt price 1.0 up by dy*(1-fee)/L.
+        let fee = 0.0005;
+        let up = SimSwap {
+            amount0: -990.0,
+            amount1: 1_000.0,
+            sqrt_price: 1.0 + 1_000.0 * (1.0 - fee) / 1e6,
+            liquidity: 1e6,
+        };
+        assert!((implied_start(&up, false, fee).unwrap() - 1.0).abs() < 1e-12);
+        // Token0 in: 1/s moves by dx*(1-fee)/L.
+        let down = SimSwap {
+            amount0: 1_000.0,
+            amount1: -990.0,
+            sqrt_price: 1.0 / (1.0 + 1_000.0 * (1.0 - fee) / 1e6),
+            liquidity: 1e6,
+        };
+        assert!((implied_start(&down, true, fee).unwrap() - 1.0).abs() < 1e-12);
+        // No liquidity: nothing can be recovered.
+        assert_eq!(
+            implied_start(
+                &SimSwap {
+                    liquidity: 0.0,
+                    ..up
+                },
+                false,
+                fee
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_signed_word_is_read_as_twos_complement() {
+        let mut w = [0xffu8; 32];
+        w[31] = 0xfe; // -2
+        assert_eq!(signed(&w), -2.0);
+        let mut p = [0u8; 32];
+        p[31] = 7;
+        assert_eq!(signed(&p), 7.0);
     }
 }
