@@ -54,14 +54,14 @@ pub fn mentions_any(input: &[u8], watch: &std::collections::HashSet<[u8; 20]>) -
 }
 
 /// Whether a feed transaction should be simulated: its calldata names a watched pool or token, or the decoder reads a
-/// swap from it (packed calldata names nothing, yet one such contract alone was 23% of swap transactions on
+/// swap, liquidity change or liquidation from it (packed calldata names nothing, yet one such contract alone was 23% of swap transactions on
 /// 2026-10-08, invisible to the address filter).
 pub fn wants_simulation(
     to: Option<alloy::primitives::Address>,
     input: &[u8],
     watch: &std::collections::HashSet<[u8; 20]>,
 ) -> bool {
-    mentions_any(input, watch) || to.is_some_and(|t| decode::decode(t, input).is_some())
+    mentions_any(input, watch) || to.is_some_and(|t| mev_decode::decode_call(t, input).is_some())
 }
 
 /// Topic0 of the pool events the engine consumes (V2 `Sync`, V3/Algebra `Swap`, PancakeV3 `Swap`).
@@ -337,6 +337,7 @@ fn tx_line(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
+    let intent = st.to.and_then(|to| mev_decode::decode_call(to, &st.input));
     let swap = st.to.and_then(|to| decode::decode(to, &st.input)).map(|s| {
         serde_json::json!({
             "pool": match &s.pool {
@@ -365,6 +366,23 @@ fn tx_line(
         "tip": st.tx.max_priority_fee_per_gas().map(|t| t.to_string()),
         "value": st.tx.value().to_string(),
         "swap": swap,
+        "liquidity": intent.as_ref().and_then(|d| match d {
+            mev_decode::Decoded::Liquidity(l) => Some(serde_json::json!({
+                "protocol": l.protocol,
+                "action": format!("{:?}", l.action).to_lowercase(),
+                "token_id": l.token_id.map(|t| t.to_string()),
+                "liquidity": l.liquidity.map(|t| t.to_string()),
+                "pool": l.pool.as_ref().map(|p| format!("{p:?}")),
+            })),
+            _ => None,
+        }),
+        "liquidation": intent.as_ref().and_then(|d| match d {
+            mev_decode::Decoded::Liquidation(l) => Some(serde_json::json!({
+                "protocol": l.protocol,
+                "borrowers": l.borrowers.iter().map(|b| format!("{b:#x}")).collect::<Vec<_>>(),
+            })),
+            _ => None,
+        }),
         "presim": outcome,
         "sim_ms": sim_ms,
         "pools_moved": pools_moved,

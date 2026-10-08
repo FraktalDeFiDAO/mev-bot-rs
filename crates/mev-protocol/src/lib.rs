@@ -107,10 +107,36 @@ pub struct LiquidationIntent {
     pub market: Option<B256>,
 }
 
+/// Whether a liquidity call adds to or takes from a position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiquidityAction {
+    Add,
+    Remove,
+}
+
+/// A liquidity change the call asks for. Calls that only carry a position id (increase / decrease) say nothing about
+/// the pool or the ticks: `pool` and the tick bounds are `None` there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiquidityIntent {
+    pub protocol: &'static str,
+    pub action: LiquidityAction,
+    pub pool: Option<PoolRef>,
+    /// The position (NFT) the call changes, for calls that name one.
+    pub token_id: Option<U256>,
+    pub tick_lower: Option<i32>,
+    pub tick_upper: Option<i32>,
+    /// Token amounts the call offers (`Add`) or the minimums it accepts back (`Remove`).
+    pub amount0: Option<U256>,
+    pub amount1: Option<U256>,
+    /// Liquidity units to remove, where the call states it.
+    pub liquidity: Option<U256>,
+}
+
 /// What a call's calldata means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decoded {
     Swap(SwapIntent),
+    Liquidity(LiquidityIntent),
     Liquidation(LiquidationIntent),
 }
 

@@ -15,6 +15,6 @@ pub const ROUTER_C: Address = SWAP_ROUTER_02;
 pub fn decode(to: Address, input: &[u8]) -> Option<SwapIntent> {
     match crate::decode_call(to, input)? {
         Decoded::Swap(s) => Some(s),
-        Decoded::Liquidation(_) => None,
+        Decoded::Liquidity(_) | Decoded::Liquidation(_) => None,
     }
 }

@@ -50,6 +50,9 @@ sol! {
 pub const SWAP_ROUTER_02: Address = address!("68b3465833fb72A70ecDF485E0e4C7bD8665Fc45");
 pub const SWAP_ROUTER_V1: Address = address!("E592427A0AEce92De3Edee1F18E0157C05861564");
 pub const UNIVERSAL_ROUTER: Address = address!("A51afAFe0263b40EdaEf0Df8781eA9aa03E381a3");
+/// A second contract that answers to the Universal Router's `execute` selector (98 successful transactions in a few
+/// hours on 2026-10-08, mostly V3 swaps). Treated as a Universal Router; `scripts/verify-decoder.py` checks that.
+pub const UNIVERSAL_ROUTER_2: Address = address!("2d01411773c8c24805306e89a41f7855c3c4fe65");
 
 /// Universal Router command ids (low 5 bits of each command byte; the top bit means "allow revert").
 const CMD_V3_SWAP_EXACT_IN: u8 = 0x00;
@@ -233,7 +236,7 @@ impl Protocol for UniswapRouter {
             swap_router_02(input, 0)
         } else if to == SWAP_ROUTER_V1 {
             swap_router_v1(input)
-        } else if to == UNIVERSAL_ROUTER {
+        } else if to == UNIVERSAL_ROUTER || to == UNIVERSAL_ROUTER_2 {
             universal_router(input)
         } else {
             None
@@ -256,6 +259,11 @@ impl Protocol for UniswapRouter {
             Contract {
                 address: UNIVERSAL_ROUTER,
                 name: "Uniswap Universal Router (V2/V3 exact-in commands decoded)",
+                decoded: true,
+            },
+            Contract {
+                address: UNIVERSAL_ROUTER_2,
+                name: "Universal Router, second deployment (V2/V3 exact-in commands decoded)",
                 decoded: true,
             },
         ]

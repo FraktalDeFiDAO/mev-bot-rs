@@ -57,7 +57,10 @@ for h, c in chain.items():
             continue
         by_class[cls][0] += 1
         f = feed.get(h)
-        if f and f.get("swap"):
+        # A decoded intent of the matching kind: a swap for swap events, a liquidity change for liquidity events, a
+        # liquidation for liquidation events.
+        field = {"swap": "swap", "liquidity": "liquidity", "liquidation": "liquidation"}.get(cls, "swap")
+        if f and f.get(field):
             by_class[cls][1] += 1
         else:
             gaps[cls][(c.get("to") or "-")[:42]] += 1
