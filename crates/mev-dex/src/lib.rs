@@ -34,6 +34,16 @@ pub struct TickMap {
     pub hint: Option<(f64, i32)>,
 }
 
+/// Result of walking a swap through the loaded ticks.
+struct Walked {
+    out: f64,
+    used: f64,
+    sqrt_price: f64,
+    liquidity: f64,
+    /// The swap ended by exhausting its input or reaching its price limit (not by running out of loaded ticks).
+    complete: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Pool {
     /// Initialized ticks near the price, when loaded (V3-style pools).
@@ -180,6 +190,17 @@ impl Pool {
     /// `input_used < amount_in` when the loaded window ran out first (the model stops there).
     /// `None` when this pool has no tick map or is not concentrated-liquidity.
     fn walk(&self, token_in: Address, amount_in: f64) -> Option<(f64, f64)> {
+        self.walk_limited(token_in, amount_in, None)
+            .map(|w| (w.out, w.used))
+    }
+
+    /// Like `walk`, but stops at `limit` (a sqrt price: a swap's `sqrtPriceLimit`) and returns where the swap ended.
+    fn walk_limited(
+        &self,
+        token_in: Address,
+        amount_in: f64,
+        limit: Option<f64>,
+    ) -> Option<Walked> {
         let map = self.ticks.as_ref()?;
         let PoolState::V3 {
             sqrt_price,
@@ -188,11 +209,27 @@ impl Pool {
         else {
             return None;
         };
+        let done = |out, used, sqrt_price, liquidity, complete| {
+            Some(Walked {
+                out,
+                used,
+                sqrt_price,
+                liquidity,
+                complete,
+            })
+        };
         if sqrt_price <= 0.0 || liquidity < 0.0 || amount_in <= 0.0 {
-            return Some((0.0, 0.0));
+            return done(0.0, 0.0, sqrt_price, liquidity, true);
         }
         let fee = self.fee(token_in);
         let zero_for_one = token_in == self.info.token0;
+        // Already at or past the limit: the swap moves nothing.
+        if limit.is_some_and(|lm| {
+            (zero_for_one && sqrt_price <= lm) || (!zero_for_one && sqrt_price >= lm)
+        }) {
+            return done(0.0, 0.0, sqrt_price, liquidity, true);
+        }
+        let mut complete = false;
         let sqrt_at = |t: f64| 1.0001f64.powf(t / 2.0);
         let current = match map.hint {
             Some((price, tick)) if price == sqrt_price => tick,
@@ -216,6 +253,12 @@ impl Pool {
                 }
             };
             let mut target = sqrt_at(target_tick as f64);
+            let limit_hit = limit.is_some_and(|lm| {
+                (zero_for_one && target <= lm) || (!zero_for_one && target >= lm)
+            });
+            if let (true, Some(lm)) = (limit_hit, limit) {
+                target = lm;
+            }
             if (zero_for_one && target >= s) || (!zero_for_one && target <= s) {
                 if net.is_none() {
                     // Already at or past the window edge: nothing more is known.
@@ -239,16 +282,22 @@ impl Pool {
                     let s2 = s + budget / l.max(f64::MIN_POSITIVE);
                     (s2, l * (1.0 / s - 1.0 / s2))
                 };
-                let _ = ds;
+                s = ds;
                 out += o;
                 used += budget;
                 budget = 0.0;
+                complete = true;
                 break;
             }
             out += gain;
             used += need;
             budget -= need;
             s = target;
+            if limit_hit {
+                // The price limit stops the swap here, with input left over.
+                complete = true;
+                break;
+            }
             match net {
                 // Crossed an initialized tick: liquidity changes.
                 Some(n) if zero_for_one => {
@@ -267,7 +316,22 @@ impl Pool {
         }
         let _ = budget;
         // `used` was measured after fees; gross it back up.
-        Some((out, used / (1.0 - fee)))
+        done(out, used / (1.0 - fee), s, l, complete)
+    }
+
+    /// The pool's state after swapping `amount_in` of `token_in`, optionally bounded by a sqrt-price `limit`. `None`
+    /// when it cannot be known: no tick map, or the swap runs past the loaded window.
+    pub fn state_after(
+        &self,
+        token_in: Address,
+        amount_in: f64,
+        limit: Option<f64>,
+    ) -> Option<PoolState> {
+        let w = self.walk_limited(token_in, amount_in, limit)?;
+        w.complete.then_some(PoolState::V3 {
+            sqrt_price: w.sqrt_price,
+            liquidity: w.liquidity,
+        })
     }
 
     /// Reserve of `token` (virtual for V3), raw units.
@@ -388,6 +452,75 @@ mod tests {
         };
         let (a, b) = (p.amount_out(A, 1_000.0), flat.amount_out(A, 1_000.0));
         assert!((a - b).abs() < 1e-6 * b, "{a} vs {b}");
+    }
+
+    #[test]
+    fn state_after_a_swap_inside_the_band_moves_only_the_price() {
+        let p = banded();
+        let PoolState::V3 {
+            sqrt_price: s0,
+            liquidity: l0,
+        } = p.state
+        else {
+            unreachable!()
+        };
+        let amount = 1e3; // far from the band edge
+        let PoolState::V3 {
+            sqrt_price,
+            liquidity,
+        } = p.state_after(A, amount, None).unwrap()
+        else {
+            unreachable!()
+        };
+        let expected = 1.0 / (1.0 / s0 + amount * (1.0 - p.fee0) / l0);
+        assert!(
+            (sqrt_price - expected).abs() < 1e-12 * expected,
+            "{sqrt_price} vs {expected}"
+        );
+        assert_eq!(liquidity, l0);
+    }
+
+    #[test]
+    fn a_price_limit_stops_the_swap_where_it_is_and_leaves_input_unspent() {
+        let p = banded();
+        let PoolState::V3 { sqrt_price: s0, .. } = p.state else {
+            unreachable!()
+        };
+        let limit = s0 * 0.999_999; // a hair below the start
+        let huge = 1e12;
+        let PoolState::V3 {
+            sqrt_price,
+            liquidity,
+        } = p.state_after(A, huge, Some(limit)).unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(sqrt_price, limit, "the limit binds, not the input");
+        assert_eq!(liquidity, 1e6, "and no tick is crossed");
+        // A limit on the wrong side of the price moves nothing.
+        let PoolState::V3 {
+            sqrt_price: same, ..
+        } = p.state_after(A, huge, Some(s0 * 1.1)).unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(same, s0);
+    }
+
+    #[test]
+    fn state_after_crosses_a_tick_and_takes_the_new_liquidity() {
+        let p = banded();
+        let s100 = 1.0001f64.powf(-50.0);
+        let to_edge = 1e6 * (1.0 / s100 - 1.0);
+        let PoolState::V3 {
+            liquidity,
+            sqrt_price,
+        } = p.state_after(A, 2.0 * to_edge, None).unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(liquidity, 3e6);
+        assert!(sqrt_price < s100);
     }
 
     #[test]

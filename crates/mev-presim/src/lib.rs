@@ -8,6 +8,8 @@
 //! Measured from the bot's server (2026-10-04): PublicNode answers in ~16 ms on a warm
 //! connection (dRPC ~70 ms, arb1 ~120 ms), with the same head block as arb1.
 
+pub mod decode;
+
 use alloy::{
     consensus::{Transaction, TxEnvelope, transaction::SignerRecoverable},
     primitives::{Address, B256, Bytes},
