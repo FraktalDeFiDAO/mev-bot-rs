@@ -527,6 +527,23 @@ impl Engine {
                 } else {
                     None
                 };
+                if let (Some(feed_rec), true) = (&recorder, pc.chain_sample_every > 0) {
+                    match mev_presim::record::TxRecorder::open_prefixed(
+                        data_dir.clone(),
+                        "chaintx",
+                        i64::from(pc.record_keep_days),
+                    ) {
+                        Ok(out) => {
+                            tokio::spawn(mev_outcomes::run(
+                                rpc.ws.clone(),
+                                feed_rec.clone(),
+                                out,
+                                pc.chain_sample_every,
+                            ));
+                        }
+                        Err(e) => warn!(error = %e, "chain outcome recorder disabled"),
+                    }
+                }
                 tokio::spawn(mev_presim::run(
                     rpc_feed,
                     p,

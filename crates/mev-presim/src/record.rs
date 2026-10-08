@@ -17,17 +17,26 @@ use std::{
 
 use chrono::{NaiveDate, Utc};
 
+/// Hashes recorded in the last `CANDIDATE_KEEP`, so another task can tell whether a transaction was a candidate.
+const CANDIDATE_KEEP: Duration = Duration::from_secs(180);
+
+type Recent = (
+    std::collections::HashSet<String>,
+    std::collections::VecDeque<(std::time::Instant, String)>,
+);
+
 pub struct TxRecorder {
     tx: SyncSender<String>,
     dropped: AtomicU64,
+    recent: std::sync::Mutex<Recent>,
 }
 
-fn file_name(day: NaiveDate) -> String {
-    format!("feedtx-{}.jsonl", day.format("%Y-%m-%d"))
+fn file_name(prefix: &str, day: NaiveDate) -> String {
+    format!("{prefix}-{}.jsonl", day.format("%Y-%m-%d"))
 }
 
-/// Delete `feedtx-*.jsonl` files more than `keep_days` older than `today`. Returns how many were removed.
-pub fn prune(dir: &Path, today: NaiveDate, keep_days: i64) -> usize {
+/// Delete `<prefix>-*.jsonl` files more than `keep_days` older than `today`. Returns how many were removed.
+pub fn prune(dir: &Path, prefix: &str, today: NaiveDate, keep_days: i64) -> usize {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return 0;
     };
@@ -35,7 +44,7 @@ pub fn prune(dir: &Path, today: NaiveDate, keep_days: i64) -> usize {
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         let Some(day) = name
-            .strip_prefix("feedtx-")
+            .strip_prefix(&format!("{prefix}-"))
             .and_then(|s| s.strip_suffix(".jsonl"))
             .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
         else {
@@ -49,9 +58,15 @@ pub fn prune(dir: &Path, today: NaiveDate, keep_days: i64) -> usize {
 }
 
 impl TxRecorder {
-    /// Start recording into `dir` (created if missing).
+    /// Start recording into `dir` (created if missing) as `feedtx-DATE.jsonl`.
     pub fn open(dir: PathBuf, keep_days: i64) -> std::io::Result<Arc<Self>> {
+        Self::open_prefixed(dir, "feedtx", keep_days)
+    }
+
+    /// Like `open`, with a chosen file prefix (`<prefix>-DATE.jsonl`).
+    pub fn open_prefixed(dir: PathBuf, prefix: &str, keep_days: i64) -> std::io::Result<Arc<Self>> {
         std::fs::create_dir_all(&dir)?;
+        let prefix = prefix.to_string();
         let (tx, rx) = sync_channel::<String>(16_384);
         std::thread::Builder::new()
             .name("feedtx-writer".into())
@@ -66,11 +81,11 @@ impl TxRecorder {
                                 if let Some((_, w)) = current.as_mut() {
                                     let _ = w.flush();
                                 }
-                                prune(&dir, today, keep_days);
+                                prune(&dir, &prefix, today, keep_days);
                                 current = std::fs::OpenOptions::new()
                                     .create(true)
                                     .append(true)
-                                    .open(dir.join(file_name(today)))
+                                    .open(dir.join(file_name(&prefix, today)))
                                     .ok()
                                     .map(|f| (today, std::io::BufWriter::new(f)));
                             }
@@ -101,14 +116,38 @@ impl TxRecorder {
         Ok(Arc::new(Self {
             tx,
             dropped: AtomicU64::new(0),
+            recent: Default::default(),
         }))
     }
 
     /// Queue one record. Never blocks: a full queue drops the line and counts it.
     pub fn record(&self, v: &serde_json::Value) {
+        if let Some(h) = v.get("hash").and_then(|h| h.as_str()) {
+            self.mark(h);
+        }
         if self.tx.try_send(v.to_string()).is_err() {
             self.dropped.fetch_add(1, Relaxed);
         }
+    }
+
+    fn mark(&self, hash: &str) {
+        let mut r = self.recent.lock().unwrap();
+        let now = std::time::Instant::now();
+        if r.0.insert(hash.to_string()) {
+            r.1.push_back((now, hash.to_string()));
+        }
+        while let Some((t, h)) = r.1.front().cloned() {
+            if now.saturating_duration_since(t) <= CANDIDATE_KEEP {
+                break;
+            }
+            r.1.pop_front();
+            r.0.remove(&h);
+        }
+    }
+
+    /// Whether a transaction with this hash (`0x…`, lowercase) was recorded in the last few minutes.
+    pub fn was_recorded(&self, hash: &str) -> bool {
+        self.recent.lock().unwrap().0.contains(hash)
     }
 
     /// Lines dropped because the writer fell behind.
@@ -134,7 +173,7 @@ mod tests {
         for i in 0..3 {
             r.record(&serde_json::json!({ "i": i }));
         }
-        let path = dir.join(file_name(Utc::now().date_naive()));
+        let path = dir.join(file_name("feedtx", Utc::now().date_naive()));
         let mut text = String::new();
         for _ in 0..40 {
             text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -160,7 +199,7 @@ mod tests {
         std::fs::write(dir.join("events-2026-09-01.jsonl"), "x").unwrap();
         std::fs::write(dir.join("feedtx-notadate.jsonl"), "x").unwrap();
         assert_eq!(
-            prune(&dir, today, 7),
+            prune(&dir, "feedtx", today, 7),
             1,
             "09-30 is 8 days old; 10-01 is exactly 7 and stays"
         );
@@ -171,6 +210,42 @@ mod tests {
             "only our own files"
         );
         assert!(dir.join("feedtx-notadate.jsonl").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recorded_hashes_can_be_looked_up() {
+        let dir = tmp("mark");
+        let r = TxRecorder::open(dir.clone(), 7).unwrap();
+        r.record(&serde_json::json!({ "hash": "0xabc", "x": 1 }));
+        assert!(r.was_recorded("0xabc"));
+        assert!(!r.was_recorded("0xdef"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn other_prefixes_get_their_own_files_and_pruning() {
+        let dir = tmp("prefix");
+        let r = TxRecorder::open_prefixed(dir.clone(), "chaintx", 7).unwrap();
+        r.record(&serde_json::json!({ "i": 1 }));
+        let path = dir.join(file_name("chaintx", Utc::now().date_naive()));
+        for _ in 0..40 {
+            if path.exists()
+                && std::fs::read_to_string(&path)
+                    .unwrap_or_default()
+                    .contains("\"i\":1")
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"i\":1"));
+        std::fs::write(dir.join("feedtx-2020-01-01.jsonl"), "x").unwrap();
+        assert_eq!(
+            prune(&dir, "chaintx", Utc::now().date_naive(), 7),
+            0,
+            "another prefix is not touched"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }
