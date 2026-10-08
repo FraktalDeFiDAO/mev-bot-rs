@@ -11,8 +11,8 @@
 # Environment:
 #   FF_RPC                 Arbitrum One RPC (default: the public one)
 #   FF_KEY_FILE            where the API key lives (default ~/.config/mev-bot/fast-feed.key)
-#   FF_BUYER_PRIVATE_KEY   the paying wallet's key, for buy/withdraw only. Use a SEPARATE wallet (not the bot's hot wallet).
-#                          Passed to cast through ETH_PRIVATE_KEY, so it never appears on a command line.
+#   FF_BUYER_ACCOUNT       a Foundry keystore account for the paying wallet (cast wallet import <name> --interactive).
+#                          Use a SEPARATE wallet, not the bot's hot wallet. Raw keys are not accepted (see signer()).
 set -euo pipefail
 export PATH="$HOME/.foundry/bin:$PATH"
 RPC="${FF_RPC:-https://arb1.arbitrum.io/rpc}"
@@ -27,10 +27,28 @@ need cast
 call() { cast call "$@" --rpc-url "$RPC" | awk '{print $1}'; }
 usdg() { python3 -c "print('%.6f' % ($1/1e6))"; }
 
+# Signer selection: a Foundry KEYSTORE account only (`cast wallet import <name> --interactive`; the key is typed once and stored
+# encrypted in ~/.foundry/keystores, override with FF_KEYSTORE_DIR). The raw key is never accepted: Foundry 1.8 has no environment
+# variable for it, so every use would put it on a command line. cast asks for the keystore password; for an unattended keeper
+# set FF_PASSWORD_FILE to a file (mode 600) holding it. Sets SIGN (extra cast args) and SIGNER (the address).
+signer() {
+  local acct="${1}_ACCOUNT"
+  [[ -n "${!acct:-}" ]] || die "set ${acct} to a keystore account name (create it: cast wallet import <name> --interactive)"
+  SIGN=(--keystore "${FF_KEYSTORE_DIR:-$HOME/.foundry/keystores}/${!acct}")
+  [[ -z "${FF_PASSWORD_FILE:-}" ]] || SIGN+=(--password-file "$FF_PASSWORD_FILE")
+  SIGNER=$(cast wallet address "${SIGN[@]}")
+}
+
 round_info() {
   ROUND=$(call "$TICKETS" 'roundNumber()(uint256)')
   PRICE=$(call "$TICKETS" 'currentPrice()(uint256)')
   END=$(call "$TICKETS" 'roundEnd()(uint256)')
+  START=$(call "$TICKETS" 'roundStart()(uint256)')
+  DUR=$(call "$TICKETS" 'roundDuration()(uint256)')
+  GF=$(call "$TICKETS" 'grandfatherPeriodFraction()(uint256)')
+  # Docs: "a grandfather period that covers about half" of a round, when only last round's subscribers may buy.
+  # On chain the fraction is out of 256 (128 = half); the parameters are DAO-settable, so read them every time.
+  GF_END=$(( START + DUR * GF / 256 ))
   [[ "$(call "$TICKETS" 'token()(address)')" == "$USDG" ]] || die "Tickets.token() is not the USDG address in the docs: stop and re-read the docs page"
 }
 
@@ -40,7 +58,12 @@ show_round() {
   now=$(date +%s); left=$(( END - now ))
   echo "round $ROUND, ticket price $(usdg "$PRICE") USDG (the docs: it can rise ~2x between rounds)"
   echo "this round ends $(date -u -d "@$END" '+%F %T UTC') (in $(( left / 3600 ))h $(( left % 3600 / 60 ))m)."
-  echo "A ticket bought now is active for the NEXT round only: connect after that time, for 24 h."
+  echo "A ticket bought now is active for the NEXT round only: connect after that time, for $(( DUR / 3600 )) h."
+  if (( now < GF_END )); then
+    echo "GRANDFATHER PERIOD until $(date -u -d "@$GF_END" '+%F %T UTC'): only last round's subscribers may buy. A first-time buyer must wait."
+  else
+    echo "Grandfather period is over: anyone may buy (capacity: target and max tickets per round apply)."
+  fi
   echo "feed: $FEED"
 }
 
@@ -66,14 +89,16 @@ case "${1:-}" in
       --tickets) tickets="$2"; shift 2 ;; --deposit-usdg) deposit="$2"; shift 2 ;; --yes) yes=1; shift ;;
       *) die "unknown option $1" ;; esac; done
     [[ -n "$deposit" ]] || die "--deposit-usdg is required (the docs advise enough for several rounds: price x 2 x rounds)"
-    [[ -n "${FF_BUYER_PRIVATE_KEY:-}" ]] || die "set FF_BUYER_PRIVATE_KEY (a separate wallet holding USDG and a little ETH for gas)"
     [[ -f "$KEY_FILE" ]] || die "no API key: run keygen first"
-    export ETH_PRIVATE_KEY="$FF_BUYER_PRIVATE_KEY"
-    buyer=$(cast wallet address --private-key "$ETH_PRIVATE_KEY")
+    signer FF_BUYER   # a separate wallet holding USDG and a little ETH for gas
+    buyer="$SIGNER"
     hash=$(cast keccak "$(cat "$KEY_FILE")")
     round_info
     dep_raw=$(python3 -c "print(int(round(float('$deposit')*1e6)))")
     min_raw=$(( PRICE * tickets ))
+    if (( $(date +%s) < GF_END )) && [[ "$(call "$TICKETS" 'grandfatherCount(address)(uint256)' "$buyer")" == 0 ]]; then
+      die "too early: only last round's subscribers may buy until $(date -u -d "@$GF_END" '+%F %T UTC'); a new buyer cannot buy before then"
+    fi
     (( dep_raw >= min_raw )) || die "deposit $deposit USDG is below $tickets x price = $(usdg "$min_raw") USDG"
     bal=$(call "$USDG" 'balanceOf(address)(uint256)' "$buyer")
     eth=$(cast balance "$buyer" --rpc-url "$RPC")
@@ -84,19 +109,18 @@ case "${1:-}" in
     if (( yes == 0 )); then echo "DRY RUN: nothing sent. Re-run with --yes to execute."; exit 0; fi
     read -r -p "Send these 3 transactions with REAL funds? type 'buy' to continue: " ok
     [[ "$ok" == buy ]] || die "aborted"
-    cast send "$USDG" 'approve(address,uint256)' "$TICKETS" "$dep_raw" --rpc-url "$RPC" >/dev/null
-    cast send "$TICKETS" 'depositToken(uint256)' "$dep_raw" --rpc-url "$RPC" >/dev/null
+    cast send "$USDG" 'approve(address,uint256)' "$TICKETS" "$dep_raw" "${SIGN[@]}" --rpc-url "$RPC" >/dev/null
+    cast send "$TICKETS" 'depositToken(uint256)' "$dep_raw" "${SIGN[@]}" --rpc-url "$RPC" >/dev/null
     echo "deposited; Tickets balance: $(usdg "$(call "$TICKETS" 'tokenBalance(address)(uint256)' "$buyer")") USDG"
     round_info   # re-read: the price or round may have moved
-    cast send "$TICKETS" 'purchaseTickets(uint256,uint256,uint256,bytes32)' "$ROUND" "$PRICE" "$tickets" "$hash" --rpc-url "$RPC" >/dev/null
+    cast send "$TICKETS" 'purchaseTickets(uint256,uint256,uint256,bytes32)' "$ROUND" "$PRICE" "$tickets" "$hash" "${SIGN[@]}" --rpc-url "$RPC" >/dev/null
     echo "ticket purchased. Active from $(date -u -d "@$END" '+%F %T UTC'). Then:"
     echo "  export ARBITRUM_FAST_FEED_KEY=\$(cat $KEY_FILE)"
     echo "  cargo run --release -p mev-analytics --bin mev-feedlead -- config/arbitrum.toml 3600" ;;
   withdraw)
     [[ -n "${2:-}" ]] || die "usage: withdraw <usdg>"
-    [[ -n "${FF_BUYER_PRIVATE_KEY:-}" ]] || die "set FF_BUYER_PRIVATE_KEY"
-    export ETH_PRIVATE_KEY="$FF_BUYER_PRIVATE_KEY"
-    cast send "$TICKETS" 'withdrawToken(uint256)' "$(python3 -c "print(int(round(float('$2')*1e6)))")" --rpc-url "$RPC" >/dev/null
+    signer FF_BUYER
+    cast send "$TICKETS" 'withdrawToken(uint256)' "$(python3 -c "print(int(round(float('$2')*1e6)))")" "${SIGN[@]}" --rpc-url "$RPC" >/dev/null
     echo "withdrawn $2 USDG to the wallet" ;;
   *) sed -n '2,19p' "$0"; exit 2 ;;
 esac
