@@ -4,6 +4,8 @@
 //! Any binary (bot, backtester, dashboard) can embed it:
 //! `Engine::bootstrap(cfg, secrets, Mode::Shadow, data_dir).await?.run().await`.
 
+mod decode_check;
+
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -193,6 +195,7 @@ pub struct Engine {
     /// Recent feed arrivals by tx hash (race telemetry clock).
     feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>>,
     presim_stats: Arc<mev_presim::PresimStats>,
+    decode_stats: std::sync::Mutex<decode_check::DecodeStats>,
     localsim_stats: Arc<mev_localsim::worker::LocalStats>,
     /// Pools + tokens a feed tx must mention to be pre-simulated (refreshed on resync).
     presim_watch: mev_presim::Watchlist,
@@ -598,6 +601,7 @@ impl Engine {
             presim_rx,
             feed_log,
             presim_stats,
+            decode_stats: std::sync::Mutex::default(),
             localsim_stats,
             presim_watch,
             meters,
@@ -676,6 +680,9 @@ impl Engine {
                                 (Instant::now(), pre.call.clone(), pre.block),
                             );
                         }
+                        // Shadow only: would reading the calldata have predicted what the node simulation says?
+                        let verdict = decode_check::check(&self.store, &pre.call, &pre.logs);
+                        self.decode_stats.lock().unwrap().record(verdict);
                         // Same path as block logs, a block early; the real logs overwrite it.
                         for log in &pre.logs {
                             if let Some(pool) = self.store.apply_log_tentative(log, Instant::now()) {
@@ -1309,6 +1316,7 @@ impl Engine {
         }
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
             info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
+            info!(stats = %self.decode_stats.lock().unwrap().take_summary(), "local swap decoder vs node simulation (last minute)");
             info!(top = %self.presim_stats.take_destinations(10), "presim destinations (to selector moved/none)");
             if self.cfg.presim.as_ref().is_some_and(|p| p.local) {
                 info!(stats = %self.localsim_stats.take_summary(), "localsim (last minute)");
