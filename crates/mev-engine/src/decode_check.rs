@@ -9,7 +9,7 @@ use alloy::{
     sol_types::SolEvent,
 };
 use mev_bindings::{IPancakeV3Pool, IUniswapV3Pool};
-use mev_presim::decode::{PoolRef, SwapIntent, decode};
+use mev_presim::decode::{PoolRef, ROUTER_A, ROUTER_B, SwapIntent, decode};
 use mev_state::PoolStore;
 use mev_types::PoolKind;
 
@@ -22,10 +22,10 @@ pub enum Verdict {
     UnknownPool,
     /// Our pool model cannot say (no tick map, or the swap runs past the loaded ticks).
     NoPrediction,
-    /// The simulation produced no `Swap` event for that pool (the transaction reverted or touched another pool).
+    /// The simulation produced no `Swap` event for that pool.
     NoActual,
-    /// Predicted vs simulated price, in bps (positive: we predicted a higher price).
-    Compared { price_diff_bps: f64 },
+    /// Predicted vs simulated price, in bps (positive: we predicted a higher price), and which router (A/B/C).
+    Compared { price_diff_bps: f64, router: char },
 }
 
 #[derive(Debug, Default)]
@@ -38,6 +38,8 @@ pub struct DecodeStats {
     close: u64,
     differ: u64,
     worst_bps: f64,
+    /// Per router letter: exact, close, differ.
+    by_router: std::collections::BTreeMap<char, [u64; 3]>,
 }
 
 impl DecodeStats {
@@ -47,24 +49,36 @@ impl DecodeStats {
             Verdict::UnknownPool => self.unknown_pool += 1,
             Verdict::NoPrediction => self.no_prediction += 1,
             Verdict::NoActual => self.no_actual += 1,
-            Verdict::Compared { price_diff_bps } => {
+            Verdict::Compared {
+                price_diff_bps,
+                router,
+            } => {
                 let d = price_diff_bps.abs();
                 self.worst_bps = self.worst_bps.max(d);
-                if d < 0.01 {
+                let slot = if d < 0.01 {
                     self.exact += 1;
+                    0
                 } else if d < 0.5 {
                     self.close += 1;
+                    1
                 } else {
                     self.differ += 1;
-                }
+                    2
+                };
+                self.by_router.entry(router).or_default()[slot] += 1;
             }
         }
     }
 
     pub fn take_summary(&mut self) -> String {
         let s = std::mem::take(self);
+        let routers: String = s
+            .by_router
+            .iter()
+            .map(|(r, [e, c, d])| format!(" {r}={e}/{c}/{d}"))
+            .collect();
         format!(
-            "exact={} close={} differ={} worst_bps={:.2} no_prediction={} no_actual={} unknown_pool={} not_decoded={}",
+            "exact={} close={} differ={} worst_bps={:.2} no_prediction={} no_actual={} unknown_pool={} not_decoded={} by_router(exact/close/differ){}",
             s.exact,
             s.close,
             s.differ,
@@ -72,7 +86,8 @@ impl DecodeStats {
             s.no_prediction,
             s.no_actual,
             s.unknown_pool,
-            s.not_decoded
+            s.not_decoded,
+            routers
         )
     }
 }
@@ -98,7 +113,6 @@ fn pool_for(store: &PoolStore, intent: &SwapIntent) -> Option<Address> {
     }
 }
 
-/// What the simulation's last V3-style `Swap` event for a pool says.
 struct SimSwap {
     amount0: f64,
     amount1: f64,
@@ -157,7 +171,13 @@ fn check(store: &PoolStore, call: &serde_json::Value, logs: &[Log]) -> Verdict {
     check_detailed(store, call, logs).0
 }
 
-/// `check`, plus the numbers behind a comparison (for the mismatch event).
+/// Compare the decoder's prediction for `call` (an `eth_simulateV1` call object) with the simulated `logs`, and
+/// return the numbers behind a comparison (for the mismatch event).
+///
+/// Calls with a price limit (routers A and B) are measured to end at the limit when the bot sized its input to
+/// reach it (129 of 137 mismatches on 2026-10-08, input fully used): the end price is the limit, independent of our
+/// possibly stale start price; liquidity at the limit still comes from walking the ticks. Router C has no limit, so
+/// it is judged on the size of the move (our state and the node's can differ, which is not the decoder's error).
 pub fn check_detailed(
     store: &PoolStore,
     call: &serde_json::Value,
@@ -171,7 +191,8 @@ pub fn check_detailed(
     let (Some(to), Some(input)) = (hex("to").filter(|t| t.len() == 20), hex("input")) else {
         return (Verdict::NotDecoded, None);
     };
-    let Some(intent) = decode(Address::from_slice(&to), &input) else {
+    let to = Address::from_slice(&to);
+    let Some(intent) = decode(to, &input) else {
         return (Verdict::NotDecoded, None);
     };
     let Some(addr) = pool_for(store, &intent) else {
@@ -181,22 +202,20 @@ pub fn check_detailed(
     let limit = intent
         .sqrt_limit_x96
         .map(|l| mev_dex::sqrt_price_from_x96(f64::from(l)));
-    let Some(predicted) = pool.state_after(intent.token_in, f64::from(intent.amount_in), limit)
+    let Some(by_amount) = pool.state_after(intent.token_in, f64::from(intent.amount_in), limit)
     else {
         return (Verdict::NoPrediction, None);
     };
     let mev_dex::PoolState::V3 {
-        sqrt_price: pred_sqrt,
-        liquidity: pred_liq,
-    } = predicted
+        sqrt_price: amount_sqrt,
+        liquidity: amount_liq,
+    } = by_amount
     else {
         return (Verdict::NoPrediction, None);
     };
     let Some(sim) = simulated_swap(logs, addr) else {
         return (Verdict::NoActual, None);
     };
-    let (actual, actual_liq) = (sim.sqrt_price, sim.liquidity);
-    // Where our pool stood before this swap, and where the node's simulation stood.
     let ours_before = match pool.state {
         mev_dex::PoolState::V3 { sqrt_price, .. } => sqrt_price,
         _ => return (Verdict::NoPrediction, None),
@@ -206,33 +225,38 @@ pub fn check_detailed(
     let Some(node_before) = implied_start(&sim, token0_in, fee) else {
         return (Verdict::NoPrediction, None);
     };
-    // The decoder is judged on the size of the move it predicts, not the absolute price: our state and the node's
-    // can differ (staleness, other pending transactions applied on one side only), which is not the decoder's error.
-    let ours_move = (pred_sqrt / ours_before).powi(2);
-    let node_move = (actual / node_before).powi(2);
-    let bps = (ours_move / node_move - 1.0) * 1e4;
     let state_bps = ((ours_before / node_before).powi(2) - 1.0) * 1e4;
-    let before = match pool.state {
-        mev_dex::PoolState::V3 {
+    // With a limit: walk to the limit with unlimited input. Without one: the amount-based move.
+    let pinned = limit.and_then(|lm| pool.state_after(intent.token_in, 1e60, Some(lm)));
+    let (bps, pred_sqrt, pred_liq) = match pinned {
+        Some(mev_dex::PoolState::V3 {
             sqrt_price,
             liquidity,
-        } => Some((sqrt_price, liquidity)),
-        _ => None,
+        }) => (
+            ((sqrt_price / sim.sqrt_price).powi(2) - 1.0) * 1e4,
+            sqrt_price,
+            liquidity,
+        ),
+        _ => {
+            let ours_move = (amount_sqrt / ours_before).powi(2);
+            let node_move = (sim.sqrt_price / node_before).powi(2);
+            ((ours_move / node_move - 1.0) * 1e4, amount_sqrt, amount_liq)
+        }
     };
     let detail = serde_json::json!({
-        "router": format!("{:#x}", Address::from_slice(&to)),
+        "router": format!("{to:#x}"),
         "selector": alloy::hex::encode(&input[..4]),
         "pool": format!("{addr:#x}"),
         "dex": pool.info.dex,
-        "token_in_is_token0": intent.token_in == pool.info.token0,
+        "token_in_is_token0": token0_in,
         "amount_in": f64::from(intent.amount_in),
         "has_limit": limit.is_some(),
-        "before_sqrt": before.map(|b| b.0),
-        "before_liq": before.map(|b| b.1),
+        "pinned_to_limit": pinned.is_some(),
+        "before_sqrt": ours_before,
         "predicted_sqrt": pred_sqrt,
         "predicted_liq": pred_liq,
-        "actual_sqrt": actual,
-        "actual_liq": actual_liq,
+        "actual_sqrt": sim.sqrt_price,
+        "actual_liq": sim.liquidity,
         "limit_sqrt": limit,
         "fee0": pool.fee0,
         "fee1": pool.fee1,
@@ -243,9 +267,17 @@ pub fn check_detailed(
         "amount0": sim.amount0,
         "amount1": sim.amount1,
     });
+    let router = if to == ROUTER_A {
+        'A'
+    } else if to == ROUTER_B {
+        'B'
+    } else {
+        'C'
+    };
     (
         Verdict::Compared {
             price_diff_bps: bps,
+            router,
         },
         Some(detail),
     )
@@ -261,12 +293,15 @@ mod tests {
         for v in [
             Verdict::Compared {
                 price_diff_bps: 0.0,
+                router: 'A',
             },
             Verdict::Compared {
                 price_diff_bps: -0.2,
+                router: 'B',
             },
             Verdict::Compared {
                 price_diff_bps: 3.0,
+                router: 'A',
             },
             Verdict::NoActual,
             Verdict::NotDecoded,
@@ -279,6 +314,7 @@ mod tests {
             "{t}"
         );
         assert!(t.contains("no_actual=1") && t.contains("not_decoded=1"));
+        assert!(t.contains("A=1/0/1") && t.contains("B=0/1/0"), "{t}");
         assert!(s.take_summary().starts_with("exact=0 close=0 differ=0"));
     }
 
@@ -295,7 +331,6 @@ mod tests {
 
     #[test]
     fn the_simulations_start_price_is_recovered_from_its_own_swap() {
-        // Token1 in: dy = 1_000 at L = 1e6 with a 0.05% fee moves sqrt price 1.0 up by dy*(1-fee)/L.
         let fee = 0.0005;
         let up = SimSwap {
             amount0: -990.0,
@@ -304,7 +339,6 @@ mod tests {
             liquidity: 1e6,
         };
         assert!((implied_start(&up, false, fee).unwrap() - 1.0).abs() < 1e-12);
-        // Token0 in: 1/s moves by dx*(1-fee)/L.
         let down = SimSwap {
             amount0: 1_000.0,
             amount1: -990.0,
@@ -312,7 +346,6 @@ mod tests {
             liquidity: 1e6,
         };
         assert!((implied_start(&down, true, fee).unwrap() - 1.0).abs() < 1e-12);
-        // No liquidity: nothing can be recovered.
         assert_eq!(
             implied_start(
                 &SimSwap {

@@ -698,7 +698,7 @@ impl Engine {
                         // Shadow only: would reading the calldata have predicted what the node simulation says?
                         let (verdict, detail) = decode_check::check_detailed(&self.store, &pre.call, &pre.logs);
                         self.decode_stats.lock().unwrap().record(verdict);
-                        if let (decode_check::Verdict::Compared { price_diff_bps }, Some(d)) = (verdict, detail)
+                        if let (decode_check::Verdict::Compared { price_diff_bps, .. }, Some(d)) = (verdict, detail)
                             && price_diff_bps.abs() >= 0.5
                         {
                             self.metrics.event("decode_differ", d);
