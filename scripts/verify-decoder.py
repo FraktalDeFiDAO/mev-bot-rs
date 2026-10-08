@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Check decoded swap intents against what the chain did.
 
-  scripts/verify-decoder.py [DATA_DIR]            (default data/arbitrum; run on the server)
+  scripts/verify-decoder.py [DATA_DIR] [--since 2026-10-08T19:59:55]   (default data/arbitrum; run on the server)
+
+--since keeps only feed records received at or after that UTC time, so a decoder fix can be judged without the
+records written by the build before it.
 
 For every feed transaction the decoder read a swap from (feedtx `swap` field) that landed successfully in a sampled
 block (chaintx), compare the intent with the transaction's own swap events:
@@ -12,7 +15,12 @@ Reports accuracy per destination and selector. A decoder is trusted when pool an
 """
 import collections, glob, json, os, sys
 
-d = sys.argv[1] if len(sys.argv) > 1 else "data/arbitrum"
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+d = args[0] if args else "data/arbitrum"
+since_ms = 0
+if "--since" in sys.argv:
+    import calendar, time
+    since_ms = calendar.timegm(time.strptime(sys.argv[sys.argv.index("--since") + 1], "%Y-%m-%dT%H:%M:%S")) * 1000
 
 def lines(pattern):
     for f in sorted(glob.glob(os.path.join(d, pattern))):
@@ -45,7 +53,7 @@ def swap_inputs(log):
         return pool.lower(), max(-a0, -a1, 0) or max(abs(a0), abs(a1))
     return None
 
-feed = {r["hash"]: r for r in lines("feedtx-*.jsonl") if r.get("swap")}
+feed = {r["hash"]: r for r in lines("feedtx-*.jsonl") if r.get("swap") and r.get("t_ms", 0) >= since_ms}
 chain = {r["hash"]: r for r in lines("chaintx-*.jsonl")}
 agg = collections.defaultdict(lambda: collections.Counter())
 for h, f in feed.items():

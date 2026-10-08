@@ -194,6 +194,8 @@ pub struct Engine {
     presim_rx: Option<PresimRx>,
     /// Recent feed arrivals by tx hash (race telemetry clock).
     feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>>,
+    /// Continuity counters of the standard sequencer feed (gaps, replays, reconnects).
+    feed_stats: Arc<mev_sequencer::FeedStats>,
     presim_stats: Arc<mev_presim::PresimStats>,
     decode_stats: std::sync::Mutex<decode_check::DecodeStats>,
     localsim_stats: Arc<mev_localsim::worker::LocalStats>,
@@ -409,6 +411,7 @@ impl Engine {
             .clone()
             .filter(|p| p.enabled && !p.rpc_urls.is_empty());
         let feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>> = Default::default();
+        let feed_stats: Arc<mev_sequencer::FeedStats> = Default::default();
         let feed_tips = Arc::new(std::sync::Mutex::new(TipBook::new(
             FEED_TIP_CAPACITY,
             FEED_TIP_HORIZON_SECS,
@@ -433,7 +436,7 @@ impl Engine {
                         stats.clone(),
                     );
                 }
-                tokio::spawn(mev_sequencer::run(url, raw_tx));
+                tokio::spawn(mev_sequencer::run_tracked(url, raw_tx, feed_stats.clone()));
                 let (liq_tx, liq_rx) = mpsc::unbounded_channel();
                 let (pre_tx, pre_rx) = mpsc::unbounded_channel();
                 let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
@@ -632,6 +635,7 @@ impl Engine {
             liq,
             presim_rx,
             feed_log,
+            feed_stats,
             presim_stats,
             decode_stats: std::sync::Mutex::default(),
             localsim_stats,
@@ -1351,6 +1355,7 @@ impl Engine {
                 "fast feed (last minute)"
             );
         }
+        info!(stats = %self.feed_stats.take_summary(), "sequencer feed (last minute)");
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
             info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
             info!(stats = %self.decode_stats.lock().unwrap().take_summary(), "local swap decoder vs node simulation (last minute)");

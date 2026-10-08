@@ -76,3 +76,15 @@ Docs index used: `https://docs.arbitrum.io/llms.txt`. Pages are cited by path un
 3. Conditional-tx acceptance, latency and any rate limit (R3).
 4. Whether Stylus code carries `EFF00000` via `eth_getCode` (E2).
 5. Round-start phase relative to our receive time (what fraction of our sends arrive before the next round starts).
+
+## F18. Feed details from a third-party crate (`arb-feed` README), unverified
+
+Claims to re-check against Nitro (`broadcaster/message`, `transactionfeed/message.go`) before relying on them:
+- A standard-feed message is one L2 block; sequence numbers rise by one. A client can ask to resume with the request header
+  `Arbitrum-Requested-Sequence-Number`. (Used since DECISIONS #98; the live gap counters will show whether the server honours it.)
+- Fast Feed: live-sequenced blocks start at `tx_index` 1 (the ArbOS internal transaction is not published); blocks built from
+  delayed messages are published from index 0 with `pga_round` 0 and may contain Arbitrum transaction types.
+- Fast Feed has no replay; after a disconnect state is degraded until the standard feed covers the gap. Losses at the end of
+  a block cannot be detected from the feed alone.
+- Standard-feed `blockMetadata` is base64 and begins with a version byte (seen as `AAI=` in Nitro's example).
+- Status: not verified. Source: `arb-feed.tar.gz` in the repo root (not committed).

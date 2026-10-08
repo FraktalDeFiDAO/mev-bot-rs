@@ -105,14 +105,19 @@ struct Header {
     kind: u8,
 }
 
-/// Parse one broadcast JSON frame into (sequence number, decoded transactions).
+/// Parse one broadcast JSON frame into (sequence number, decoded transactions), one entry per message in the
+/// frame, in order. Messages without L2 transactions come back with an empty list. A frame with no messages (a
+/// `confirmedSequenceNumberMessage`) gives an empty result.
 pub fn parse_broadcast(frame: &str) -> Result<Vec<(u64, Vec<TxEnvelope>)>> {
     let b: Broadcast =
         serde_json::from_str(frame).context("feed frame is not a broadcast message")?;
     let mut out = Vec::with_capacity(b.messages.len());
     for m in b.messages {
         let msg = m.message.message;
+        // Messages that carry no L2 transactions (deposits, retryables, end-of-block markers) still consume a
+        // sequence number: report them with no transactions so continuity can be checked.
         if msg.header.kind != L1_KIND_L2_MESSAGE || msg.l2_msg.is_empty() {
+            out.push((m.sequence_number, Vec::new()));
             continue;
         }
         let bytes = base64::engine::general_purpose::STANDARD
@@ -191,19 +196,120 @@ impl FeedLog {
     }
 }
 
+/// What observing one sequence number told us.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeqObservation {
+    /// The first message seen.
+    First,
+    /// Exactly the previous number plus one.
+    InOrder,
+    /// At or below the highest number accepted: a duplicate, a replay after reconnecting, or a late delivery. Drop it.
+    Stale { last: u64 },
+    /// Messages were skipped. Whatever they carried is missing; state built across the gap is suspect.
+    Gap {
+        missing: std::ops::RangeInclusive<u64>,
+    },
+}
+
+/// Checks that the standard feed's sequence numbers arrive in order without holes. The semantics follow Nitro's
+/// feed: one message per L2 block, numbers increase by one, and a client may ask to resume from a number after
+/// reconnecting (`Arbitrum-Requested-Sequence-Number`).
+#[derive(Debug, Default, Clone)]
+pub struct SequenceTracker {
+    last: Option<u64>,
+}
+
+impl SequenceTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Highest accepted sequence number.
+    pub fn last(&self) -> Option<u64> {
+        self.last
+    }
+
+    /// The number to ask for when reconnecting.
+    pub fn resume_point(&self) -> Option<u64> {
+        self.last.map(|l| l + 1)
+    }
+
+    /// Observe one number. `First`, `InOrder` and `Gap` advance the tracker; `Stale` does not.
+    pub fn observe(&mut self, seq: u64) -> SeqObservation {
+        match self.last {
+            None => {
+                self.last = Some(seq);
+                SeqObservation::First
+            }
+            Some(last) if seq <= last => SeqObservation::Stale { last },
+            Some(last) if seq == last + 1 => {
+                self.last = Some(seq);
+                SeqObservation::InOrder
+            }
+            Some(last) => {
+                self.last = Some(seq);
+                SeqObservation::Gap {
+                    missing: (last + 1)..=(seq - 1),
+                }
+            }
+        }
+    }
+}
+
+/// Counters for the feed connection since the last summary.
+#[derive(Debug, Default)]
+pub struct FeedStats {
+    pub messages: std::sync::atomic::AtomicU64,
+    /// Times a hole was seen in the sequence numbers.
+    pub gaps: std::sync::atomic::AtomicU64,
+    /// Sequence numbers inside those holes.
+    pub missed: std::sync::atomic::AtomicU64,
+    /// Messages dropped as already seen.
+    pub stale: std::sync::atomic::AtomicU64,
+    pub reconnects: std::sync::atomic::AtomicU64,
+}
+
+impl FeedStats {
+    /// One line since the last call; resets the counters.
+    pub fn take_summary(&self) -> String {
+        use std::sync::atomic::Ordering::Relaxed;
+        let t = |a: &std::sync::atomic::AtomicU64| a.swap(0, Relaxed);
+        format!(
+            "messages={} gaps={} missed={} stale={} reconnects={}",
+            t(&self.messages),
+            t(&self.gaps),
+            t(&self.missed),
+            t(&self.stale),
+            t(&self.reconnects)
+        )
+    }
+}
+
 /// The feed sends several frames a second; this long without one means the connection is dead
 /// even if the socket is still open (seen live: a reconnect that never delivered a frame).
 pub const FEED_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Connect to the feed and forward every sequenced transaction. Reconnects with backoff forever;
-/// returns only when the receiver is dropped.
+/// Connect to the feed and forward every sequenced transaction. Reconnects with backoff forever, resuming from the
+/// last sequence number seen; returns only when the receiver is dropped.
 pub async fn run(url: String, tx: mpsc::UnboundedSender<SequencedTx>) {
+    run_tracked(url, tx, std::sync::Arc::new(FeedStats::default())).await
+}
+
+/// `run`, counting continuity into `stats` (gaps, missed numbers, replays, reconnects).
+pub async fn run_tracked(
+    url: String,
+    tx: mpsc::UnboundedSender<SequencedTx>,
+    stats: std::sync::Arc<FeedStats>,
+) {
+    use std::sync::atomic::Ordering::Relaxed;
     let mut backoff = mev_rpc::Backoff::default();
+    let mut tracker = SequenceTracker::new();
     loop {
         let started = Instant::now();
-        match stream_once(&url, &tx, FEED_IDLE_TIMEOUT).await {
+        match stream_once(&url, &tx, FEED_IDLE_TIMEOUT, &mut tracker, &stats).await {
             Ok(()) => return, // receiver dropped
             Err(e) => {
+                stats.reconnects.fetch_add(1, Relaxed);
                 // A connection that stayed up a while was healthy: start backoff over.
                 if started.elapsed() > Duration::from_secs(60) {
                     backoff.reset();
@@ -216,16 +322,32 @@ pub async fn run(url: String, tx: mpsc::UnboundedSender<SequencedTx>) {
     }
 }
 
+/// Header a client sends to ask the feed to start from a given sequence number.
+const RESUME_HEADER: &str = "Arbitrum-Requested-Sequence-Number";
+
 async fn stream_once(
     url: &str,
     tx: &mpsc::UnboundedSender<SequencedTx>,
     idle: Duration,
+    tracker: &mut SequenceTracker,
+    stats: &FeedStats,
 ) -> Result<()> {
-    let (mut ws, _) = tokio::time::timeout(idle, tokio_tungstenite::connect_async(url))
+    use std::sync::atomic::Ordering::Relaxed;
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue};
+    let mut request = url.into_client_request().context("feed url")?;
+    // After a reconnect, ask for what was sequenced while we were away. If the feed no longer has it, the tracker
+    // reports the hole below instead of the loss going unnoticed.
+    if let Some(from) = tracker.resume_point() {
+        request.headers_mut().insert(
+            RESUME_HEADER,
+            HeaderValue::from_str(&from.to_string()).context("resume header")?,
+        );
+    }
+    let (mut ws, _) = tokio::time::timeout(idle, tokio_tungstenite::connect_async(request))
         .await
         .context("feed connect timed out")?
         .context("feed connect")?;
-    info!(url, "sequencer feed connected");
+    info!(url, resume_from = ?tracker.resume_point(), "sequencer feed connected");
     // Only data frames count as liveness: pings alone don't mean transactions are flowing.
     let mut last_data = tokio::time::Instant::now();
     loop {
@@ -250,6 +372,24 @@ async fn stream_once(
             }
         };
         for (seq, txs) in parsed {
+            match tracker.observe(seq) {
+                SeqObservation::Stale { .. } => {
+                    stats.stale.fetch_add(1, Relaxed);
+                    continue;
+                }
+                SeqObservation::Gap { missing } => {
+                    stats.gaps.fetch_add(1, Relaxed);
+                    stats
+                        .missed
+                        .fetch_add(missing.end() - missing.start() + 1, Relaxed);
+                    warn!(
+                        ?missing,
+                        "sequencer feed skipped messages: transactions in them are missing"
+                    );
+                }
+                SeqObservation::First | SeqObservation::InOrder => {}
+            }
+            stats.messages.fetch_add(1, Relaxed);
             for t in txs {
                 let st = SequencedTx {
                     seq,
@@ -422,11 +562,120 @@ mod tests {
         });
         let (tx, _rx) = mpsc::unbounded_channel();
         let idle = Duration::from_millis(300);
-        let res = tokio::time::timeout(Duration::from_secs(5), stream_once(&url, &tx, idle))
-            .await
-            .expect("stream_once hung on a silent feed");
+        let res = tokio::time::timeout(
+            Duration::from_secs(5),
+            stream_once(
+                &url,
+                &tx,
+                idle,
+                &mut SequenceTracker::new(),
+                &FeedStats::default(),
+            ),
+        )
+        .await
+        .expect("stream_once hung on a silent feed");
         let err = format!("{:#}", res.unwrap_err());
         assert!(err.contains("feed stalled"), "{err}");
+    }
+
+    /// Adapted from Nitro's `ExampleBroadcastMessage_broadcastfeedmessageWithBlockHashAndBlockMetadata` (the 32-byte
+    /// request id and block hash are shortened; this parser ignores them). Kind 0 is not an L2 message, and its confirmed-sequence-number frame (no messages at all).
+    const NITRO_GOLDEN: &str = r#"{"version":1,"messages":[{"sequenceNumber":12345,"message":{"message":{"header":{"kind":0,"sender":"0x0000000000000000000000000000000000000000","blockNumber":0,"timestamp":0,"requestId":null,"baseFeeL1":0},"l2Msg":"3q2+7w=="},"delayedMessagesRead":3333},"blockHash":"0xff","signatureV2":null,"blockMetadata":"AAI="}]}"#;
+    const NITRO_CONFIRMED: &str =
+        r#"{"version":1,"confirmedSequenceNumberMessage":{"sequenceNumber":1234}}"#;
+
+    #[test]
+    fn nitros_own_example_frames_parse_and_keep_their_sequence_numbers() {
+        // A message that is not an L2 message still reports its sequence number, with no transactions.
+        let parsed = parse_broadcast(NITRO_GOLDEN).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!((parsed[0].0, parsed[0].1.len()), (12345, 0));
+        // A confirmed-sequence-number frame has no messages.
+        assert!(parse_broadcast(NITRO_CONFIRMED).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_tracker_reports_gaps_replays_and_the_resume_point() {
+        let mut t = SequenceTracker::new();
+        assert_eq!(t.resume_point(), None);
+        assert_eq!(t.observe(100), SeqObservation::First);
+        assert_eq!(t.observe(101), SeqObservation::InOrder);
+        assert_eq!(t.observe(101), SeqObservation::Stale { last: 101 });
+        assert_eq!(t.observe(99), SeqObservation::Stale { last: 101 });
+        assert_eq!(t.last(), Some(101), "stale numbers do not move the tracker");
+        assert_eq!(t.observe(105), SeqObservation::Gap { missing: 102..=104 });
+        assert_eq!(t.resume_point(), Some(106));
+    }
+
+    fn l1_frame(seq: u64, kind: u8) -> String {
+        format!(
+            r#"{{"version":1,"messages":[{{"sequenceNumber":{seq},"message":{{"message":{{"header":{{"kind":{kind},"sender":"0x0000000000000000000000000000000000000000","blockNumber":1,"timestamp":1,"requestId":null,"baseFeeL1":null}},"l2Msg":""}},"delayedMessagesRead":1}},"signature":null}}]}}"#
+        )
+    }
+
+    #[tokio::test]
+    #[allow(clippy::result_large_err)] // tungstenite's handshake callback signature
+    async fn a_mock_feed_with_a_hole_and_a_replay_is_counted_and_the_reconnect_asks_to_resume() {
+        use std::sync::{Arc, Mutex};
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let asked: Arc<Mutex<Vec<Option<String>>>> = Default::default();
+        let asked_by_server = asked.clone();
+        tokio::spawn(async move {
+            use futures::SinkExt;
+            // First connection: 10, 11, a hole (12 missing), 13, then 13 again (a replay), then it closes.
+            // Second connection: 14.
+            for frames in [vec![10u64, 11, 13, 13], vec![14]] {
+                let (sock, _) = listener.accept().await.unwrap();
+                let seen = asked_by_server.clone();
+                let mut ws = tokio_tungstenite::accept_hdr_async(
+                    sock,
+                    move |req: &Request, resp: Response| {
+                        let h = req
+                            .headers()
+                            .get(RESUME_HEADER)
+                            .map(|v| v.to_str().unwrap().to_string());
+                        seen.lock().unwrap().push(h);
+                        Ok(resp)
+                    },
+                )
+                .await
+                .unwrap();
+                for seq in frames {
+                    ws.send(Message::Text(l1_frame(seq, 13).into()))
+                        .await
+                        .unwrap();
+                }
+                ws.close(None).await.ok();
+            }
+        });
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let (mut tracker, stats) = (SequenceTracker::new(), FeedStats::default());
+        let idle = Duration::from_secs(5);
+        assert!(
+            stream_once(&url, &tx, idle, &mut tracker, &stats)
+                .await
+                .is_err(),
+            "the server closed"
+        );
+        assert!(
+            stream_once(&url, &tx, idle, &mut tracker, &stats)
+                .await
+                .is_err()
+        );
+        use std::sync::atomic::Ordering::Relaxed;
+        assert_eq!(stats.gaps.load(Relaxed), 1);
+        assert_eq!(stats.missed.load(Relaxed), 1, "only number 12 was skipped");
+        assert_eq!(stats.stale.load(Relaxed), 1, "the replayed 13");
+        assert_eq!(
+            stats.messages.load(Relaxed),
+            4,
+            "10, 11, 13 and 14 counted; the replay is not"
+        );
+        assert_eq!(tracker.last(), Some(14));
+        // The first connection asked for nothing; the second asked to start right after the last number seen (13).
+        assert_eq!(*asked.lock().unwrap(), vec![None, Some("14".to_string())]);
     }
 
     #[test]
