@@ -38,6 +38,8 @@ Docs index used: `https://docs.arbitrum.io/llms.txt`. Pages are cited by path un
 | F11 | Tickets are tracked per buyer **address**: `thisRoundTicketCount(address)`, `grandfatherCount(address)`, `tokenBalance(address)`; the API-key hash is supplied at purchase. A **smart contract can be the subscriber** (fork-tested: deposit, `purchaseTickets`, next-round renewal). | Tickets contract bytecode selectors; `contracts/test/FastFeedTicketVault.t.sol` | verified on a fork |
 | F12 | Foundry 1.8.4 has no environment variable for a raw private key (`--private-key` only); it supports keystores (`--keystore`, `--account`, `--password-file`). Do not set `ETH_PASSWORD` globally: it makes non-signing `cast` calls demand a keystore. | `cast send --help`, tests | verified |
 
+| F17 | **A feed transaction is usually already in the node's `latest` block by the time we simulate it.** The standard feed publishes a transaction after it is sequenced, and an `eth_simulateV1` call takes ~40 ms to answer; running the transaction again on a state that contains it applies it twice (a landed Uniswap V3 swap re-simulated on its own block moved the pool +2.89 bps past the chain; on the block before it, the result matched the chain to 1e-10). The simulation response's block number is one above the block it ran on, which is how to tell. | `crates/mev-presim/tests/double_apply_live.rs` against arb1 | verified (chain) |
+
 ## Standard sequencer feed
 
 | # | Fact | Source | Status |

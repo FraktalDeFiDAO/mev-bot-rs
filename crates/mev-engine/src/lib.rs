@@ -172,7 +172,7 @@ pub struct Engine {
     healed: HashMap<Address, Instant>,
     /// Pending feed transactions that moved a pool (as `eth_simulateV1` calls), so a trade they
     /// trigger is verified on top of them. Pruned by age.
-    trigger_calls: HashMap<TxHash, (Instant, serde_json::Value)>,
+    trigger_calls: HashMap<TxHash, (Instant, serde_json::Value, u64)>,
     /// An endpoint that serves `eth_simulateV1` (the presim provider).
     sim_v1: Option<alloy::providers::DynProvider>,
     /// Tokens we trade routinely (configured pairs and loan tokens). A route touching any other
@@ -665,9 +665,12 @@ impl Engine {
                     Some(pre) = recv_opt(&mut presim_rx) => {
                         if !pre.call.is_null() {
                             if self.trigger_calls.len() > 512 {
-                                self.trigger_calls.retain(|_, (t, _)| t.elapsed() < TRIGGER_CALL_KEEP);
+                                self.trigger_calls.retain(|_, (t, _, _)| t.elapsed() < TRIGGER_CALL_KEEP);
                             }
-                            self.trigger_calls.insert(pre.tx, (Instant::now(), pre.call.clone()));
+                            self.trigger_calls.insert(
+                                pre.tx,
+                                (Instant::now(), pre.call.clone(), pre.block),
+                            );
                         }
                         // Same path as block logs, a block early; the real logs overwrite it.
                         for log in &pre.logs {
@@ -1414,13 +1417,25 @@ impl Engine {
                 ("presim", Some(tx), Some(p)) => self
                     .trigger_calls
                     .get(&tx)
-                    .map(|(_, call)| (p.clone(), call.clone())),
+                    .map(|(_, call, blk)| (p.clone(), call.clone(), *blk)),
                 _ => None,
             };
             let outcome = match after {
-                Some((p, call)) => {
+                Some((p, call, trigger_block)) => {
                     let arb = sim.arb_call_json(&opp, U256::ZERO);
                     match mev_presim::simulate_after(&p, &call, arb).await {
+                        // The node's latest block already contains the trigger, so running it again first
+                        // would apply it twice and show an edge that does not exist: verify the arb alone on
+                        // that state instead (it already includes the trigger).
+                        Ok(r) if mev_presim::already_included(r.block, trigger_block) => {
+                            match sim.simulate_fast(&opp, U256::ZERO).await {
+                                Ok(o) => o,
+                                Err(e) => {
+                                    warn!(error = %e, "simulation error");
+                                    return;
+                                }
+                            }
+                        }
                         Ok(r) if r.ok => match mev_sim::decode_arb_profit(&r.return_data) {
                             Ok(profit) => SimOutcome::Profitable {
                                 profit,

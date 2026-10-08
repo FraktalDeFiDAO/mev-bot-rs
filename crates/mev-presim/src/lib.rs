@@ -66,6 +66,9 @@ pub struct SimLog {
 
 #[derive(Debug, Deserialize)]
 struct SimBlock {
+    /// The simulated block's number: one above the block the simulation ran on top of.
+    #[serde(default)]
+    number: Option<alloy::primitives::U64>,
     calls: Vec<SimCall>,
 }
 
@@ -74,6 +77,16 @@ struct SimCall {
     status: alloy::primitives::U64,
     #[serde(default)]
     logs: Vec<SimLog>,
+}
+
+/// Does a simulation include `tx_block`'s transaction already? A simulation runs as the *next* block on top of
+/// some block `n`, so it reports block `n + 1`. If that is **past** the transaction's own block, the state it ran
+/// on already contains the transaction and running it again would apply it twice: the pool ends one swap ahead of
+/// the chain, a price that never existed (measured 2026-10-08: a landed swap re-simulated on its own block moved the
+/// pool 2.89 bps beyond the chain). Equal means the state is the one just before the transaction's block; earlier
+/// means a lagging node (slightly stale, but the transaction is not in it).
+pub fn already_included(sim_block: Option<u64>, tx_block: u64) -> bool {
+    sim_block.is_some_and(|b| b > tx_block)
 }
 
 /// Run `tx` as its sender on top of the latest block; the logs it emits (empty if it reverts).
@@ -92,6 +105,8 @@ pub fn call_json(tx: &TxEnvelope) -> Result<serde_json::Value> {
 /// Result of the last call of a simulated block.
 #[derive(Debug, Clone)]
 pub struct AfterCall {
+    /// The simulated block's number (see `already_included`).
+    pub block: Option<u64>,
     pub ok: bool,
     pub return_data: Bytes,
     /// Revert reason / error message when `!ok`.
@@ -109,6 +124,8 @@ struct AfterSimCall {
 
 #[derive(Debug, Deserialize)]
 struct AfterSimBlock {
+    #[serde(default)]
+    number: Option<alloy::primitives::U64>,
     calls: Vec<AfterSimCall>,
 }
 
@@ -129,22 +146,25 @@ pub async fn simulate_after(
         .raw_request("eth_simulateV1".into(), params)
         .await
         .context("eth_simulateV1")?;
-    let calls = blocks
-        .into_iter()
-        .next()
-        .map(|b| b.calls)
-        .unwrap_or_default();
+    let first_block = blocks.into_iter().next();
+    let block = first_block
+        .as_ref()
+        .and_then(|b| b.number)
+        .map(|n| n.to::<u64>());
+    let calls = first_block.map(|b| b.calls).unwrap_or_default();
     let [first, second] = calls.as_slice() else {
         anyhow::bail!("expected two call results, got {}", calls.len());
     };
     if first.status.to::<u64>() != 1 {
         return Ok(AfterCall {
+            block,
             ok: false,
             return_data: Bytes::new(),
             error: "trigger transaction reverts".into(),
         });
     }
     Ok(AfterCall {
+        block,
         ok: second.status.to::<u64>() == 1,
         return_data: second.return_data.clone(),
         error: second
@@ -166,6 +186,15 @@ pub async fn simulate_logs_at(
     tx: &TxEnvelope,
     at: Option<u64>,
 ) -> Result<Vec<SimLog>> {
+    Ok(simulate_logs_block(p, tx, at).await?.0)
+}
+
+/// `simulate_logs_at`, also returning the simulated block's number (see `already_included`).
+pub async fn simulate_logs_block(
+    p: &DynProvider,
+    tx: &TxEnvelope,
+    at: Option<u64>,
+) -> Result<(Vec<SimLog>, Option<u64>)> {
     let call = call_json(tx)?;
     // validation=false: no fee/nonce checks, so a tx priced for the next block still runs.
     let params = serde_json::json!([
@@ -176,7 +205,8 @@ pub async fn simulate_logs_at(
         .raw_request("eth_simulateV1".into(), params)
         .await
         .context("eth_simulateV1")?;
-    Ok(parse_result(blocks))
+    let number = blocks.first().and_then(|b| b.number).map(|n| n.to::<u64>());
+    Ok((parse_result(blocks), number))
 }
 
 fn parse_result(blocks: Vec<SimBlock>) -> Vec<SimLog> {
@@ -215,6 +245,8 @@ pub struct PresimStats {
     pub no_pool_effect: std::sync::atomic::AtomicU64,
     pub timeouts: std::sync::atomic::AtomicU64,
     pub errors: std::sync::atomic::AtomicU64,
+    /// Simulated on a state that already contained the transaction: result discarded (it would double-apply).
+    pub already_included: std::sync::atomic::AtomicU64,
     /// Sum of simulate round-trip ms (for the mean).
     pub sim_ms_total: std::sync::atomic::AtomicU64,
 }
@@ -232,10 +264,11 @@ impl PresimStats {
             t(&self.timeouts),
             t(&self.errors),
         );
+        let stale = t(&self.already_included);
         let sims = moved + none;
         let mean = t(&self.sim_ms_total).checked_div(sims).unwrap_or(0);
         format!(
-            "feed={feed} unrelated={unrelated} candidates={cand} skipped_busy={busy} moved_pools={moved} no_pool_effect={none} timeouts={to} errors={err} mean_sim_ms={mean}"
+            "feed={feed} unrelated={unrelated} candidates={cand} skipped_busy={busy} moved_pools={moved} no_pool_effect={none} already_included={stale} timeouts={to} errors={err} mean_sim_ms={mean}"
         )
     }
 }
@@ -244,6 +277,8 @@ impl PresimStats {
 #[derive(Debug, Clone)]
 pub struct Presimulated {
     pub tx: B256,
+    /// The L2 block the transaction was sequenced into.
+    pub block: u64,
     pub received: std::time::Instant,
     pub logs: Vec<alloy::rpc::types::Log>,
     /// The pending transaction as an `eth_simulateV1` call (`from`, `to`, `input`, `value`, `gas`), so
@@ -286,7 +321,7 @@ pub async fn run(
         let (p, out, stats) = (p.clone(), out.clone(), stats.clone());
         tokio::spawn(async move {
             let t = std::time::Instant::now();
-            let res = tokio::time::timeout(timeout, simulate_logs(&p, &st.tx)).await;
+            let res = tokio::time::timeout(timeout, simulate_logs_block(&p, &st.tx, None)).await;
             drop(permit);
             let logs = match res {
                 Err(_) => {
@@ -297,7 +332,15 @@ pub async fn run(
                     stats.errors.fetch_add(1, Relaxed);
                     return;
                 }
-                Ok(Ok(logs)) => logs,
+                Ok(Ok((logs, sim_block))) => {
+                    // The standard feed delivers a transaction after it is sequenced; by the time this RPC
+                    // answers, the node's latest block may already contain it.
+                    if already_included(sim_block, st.block()) {
+                        stats.already_included.fetch_add(1, Relaxed);
+                        return;
+                    }
+                    logs
+                }
             };
             stats
                 .sim_ms_total
@@ -309,6 +352,7 @@ pub async fn run(
                 stats.moved_pools.fetch_add(1, Relaxed);
                 let _ = out.send(Presimulated {
                     tx: st.hash,
+                    block: st.block(),
                     received: st.received,
                     logs,
                     call: call_json(&st.tx).unwrap_or_default(),
@@ -408,5 +452,18 @@ mod tests {
             mentions_any(&[1, 2, 3], &Default::default()),
             "empty watchlist = no filter"
         );
+    }
+
+    #[test]
+    fn a_simulation_past_the_transactions_block_already_contains_it() {
+        // Ran on top of block 99 -> reports 100: the state before block 100, the transaction is not in it.
+        assert!(!already_included(Some(100), 100));
+        // Ran on top of block 100 -> reports 101: the transaction (in block 100) is already in the state.
+        assert!(already_included(Some(101), 100));
+        assert!(already_included(Some(150), 100));
+        // A lagging node: older state, transaction not in it (slightly stale, but not double-applied).
+        assert!(!already_included(Some(98), 100));
+        // Unknown block number: do not discard.
+        assert!(!already_included(None, 100));
     }
 }
