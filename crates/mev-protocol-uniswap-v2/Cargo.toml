@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-uniswap-v2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Uniswap V2 style pairs (Uniswap, Sushi, Camelot V2): swap, sync, mint and burn events"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

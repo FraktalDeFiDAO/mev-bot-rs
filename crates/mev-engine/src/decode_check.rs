@@ -110,6 +110,9 @@ fn pool_for(store: &PoolStore, intent: &SwapIntent) -> Option<Address> {
             // Several pools with the same tokens and fee (different factories): which one is meant is unknown.
             (found.len() == 1).then(|| found[0].info.address)
         }
+        // V2-style pairs are not compared here (this check predicts concentrated-liquidity prices), and the calldata
+        // does not say which factory's pair is meant.
+        PoolRef::PairV2 { .. } => None,
     }
 }
 

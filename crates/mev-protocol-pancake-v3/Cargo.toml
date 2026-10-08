@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-pancake-v3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "PancakeSwap V3: swap event (Uniswap V3 layout plus protocol fees)"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

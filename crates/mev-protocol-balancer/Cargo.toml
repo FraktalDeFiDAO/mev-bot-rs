@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-balancer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Balancer V2 Vault: swap event"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

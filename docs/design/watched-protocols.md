@@ -48,8 +48,9 @@ health sweeps, and triggered early by Chainlink price-feed transactions seen on 
 | Spark | not on Arbitrum | crate is a placeholder |
 | Dolomite, Gearbox v3 | audit pending | crates exist, not enabled |
 
-**Intent decoders for liquidation calls: none yet.** We see liquidations by their events (after the fact) and by health
-sweeps, but we do not decode a competitor's pending `liquidationCall`/`liquidate`/`absorb` from the feed.
+**Intent decoders for liquidation calls:** Aave `liquidationCall`, Morpho `liquidate` and Compound `absorb` are decoded
+from calldata (DECISIONS #94); Fluid vaults and the inactive protocols are not. A decoded call is an intent: it may
+revert, and the event after it is what happened.
 
 ## 3. Oracles, flash-loan sources and other infrastructure
 
@@ -70,9 +71,9 @@ Share of the feed transactions that moved a watched pool (10 minutes, 669 transa
 |---|---|---|---|---|
 | `0x278d858f...F8D2` | `a00597a0` | 57% | unidentified (swap with price limit and deadline) | yes (`ROUTER_A`) |
 | `0x96DaA0B8...ab73` | `000000e7` | 24% | unidentified (swap to a price limit) | yes (`ROUTER_B`) |
-| `0x68b34658...Fc45` | `b858183f` | 13% | **Uniswap SwapRouter02** `exactInput` (verified: selector and ABI layout match the documented function) | yes, single-hop |
-| `0xA51afAFe...81a3` | `3593564c` | 1% | Uniswap Universal Router `execute` | no |
-| `0xE592427A...1564` | `414bf389` | <1% | Uniswap V3 SwapRouter v1 `exactInputSingle` | no |
+| `0x68b34658...Fc45` | `b858183f` | 13% | **Uniswap SwapRouter02** `exactInput` (verified: selector and ABI layout match the documented function) | **yes**, multi-hop (first hop), plus `exactInputSingle`, V2 `swapExactTokensForTokens`, `multicall` |
+| `0xA51afAFe...81a3` | `3593564c` | 1% | Uniswap Universal Router `execute` | **yes** (V2/V3 exact-in commands) |
+| `0xE592427A...1564` | `414bf389` | <1% | Uniswap V3 SwapRouter v1 `exactInputSingle` | **yes** |
 | `0x11111112...2A65` | `07ed2379` | <1% | 1inch AggregationRouter v6 `swap` | no |
 | `0x4752ba5D...aD24` | `7ff36ab5` | <1% | Camelot Router (V2) | no |
 | `0x00000000...da032` | `765e827f` | <1% | ERC-4337 EntryPoint v0.7 `handleOps` (wraps arbitrary calls) | no |

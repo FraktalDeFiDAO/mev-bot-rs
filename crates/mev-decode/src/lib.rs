@@ -1,12 +1,13 @@
 //! Standalone decoding of what Arbitrum transactions and events mean.
 //!
-//! Nothing here touches an RPC node, the engine, or pool state, so it can run alone (see the `mev-decode` command), be
-//! used in analysis tools, or be taken in pieces:
+//! Each protocol is its own crate (`mev-protocol-<name>`, see `docs/design/protocol-crates.md`); this crate is the
+//! registry that collects them, plus the `mev-decode` command. Nothing here touches an RPC node, the engine, or pool
+//! state, so it can run alone, be used in analysis tools, or be taken in pieces:
 //!
-//!  - [`swap`]: a transaction's swap read from its calldata ([`SwapIntent`]): pool or pair, token in, amount, price limit.
-//!  - [`events`]: the table of swap / liquidity / liquidation / state event shapes by topic0, their protocol, and the
-//!    price a pool event leaves behind ([`events::price_update`]).
-//!  - [`known_contract`]: which destinations we have identified, and whether their calls are decoded yet.
+//!  - [`decode_call`]: what a call's calldata intends ([`Decoded`]): a swap ([`SwapIntent`]) or a liquidation.
+//!  - [`events`]: the table of swap / liquidity / liquidation / state event shapes by topic0 and the price a pool
+//!    event leaves behind ([`events::price_update`]).
+//!  - [`known_contract`]: which destinations are identified, and whether their calls are decoded yet.
 //!
 //! What a feed transaction *does* is not knowable from its body: it may revert. Decoded calldata is an intent. Events
 //! from block logs are what happened; prices for charts should come from them.
@@ -16,64 +17,42 @@ pub mod swap;
 
 use alloy::primitives::{Address, address};
 
-pub use swap::{PoolRef, SwapIntent};
+pub use mev_protocol::{
+    Class, Contract, Decoded, LiquidationIntent, PoolRef, PriceUpdate, Protocol, SwapIntent,
+};
 
-/// What a call's calldata means.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Decoded {
-    Swap(SwapIntent),
+/// Every protocol crate, in a fixed order. Adding a protocol means adding it here.
+pub fn protocols() -> &'static [&'static dyn Protocol] {
+    static P: [&dyn Protocol; 10] = [
+        &mev_protocol_uniswap_v2::UniswapV2,
+        &mev_protocol_uniswap_v3::UniswapV3,
+        &mev_protocol_uniswap_v4::UniswapV4,
+        &mev_protocol_uniswap_router::UniswapRouter,
+        &mev_protocol_pancake_v3::PancakeV3,
+        &mev_protocol_balancer::Balancer,
+        &mev_protocol_aave_v3::AaveV3,
+        &mev_protocol_morpho_blue::MorphoBlue,
+        &mev_protocol_compound_v3::CompoundV3,
+        &mev_protocol_unidentified::Unidentified,
+    ];
+    &P
 }
 
-/// Decode a call to `to` with `input`, if it is a contract and function we know.
+/// Decode a call to `to` with `input`, if it is a contract and function a protocol crate knows.
 pub fn decode_call(to: Address, input: &[u8]) -> Option<Decoded> {
-    swap::decode(to, input).map(Decoded::Swap)
+    protocols().iter().find_map(|p| p.decode_call(to, input))
 }
 
-/// A destination we have identified.
-#[derive(Debug, Clone, Copy)]
-pub struct Contract {
-    pub address: Address,
-    pub name: &'static str,
-    /// Whether [`decode_call`] reads calls to it.
-    pub decoded: bool,
-}
-
-/// Destinations seen in the feed that move pools or lend, identified by address (and selector where noted). Used to
-/// tell "known but not decoded yet" from "unknown" in coverage reports.
-pub const CONTRACTS: &[Contract] = &[
+/// Destinations seen in the feed that are identified but whose calls no protocol crate decodes yet.
+const UNDECODED: [Contract; 3] = [
     Contract {
-        address: swap::SWAP_ROUTER_02,
-        name: "Uniswap SwapRouter02 (exactInput decoded)",
-        decoded: true,
-    },
-    Contract {
-        address: swap::ROUTER_A,
-        name: "unidentified, selector a00597a0",
-        decoded: true,
-    },
-    Contract {
-        address: swap::ROUTER_B,
-        name: "unidentified, selector 000000e7",
-        decoded: true,
-    },
-    Contract {
-        address: address!("A51afAFe0263b40EdaEf0Df8781eA9aa03E381a3"),
-        name: "Uniswap Universal Router",
-        decoded: false,
-    },
-    Contract {
-        address: address!("E592427A0AEce92De3Edee1F18E0157C05861564"),
-        name: "Uniswap V3 SwapRouter (v1)",
+        address: address!("4752ba5DBc23f44D87826276BF6Fd6b1C372aD24"),
+        name: "Camelot Router (V2)",
         decoded: false,
     },
     Contract {
         address: address!("111111125421cA6dc452d289314280a0f8842A65"),
         name: "1inch AggregationRouter v6",
-        decoded: false,
-    },
-    Contract {
-        address: address!("4752ba5DBc23f44D87826276BF6Fd6b1C372aD24"),
-        name: "Camelot Router (V2)",
         decoded: false,
     },
     Contract {
@@ -83,9 +62,21 @@ pub const CONTRACTS: &[Contract] = &[
     },
 ];
 
+/// Every identified destination: the protocol crates' contracts, then the undecoded ones.
+pub fn contracts() -> &'static [Contract] {
+    static C: std::sync::OnceLock<Vec<Contract>> = std::sync::OnceLock::new();
+    C.get_or_init(|| {
+        protocols()
+            .iter()
+            .flat_map(|p| p.contracts())
+            .chain(UNDECODED)
+            .collect()
+    })
+}
+
 /// The identified contract at `to`, if any.
 pub fn known_contract(to: Address) -> Option<&'static Contract> {
-    CONTRACTS.iter().find(|c| c.address == to)
+    contracts().iter().find(|c| c.address == to)
 }
 
 #[cfg(test)]
@@ -93,23 +84,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decoded_flags_match_the_decoder() {
-        // Every contract flagged `decoded` must really decode something, and no other contract may.
-        for c in CONTRACTS {
-            let reads = [
-                swap::SELECTOR_A,
-                swap::SELECTOR_B,
-                swap::SELECTOR_EXACT_INPUT,
-            ]
-            .iter()
-            .any(|sel| swap::decodes_selector(c.address, *sel));
-            assert_eq!(reads, c.decoded, "{}", c.name);
+    fn protocol_ids_and_contract_addresses_are_unique() {
+        let mut ids = std::collections::HashSet::new();
+        for p in protocols() {
+            assert!(ids.insert(p.id()), "duplicate protocol id {}", p.id());
+        }
+        let mut addrs = std::collections::HashSet::new();
+        for c in contracts() {
+            assert!(addrs.insert(c.address), "duplicate contract {}", c.name);
         }
     }
 
     #[test]
-    fn unknown_destinations_are_none() {
+    fn every_event_belongs_to_a_registered_protocol() {
+        for k in events::kinds() {
+            assert!(
+                protocols().iter().any(|p| p.id() == k.protocol),
+                "{} names unknown protocol {}",
+                k.name,
+                k.protocol
+            );
+        }
+    }
+
+    #[test]
+    fn the_three_original_contracts_still_decode_through_the_registry() {
+        // Layout details are tested in the protocol crates; this proves the registry reaches them.
+        assert!(known_contract(swap::ROUTER_A).is_some_and(|c| c.decoded));
+        assert!(known_contract(swap::ROUTER_B).is_some_and(|c| c.decoded));
+        assert!(known_contract(swap::SWAP_ROUTER_02).is_some_and(|c| c.decoded));
         assert!(known_contract(Address::with_last_byte(1)).is_none());
-        assert!(known_contract(swap::SWAP_ROUTER_02).is_some());
+    }
+
+    #[test]
+    fn calls_nobody_reads_decode_to_nothing() {
+        assert!(decode_call(swap::ROUTER_A, &[0u8; 3]).is_none());
+        assert!(decode_call(Address::with_last_byte(1), &[0xde, 0xad, 0xbe, 0xef]).is_none());
     }
 }

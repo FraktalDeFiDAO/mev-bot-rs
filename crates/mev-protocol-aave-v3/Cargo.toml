@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-aave-v3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Aave V3: LiquidationCall event and liquidationCall calldata"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

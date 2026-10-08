@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-morpho-blue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Morpho Blue: Liquidate event and liquidate calldata"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

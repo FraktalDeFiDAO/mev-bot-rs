@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-uniswap-router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Uniswap routers on Arbitrum (SwapRouter02, SwapRouter v1, Universal Router): swap calldata"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

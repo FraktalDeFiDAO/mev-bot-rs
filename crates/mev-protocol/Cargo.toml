@@ -1,0 +1,10 @@
+[package]
+name = "mev-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Core types and the Protocol trait shared by the per-protocol decoding crates (events, swap and liquidation intents, price updates, identified contracts)"
+
+[dependencies]
+alloy = { workspace = true }

@@ -3082,6 +3082,17 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "mev-bindings",
+ "mev-protocol",
+ "mev-protocol-aave-v3",
+ "mev-protocol-balancer",
+ "mev-protocol-compound-v3",
+ "mev-protocol-morpho-blue",
+ "mev-protocol-pancake-v3",
+ "mev-protocol-unidentified",
+ "mev-protocol-uniswap-router",
+ "mev-protocol-uniswap-v2",
+ "mev-protocol-uniswap-v3",
+ "mev-protocol-uniswap-v4",
  "mev-sequencer",
  "serde_json",
  "tokio",
@@ -3426,6 +3437,93 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "mev-protocol"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+]
+
+[[package]]
+name = "mev-protocol-aave-v3"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-balancer"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-compound-v3"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-morpho-blue"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-pancake-v3"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-unidentified"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-uniswap-router"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-uniswap-v2"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-uniswap-v3"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-uniswap-v4"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
 ]
 
 [[package]]

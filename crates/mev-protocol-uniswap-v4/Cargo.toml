@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-uniswap-v4"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Uniswap V4 PoolManager: swap and modify-liquidity events"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

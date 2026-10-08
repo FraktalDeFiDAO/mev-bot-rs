@@ -17,6 +17,17 @@ required-features = ["cli"]
 
 [dependencies]
 alloy = { workspace = true }
+mev-protocol = { workspace = true }
+mev-protocol-uniswap-v2 = { workspace = true }
+mev-protocol-uniswap-v3 = { workspace = true }
+mev-protocol-uniswap-v4 = { workspace = true }
+mev-protocol-uniswap-router = { workspace = true }
+mev-protocol-pancake-v3 = { workspace = true }
+mev-protocol-balancer = { workspace = true }
+mev-protocol-aave-v3 = { workspace = true }
+mev-protocol-morpho-blue = { workspace = true }
+mev-protocol-compound-v3 = { workspace = true }
+mev-protocol-unidentified = { workspace = true }
 mev-sequencer = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
