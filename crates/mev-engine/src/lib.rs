@@ -1309,6 +1309,7 @@ impl Engine {
         }
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
             info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
+            info!(top = %self.presim_stats.take_destinations(10), "presim destinations (to selector moved/none)");
             if self.cfg.presim.as_ref().is_some_and(|p| p.local) {
                 info!(stats = %self.localsim_stats.take_summary(), "localsim (last minute)");
             }

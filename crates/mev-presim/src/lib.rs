@@ -232,6 +232,9 @@ pub fn to_rpc_log(l: &SimLog) -> alloy::rpc::types::Log {
     }
 }
 
+/// (destination, selector) -> (moved a pool, moved none).
+type DestTally = std::collections::HashMap<(alloy::primitives::Address, [u8; 4]), (u64, u64)>;
+
 /// What happened to feed transactions (per summary interval): why pool updates were or weren't
 /// learned early.
 #[derive(Debug, Default)]
@@ -249,9 +252,44 @@ pub struct PresimStats {
     pub already_included: std::sync::atomic::AtomicU64,
     /// Sum of simulate round-trip ms (for the mean).
     pub sim_ms_total: std::sync::atomic::AtomicU64,
+    /// Per destination contract and 4-byte selector: (simulated and moved a pool, simulated and moved none). Tells
+    /// which routers a local decoder would have to cover first.
+    dests: std::sync::Mutex<DestTally>,
 }
 
 impl PresimStats {
+    fn tally(&self, tx: &TxEnvelope, moved: bool) {
+        let (Some(to), input) = (tx.to(), tx.input()) else {
+            return;
+        };
+        let mut sel = [0u8; 4];
+        let n = input.len().min(4);
+        sel[..n].copy_from_slice(&input[..n]);
+        let mut d = self.dests.lock().unwrap();
+        if d.len() > 4_096 {
+            d.clear();
+        }
+        let e = d.entry((to, sel)).or_default();
+        if moved {
+            e.0 += 1;
+        } else {
+            e.1 += 1;
+        }
+    }
+
+    /// The `n` busiest (destination, selector) pairs since the last call, as `to selector moved/none`; resets.
+    pub fn take_destinations(&self, n: usize) -> String {
+        let mut v: Vec<_> = std::mem::take(&mut *self.dests.lock().unwrap())
+            .into_iter()
+            .collect();
+        v.sort_by_key(|(_, (m, z))| std::cmp::Reverse(m + z));
+        v.iter()
+            .take(n)
+            .map(|((to, sel), (m, z))| format!("{to} 0x{} {m}/{z}", alloy::hex::encode(sel)))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
     /// One-line summary since the last call; resets the counters.
     pub fn take_summary(&self) -> String {
         use std::sync::atomic::Ordering::Relaxed;
@@ -346,6 +384,7 @@ pub async fn run(
                 .sim_ms_total
                 .fetch_add(t.elapsed().as_millis() as u64, Relaxed);
             let logs: Vec<_> = pool_events(&logs).map(to_rpc_log).collect();
+            stats.tally(&st.tx, !logs.is_empty());
             if logs.is_empty() {
                 stats.no_pool_effect.fetch_add(1, Relaxed);
             } else {
