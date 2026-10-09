@@ -11,6 +11,7 @@
 
 use std::{
     collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering::Relaxed},
     time::{Duration, Instant},
 };
 
@@ -33,6 +34,16 @@ pub struct DecodedSwap {
 #[derive(Debug, Default)]
 pub struct PendingSwaps {
     open: HashMap<B256, (Vec<Address>, Instant)>,
+    inserted: AtomicU64,
+    settled_by_presim: AtomicU64,
+    settled_by_block: AtomicU64,
+}
+
+/// Who settled an entry.
+#[derive(Debug, Clone, Copy)]
+pub enum Settled {
+    Presim,
+    Block,
 }
 
 impl PendingSwaps {
@@ -40,12 +51,31 @@ impl PendingSwaps {
         if self.open.len() > 4_096 {
             self.prune(now);
         }
+        self.inserted.fetch_add(1, Relaxed);
         self.open.insert(hash, (pools, now));
     }
 
     /// The swap's effect is now in our state (presim applied it) or confirmed by a block log. Returns whether it was open.
-    pub fn settle(&mut self, hash: &B256) -> bool {
-        self.open.remove(hash).is_some()
+    pub fn settle(&mut self, hash: &B256, by: Settled) -> bool {
+        let was_open = self.open.remove(hash).is_some();
+        if was_open {
+            match by {
+                Settled::Presim => &self.settled_by_presim,
+                Settled::Block => &self.settled_by_block,
+            }
+            .fetch_add(1, Relaxed);
+        }
+        was_open
+    }
+
+    /// `inserted / settled by presim / settled by a block log` since the last call, for the minute summary. What is
+    /// neither settled nor still open has expired (a swap that reverted leaves no log, presim skipped it, ...).
+    pub fn take_counts(&self) -> (u64, u64, u64) {
+        (
+            self.inserted.swap(0, Relaxed),
+            self.settled_by_presim.swap(0, Relaxed),
+            self.settled_by_block.swap(0, Relaxed),
+        )
     }
 
     /// An open entry touching any of `pools`, if there is one.
@@ -118,8 +148,10 @@ mod tests {
     fn settling_clears_the_entry_and_an_unknown_hash_is_harmless() {
         let (mut p, t0) = (PendingSwaps::default(), Instant::now());
         p.insert(h(1), vec![a(1)], t0);
-        assert!(!p.settle(&h(7)));
-        assert!(p.settle(&h(1)));
+        assert!(!p.settle(&h(7), Settled::Block));
+        assert!(p.settle(&h(1), Settled::Presim));
+        assert_eq!(p.take_counts(), (1, 1, 0));
+        assert_eq!(p.take_counts(), (0, 0, 0), "counts reset");
         assert_eq!(p.conflict(&[a(1)], t0), None);
         assert!(p.is_empty());
     }

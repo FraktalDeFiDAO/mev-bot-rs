@@ -753,7 +753,7 @@ impl Engine {
                     maybe = logs.next() => {
                         let Some(log) = maybe else { warn!("log stream ended; resubscribing"); break };
                         if let Some(h) = log.transaction_hash {
-                            self.pending.settle(&h);
+                            self.pending.settle(&h, pending::Settled::Block);
                         }
                         if let Some(pool) = self.store.apply_log(&log) {
                             self.metrics.update(|c| c.updates += 1);
@@ -769,7 +769,7 @@ impl Engine {
                     }
                     Some(pre) = recv_opt(&mut presim_rx) => {
                         // Presim applies this transaction's effect below: it is no longer missing from our state.
-                        self.pending.settle(&pre.tx);
+                        self.pending.settle(&pre.tx, pending::Settled::Presim);
                         if !pre.call.is_null() {
                             if self.trigger_calls.len() > 512 {
                                 self.trigger_calls.retain(|_, (t, _, _)| t.elapsed() < TRIGGER_CALL_KEEP);
@@ -1418,7 +1418,15 @@ impl Engine {
                 "fast feed (last minute)"
             );
         }
-        info!(stats = %self.feed_stats.take_summary(), pending_decoded_swaps = self.pending.len(), "sequencer feed (last minute)");
+        let (inserted, by_presim, by_block) = self.pending.take_counts();
+        info!(
+            stats = %self.feed_stats.take_summary(),
+            decoded_swaps_on_tracked_pools = inserted,
+            settled_by_presim = by_presim,
+            settled_by_block_log = by_block,
+            still_open = self.pending.len(),
+            "sequencer feed (last minute)"
+        );
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
             info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
             info!(stats = %self.decode_stats.lock().unwrap().take_summary(), "local swap decoder vs node simulation (last minute)");
