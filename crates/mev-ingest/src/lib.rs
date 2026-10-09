@@ -11,6 +11,12 @@ use alloy::{
 use anyhow::{Context, Result};
 use futures::Stream;
 
+/// Messages the log subscription may buffer before the oldest is dropped: many blocks of the busiest bursts.
+pub const LOG_BUFFER: usize = 32_768;
+// alloy's default is 16 and drops silently; a block's logs arrive one message each (50-150, up to a few hundred in the
+// busiest), and the engine can be busy for several blocks. Keep two orders of magnitude of headroom, checked at build.
+const _: () = assert!(LOG_BUFFER >= 300 * 100);
+
 /// Stream of every pool event the decoder knows (swaps, liquidity changes, V2 `Sync`, fee collection, flash loans, V4
 /// pool creation and donations) for `pools`
 /// (for V4, the PoolManager's address; see `PoolStore::log_addresses`). The stream ends if the WS connection drops;
@@ -25,8 +31,12 @@ pub async fn pool_logs(
     let filter = Filter::new()
         .address(pools)
         .event_signature(mev_decode::events::pool_event_topics());
+    // alloy's subscription buffer defaults to 16 messages and, when the consumer falls behind, silently drops the oldest
+    // (logged at debug only). A block's burst is 50-150 logs, delivered one message each, so the default lost events:
+    // measured as ~0.3% of tracked-pool events missing from the journal, all inside busy blocks (DECISIONS #109).
     let sub = ws
         .subscribe_logs(&filter)
+        .channel_size(LOG_BUFFER)
         .await
         .context("log subscription failed")?;
     Ok(sub.into_stream())
