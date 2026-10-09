@@ -31,3 +31,4 @@ data/
 # Arbitrum node provisioning state (instance/volume ids), written by provision-arbitrum-node.sh
 infra/arbitrum-node/arbitrum-node-resources.env
 *.proptest-regressions
+.seqscope-ui-start.*

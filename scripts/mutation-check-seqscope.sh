@@ -6,12 +6,18 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 missed=0
-try() { # name file sed-expr test-command
+try() { # name file sed-expr test-command (run in the container)
+  mutate "$1" "$2" "$3" "scripts/dev.sh bash -c '$4'"
+}
+try_host() { # name file sed-expr test-command (run on the host: the interface tests need node and chromium)
+  mutate "$1" "$2" "$3" "$4"
+}
+mutate() { # name file sed-expr full-command
   local name="$1" file="$2" expr="$3" cmd="$4"
   cp "$file" /tmp/mut.bak
   sed -i "$expr" "$file"
   if cmp -s "$file" /tmp/mut.bak; then echo "STALE  [$name]: the mutation no longer applies; update this script"; missed=1; return; fi
-  local out; out=$(scripts/dev.sh bash -c "$cmd" 2>&1 | grep -E "FAILED|panicked" | head -1 | cut -c1-120)
+  local out; out=$(bash -c "$cmd" 2>&1 | grep -E "FAILED|panicked|✖" | head -1 | cut -c1-120)
   cp /tmp/mut.bak "$file"
   if [[ -n "$out" ]]; then echo "caught [$name]"; else echo "MISSED [$name]"; missed=1; fi
 }
@@ -25,5 +31,10 @@ try "store drops without counting"   crates/seqscope-store/src/lib.rs      's/se
 try "CLI exits 0 on a bad rules file" crates/seqscope-cli/src/main.rs      's/bail!("{} rule(s) have problems", errs.len())/return Ok(())/'                                         'cargo test -q -p seqscope-cli 2>&1'
 try "rule file ignores unknown keys" crates/seqscope-core/src/engine.rs    's/#\[serde(deny_unknown_fields)\]//'                                                                     'cargo test -q -p seqscope-core 2>&1'
 try "SIGTERM ignored by the collector" crates/seqscope-cli/src/main.rs 's/_ = term.recv() => {}/_ = std::future::pending::<()>() => {}/' 'cargo test -q -p seqscope-cli --test e2e collector 2>&1'
+try "server answers foreign hosts"     crates/seqscope-server/src/lib.rs     's/if !st.allow_remote \&\& !is_loopback_host(host) {/if false {/'                                'cargo test -q -p seqscope-server --test api 2>&1'
+try "server accepts unmarked changes"  crates/seqscope-server/src/lib.rs     's/h.get("x-seqscope").is_none()/false/'                                                                  'cargo test -q -p seqscope-server --test api 2>&1'
+try "bad rules are saved anyway"       crates/seqscope-server/src/lib.rs     's/let (_, engine) = validate(text)?;/let engine = Engine::compile(\&RuleSet::default()).unwrap();/'    'cargo test -q -p seqscope-server --test api 2>&1'
+try_host "UI joins conditions with OR"  crates/seqscope-server/ui/app.js     "s/const sep = joiner === 'or' ? ' || ' : ' \&\& ';/const sep = ' || ';/"                                  'node --test crates/seqscope-server/ui/test/logic.test.js 2>&1'
+try_host "UI never shows the status"    crates/seqscope-server/ui/app.js     's/      renderStatus();/      \/\/ renderStatus();/'                                                         'scripts/test-seqscope-ui.sh 2>&1'
 if (( missed )); then echo "MUTATION CHECK: FAILED"; exit 1; fi
 echo "MUTATION CHECK: every planted bug was caught"

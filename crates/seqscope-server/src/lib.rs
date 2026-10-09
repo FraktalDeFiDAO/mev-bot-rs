@@ -304,13 +304,23 @@ const INDEX: &str = include_str!("../ui/index.html");
 const APP_JS: &str = include_str!("../ui/app.js");
 const APP_CSS: &str = include_str!("../ui/app.css");
 
+/// The page files: the ones built into the binary, or, when `SEQSCOPE_UI_DIR` is set, the files in that directory
+/// (so the interface can be edited and reloaded without rebuilding).
+fn asset(name: &str, built_in: &'static str) -> String {
+    match std::env::var_os("SEQSCOPE_UI_DIR") {
+        Some(dir) => std::fs::read_to_string(std::path::Path::new(&dir).join(name))
+            .unwrap_or_else(|_| built_in.to_string()),
+        None => built_in.to_string(),
+    }
+}
+
 async fn index() -> impl IntoResponse {
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        INDEX,
+        asset("index.html", INDEX),
     )
 }
 async fn app_js() -> impl IntoResponse {
@@ -319,7 +329,7 @@ async fn app_js() -> impl IntoResponse {
             (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        APP_JS,
+        asset("app.js", APP_JS),
     )
 }
 async fn app_css() -> impl IntoResponse {
@@ -328,7 +338,7 @@ async fn app_css() -> impl IntoResponse {
             (header::CONTENT_TYPE, "text/css; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
-        APP_CSS,
+        asset("app.css", APP_CSS),
     )
 }
 

@@ -5103,6 +5103,7 @@ dependencies = [
  "mev-protocol-uniswap-router",
  "mev-sequencer",
  "seqscope-core",
+ "seqscope-server",
  "seqscope-store",
  "serde_json",
  "tokio",
