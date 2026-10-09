@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Join the feed recording with the chain outcomes and report what the decoder must still cover.
 
-  scripts/analyze-outcomes.py [DATA_DIR]            (default data/arbitrum; run on the server)
+  scripts/analyze-outcomes.py [DATA_DIR] [--since 2026-10-08T20:25:00]   (default data/arbitrum; run on the server)
+
+--since keeps feed records from that UTC time on and the chain transactions from that point, so decoders added later
+can be judged without the period before them.
 
 Reads feedtx-*.jsonl (what the sequencer feed showed) and chaintx-*.jsonl (sampled block receipts), joined on the
 transaction hash. Reports:
@@ -12,7 +15,12 @@ transaction hash. Reports:
 """
 import collections, glob, json, os, statistics, sys
 
-d = sys.argv[1] if len(sys.argv) > 1 else "data/arbitrum"
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+d = args[0] if args else "data/arbitrum"
+since_ms = 0
+if "--since" in sys.argv:
+    import calendar, time
+    since_ms = calendar.timegm(time.strptime(sys.argv[sys.argv.index("--since") + 1], "%Y-%m-%dT%H:%M:%S")) * 1000
 
 def lines(pattern):
     for f in sorted(glob.glob(os.path.join(d, pattern))):
@@ -22,8 +30,11 @@ def lines(pattern):
             except Exception:
                 pass
 
-feed = {r["hash"]: r for r in lines("feedtx-*.jsonl")}
+feed = {r["hash"]: r for r in lines("feedtx-*.jsonl") if r.get("t_ms", 0) >= since_ms}
 chain = {r["hash"]: r for r in lines("chaintx-*.jsonl")}
+if since_ms and feed:
+    first_block = min(r["block"] for r in feed.values())
+    chain = {h: c for h, c in chain.items() if (c.get("block") or 0) >= first_block}
 print(f"feed candidates: {len(feed)}   chain txs recorded: {len(chain)}   joined: {len(set(feed) & set(chain))}")
 if not chain:
     sys.exit("no chaintx data yet")
