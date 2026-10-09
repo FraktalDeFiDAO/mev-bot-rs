@@ -8,7 +8,7 @@
 //! Wrappers read: Multicall3 (`aggregate`, `tryAggregate`, `tryBlockAndAggregate`, `blockAndAggregate`, `aggregate3`,
 //! `aggregate3Value`); the self-multicalls of the Uniswap routers and position managers (`multicall(bytes[])`,
 //! `multicall(uint256,bytes[])`, `multicall(bytes32,bytes[])`, which call the same contract); smart accounts'
-//! `execute(address,uint256,bytes)` and `executeBatch` (both shapes); ERC-4337 EntryPoint v0.7 `handleOps`, whose
+//! `execute(address,uint256,bytes)` and `executeBatch` (both shapes); ERC-4337 EntryPoint v0.6 and v0.7 `handleOps`, whose
 //! operations' `callData` is unwrapped the same way. Anything else is a leaf.
 //!
 //! Not read: the ETH `value` of a call (so ETH-in swaps through a wrapper keep the router's own accounting), EntryPoint
@@ -44,6 +44,14 @@ sol! {
         function executeBatch(address[] dest, bytes[] func) external;
         function executeBatchValue(address[] dest, uint256[] value, bytes[] func) external;
     }
+    interface EntryPointV6 {
+        struct UserOperation {
+            address sender; uint256 nonce; bytes initCode; bytes callData; uint256 callGasLimit;
+            uint256 verificationGasLimit; uint256 preVerificationGas; uint256 maxFeePerGas;
+            uint256 maxPriorityFeePerGas; bytes paymasterAndData; bytes signature;
+        }
+        function handleOps(UserOperation[] ops, address beneficiary) external;
+    }
     interface EntryPointV7 {
         struct PackedUserOperation {
             address sender; uint256 nonce; bytes initCode; bytes callData; bytes32 accountGasLimits;
@@ -61,6 +69,8 @@ const MAX_LEAVES: usize = 512;
 pub const MULTICALL3: Address = address!("cA11bde05977b3631167028862bE2a173976CA11");
 /// ERC-4337 EntryPoint v0.7.
 pub const ENTRYPOINT_V7: Address = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
+/// ERC-4337 EntryPoint v0.6 (still widely used; its operations have a different layout).
+pub const ENTRYPOINT_V6: Address = address!("5FF137D4b0FDCD49DcA30c7CF57E578a026d2789");
 
 /// One call found in a transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,7 +78,7 @@ pub struct Leaf {
     pub to: Address,
     pub input: Bytes,
     /// The wrappers it was found through, outermost first (`"multicall3"`, `"self_multicall"`, `"account_execute"`,
-    /// `"entrypoint_v7"`). Empty for a call made directly by the transaction.
+    /// `"entrypoint_v6"`, `"entrypoint_v7"`). Empty for a call made directly by the transaction.
     pub via: Vec<&'static str>,
 }
 
@@ -204,6 +214,15 @@ fn unwrap(to: Address, input: &[u8]) -> Option<(&'static str, Vec<Sub>)> {
         // Each operation is a call from its sender (the smart account) with `callData`.
         return Some((
             "entrypoint_v7",
+            ops.into_iter()
+                .map(|o| pair(o.sender, o.callData))
+                .collect(),
+        ));
+    }
+    if to == ENTRYPOINT_V6 && sel == EntryPointV6::handleOpsCall::SELECTOR {
+        let ops = dec!(EntryPointV6::handleOpsCall).ops;
+        return Some((
+            "entrypoint_v6",
             ops.into_iter()
                 .map(|o| pair(o.sender, o.callData))
                 .collect(),
@@ -455,5 +474,46 @@ mod tests {
             vec![U256::from(1_000u64), U256::from(2_000u64)],
             "both swaps, in order, nothing invented"
         );
+    }
+
+    #[test]
+    fn an_entrypoint_v6_bundle_is_unwrapped_like_v7() {
+        let one = SmartAccount::executeCall {
+            dest: target(5),
+            value: U256::ZERO,
+            func: vec![5, 5, 5, 5].into(),
+        }
+        .abi_encode();
+        let op = |sender: u8, call: Vec<u8>| EntryPointV6::UserOperation {
+            sender: target(sender),
+            nonce: U256::ZERO,
+            initCode: Bytes::new(),
+            callData: call.into(),
+            callGasLimit: U256::ZERO,
+            verificationGasLimit: U256::ZERO,
+            preVerificationGas: U256::ZERO,
+            maxFeePerGas: U256::ZERO,
+            maxPriorityFeePerGas: U256::ZERO,
+            paymasterAndData: Bytes::new(),
+            signature: Bytes::new(),
+        };
+        let bundle = EntryPointV6::handleOpsCall {
+            ops: vec![op(0xa1, one), op(0xa2, vec![3, 3, 3, 3])],
+            beneficiary: target(0xbe),
+        }
+        .abi_encode();
+        assert_eq!(
+            &bundle[..4],
+            &[0x1f, 0xad, 0x94, 0x8c],
+            "the selector seen live on Arbitrum"
+        );
+        let l = calls_in(ENTRYPOINT_V6, &bundle);
+        assert_eq!(
+            l.iter().map(|x| x.to).collect::<Vec<_>>(),
+            vec![target(5), target(0xa2)]
+        );
+        assert_eq!(l[0].via, vec!["entrypoint_v6", "account_execute"]);
+        // A bundle sent to the other EntryPoint's address is not read.
+        assert_eq!(calls_in(ENTRYPOINT_V7, &bundle).len(), 1);
     }
 }

@@ -27,7 +27,12 @@ proptest = "1.11"
 tower = "0.5"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 base64 = "0.23"
+rusqlite = { version = "0.40", features = ["bundled"] }
+redb = "4.3"
 
+seqscope-core = { path = "crates/seqscope-core" }
+seqscope-store = { path = "crates/seqscope-store" }
+seqscope-cli = { path = "crates/seqscope-cli" }
 mev-types = { path = "crates/mev-types" }
 mev-config = { path = "crates/mev-config" }
 mev-bindings = { path = "crates/mev-bindings" }

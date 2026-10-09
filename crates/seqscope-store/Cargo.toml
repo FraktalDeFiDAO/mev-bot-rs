@@ -1,0 +1,19 @@
+[package]
+name = "seqscope-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "seqscope storage: a fast embedded store for decoded rows (SQLite in WAL mode behind a batching writer that never blocks the feed)."
+
+[dependencies]
+seqscope-core = { workspace = true, default-features = false }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+redb = { workspace = true }
+alloy = { workspace = true }
+serde_json = { workspace = true }
