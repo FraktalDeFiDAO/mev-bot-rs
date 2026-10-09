@@ -4936,6 +4936,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
 
 [[package]]
+name = "seqscope-core"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-decode",
+ "mev-protocol",
+ "mev-protocol-uniswap-router",
+ "mev-sequencer",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
