@@ -578,12 +578,15 @@ mod tests {
 
     #[test]
     fn split_store_returns_the_dropped_pools_as_the_watch_tier() {
-        let deep_a = v2(1, USD, WETH, 1_000_000.0, 500.0);
-        let deep_b = v2(2, USD, WETH, 900_000.0, 450.0);
-        let shallow = v2(3, USD, WETH, 10.0, 0.005);
-        let lonely = v2(4, TOKEN, WETH, 800_000.0, 400.0);
-        let (kept, watch) =
-            split_store(vec![deep_a, deep_b, shallow, lonely], 5_000.0, USD, 6, WETH);
+        let pools = || {
+            vec![
+                v2(1, USD, WETH, 200_000e6, 100e18),
+                v2(2, USD, WETH, 200_000e6, 100e18),
+                v2(3, USD, WETH, 200e6, 0.1e18),          // shallow
+                v2(4, TOKEN, WETH, 1_000_000e18, 100e18), // alone in its pair
+            ]
+        };
+        let (kept, watch) = split_store(pools(), 5_000.0, USD, 6, WETH);
         assert_eq!(kept.len(), 2);
         let mut w: Vec<_> = watch.iter().map(|i| i.address).collect();
         w.sort();
@@ -592,18 +595,10 @@ mod tests {
             vec![Address::with_last_byte(3), Address::with_last_byte(4)],
             "illiquid and single-pool pairs are watched"
         );
+        // Every pool is either traded or watched, none both, none lost.
+        assert_eq!(kept.len() + watch.len(), 4);
         // build_store is the same store without the watch list.
-        let again = build_store(
-            vec![
-                v2(1, USD, WETH, 1_000_000.0, 500.0),
-                v2(2, USD, WETH, 900_000.0, 450.0),
-            ],
-            5_000.0,
-            USD,
-            6,
-            WETH,
-        );
-        assert_eq!(again.len(), 2);
+        assert_eq!(build_store(pools(), 5_000.0, USD, 6, WETH).len(), 2);
     }
 }
 
