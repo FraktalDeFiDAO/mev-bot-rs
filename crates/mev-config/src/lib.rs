@@ -458,6 +458,31 @@ pub struct FluidConfig {
     pub vaults: Vec<Address>,
 }
 
+/// Journals of what happens on the watched exchanges, written to `data/<chain>/` as one JSON line per record.
+#[derive(Debug, Clone, Deserialize)]
+pub struct JournalConfig {
+    /// Every event emitted by a tracked pool (and the V4 PoolManager), every block, as it arrives: swaps, liquidity
+    /// changes, state restatements, fee collection, flash loans, pool creation, donations. `poolevents-DATE.jsonl`.
+    #[serde(default)]
+    pub pool_events: bool,
+    /// Days of journal files kept.
+    #[serde(default = "default_journal_keep_days")]
+    pub keep_days: u32,
+}
+
+fn default_journal_keep_days() -> u32 {
+    7
+}
+
+impl Default for JournalConfig {
+    fn default() -> Self {
+        Self {
+            pool_events: false,
+            keep_days: default_journal_keep_days(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChainConfig {
     pub name: String,
@@ -514,6 +539,8 @@ pub struct ChainConfig {
     pub fluid: Option<FluidConfig>,
     #[serde(default)]
     pub presim: Option<PresimConfig>,
+    #[serde(default)]
+    pub journal: JournalConfig,
     /// Arbitrum One Priority Gas Auction bidding and the optional Fast Feed. Absent = defaults.
     #[serde(default)]
     pub pga: PgaConfig,

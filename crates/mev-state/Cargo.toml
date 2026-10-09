@@ -10,3 +10,6 @@ alloy = { workspace = true }
 mev-types = { workspace = true }
 mev-bindings = { workspace = true }
 mev-dex = { workspace = true }
+
+[dev-dependencies]
+mev-decode = { workspace = true }

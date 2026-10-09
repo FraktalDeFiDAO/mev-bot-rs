@@ -471,6 +471,9 @@ pub async fn balances(
 
 /// Build a store from pools, dropping pools whose liquidity is below `min_usd` on either side,
 /// and pools that are the only one for their pair (nothing to arbitrage against).
+///
+/// The dropped pools are not worthless: they trade, and the journal wants their swaps and liquidity changes. Use
+/// `split_store` to get them back as the watch tier.
 pub fn build_store(
     pools: Vec<Pool>,
     min_usd: f64,
@@ -478,6 +481,17 @@ pub fn build_store(
     usd_decimals: u8,
     native: Address,
 ) -> PoolStore {
+    split_store(pools, min_usd, usd_token, usd_decimals, native).0
+}
+
+/// `build_store`, plus the identity of every pool it dropped (the watch tier: observed through its events, not traded).
+pub fn split_store(
+    pools: Vec<Pool>,
+    min_usd: f64,
+    usd_token: Address,
+    usd_decimals: u8,
+    native: Address,
+) -> (PoolStore, Vec<PoolInfo>) {
     let mut all = PoolStore::default();
     for p in pools.iter().cloned() {
         all.insert(p);
@@ -514,7 +528,12 @@ pub fn build_store(
         min_usd,
         "liquidity + pair filter"
     );
-    kept
+    let watch: Vec<PoolInfo> = all
+        .pools()
+        .filter(|p| kept.get(&p.info.address).is_none())
+        .map(|p| p.info.clone())
+        .collect();
+    (kept, watch)
 }
 
 #[cfg(test)]
@@ -555,6 +574,31 @@ mod tests {
         let mut kept: Vec<u8> = store.addresses().iter().map(|a| a.as_slice()[19]).collect();
         kept.sort();
         assert_eq!(kept, vec![1, 2]);
+    }
+
+    #[test]
+    fn split_store_returns_the_dropped_pools_as_the_watch_tier() {
+        let pools = || {
+            vec![
+                v2(1, USD, WETH, 200_000e6, 100e18),
+                v2(2, USD, WETH, 200_000e6, 100e18),
+                v2(3, USD, WETH, 200e6, 0.1e18),          // shallow
+                v2(4, TOKEN, WETH, 1_000_000e18, 100e18), // alone in its pair
+            ]
+        };
+        let (kept, watch) = split_store(pools(), 5_000.0, USD, 6, WETH);
+        assert_eq!(kept.len(), 2);
+        let mut w: Vec<_> = watch.iter().map(|i| i.address).collect();
+        w.sort();
+        assert_eq!(
+            w,
+            vec![Address::with_last_byte(3), Address::with_last_byte(4)],
+            "illiquid and single-pool pairs are watched"
+        );
+        // Every pool is either traded or watched, none both, none lost.
+        assert_eq!(kept.len() + watch.len(), 4);
+        // build_store is the same store without the watch list.
+        assert_eq!(build_store(pools(), 5_000.0, USD, 6, WETH).len(), 2);
     }
 }
 

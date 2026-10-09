@@ -19,6 +19,8 @@ sol! {
         event Swap(address indexed sender, address indexed recipient, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick);
         event Mint(address sender, address indexed owner, int24 indexed tickLower, int24 indexed tickUpper, uint128 amount, uint256 amount0, uint256 amount1);
         event Burn(address indexed owner, int24 indexed tickLower, int24 indexed tickUpper, uint128 amount, uint256 amount0, uint256 amount1);
+        event Collect(address indexed owner, address recipient, int24 indexed tickLower, int24 indexed tickUpper, uint128 amount0, uint128 amount1);
+        event Flash(address indexed sender, address indexed recipient, uint256 amount0, uint256 amount1, uint256 paid0, uint256 paid1);
     }
     interface NftManager {
         event IncreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1);
@@ -119,6 +121,9 @@ impl Protocol for UniswapV3 {
             EventKind::new(Pool::Swap::SIGNATURE_HASH, "swap_v3", Class::Swap, p),
             EventKind::new(Pool::Mint::SIGNATURE_HASH, "mint_v3", Class::Liquidity, p),
             EventKind::new(Pool::Burn::SIGNATURE_HASH, "burn_v3", Class::Liquidity, p),
+            // Fees collected from a position and flash loans: no price or liquidity effect, but part of the full record.
+            EventKind::new(Pool::Collect::SIGNATURE_HASH, "collect_v3", Class::State, p),
+            EventKind::new(Pool::Flash::SIGNATURE_HASH, "flash_v3", Class::State, p),
             EventKind::new(
                 NftManager::IncreaseLiquidity::SIGNATURE_HASH,
                 "increase_liquidity_nft",

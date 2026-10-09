@@ -5,6 +5,7 @@
 //! `Engine::bootstrap(cfg, secrets, Mode::Shadow, data_dir).await?.run().await`.
 
 mod decode_check;
+mod journal;
 mod pending;
 mod tracked;
 
@@ -198,6 +199,11 @@ pub struct Engine {
     feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>>,
     /// Continuity counters of the standard sequencer feed (gaps, replays, reconnects).
     feed_stats: Arc<mev_sequencer::FeedStats>,
+    /// On-chain event journal of the tracked pools (`[journal] pool_events`).
+    event_journal: Option<Arc<mev_presim::record::TxRecorder>>,
+    /// Watch-tier pools (address -> venue): subscribed and journaled, not traded.
+    watch: Arc<std::collections::HashMap<Address, String>>,
+    watch_contracts: Vec<Address>,
     presim_stats: Arc<mev_presim::PresimStats>,
     decode_stats: std::sync::Mutex<decode_check::DecodeStats>,
     /// Decoded rival swaps from the feed, from arrival until presim or a block log has put them in our state.
@@ -342,7 +348,7 @@ impl Engine {
             .collect();
         let decimals = mev_discovery::token_decimals(&rpc, &tokens).await?;
         let usd_decimals = *decimals.get(&usd).context("USD token decimals")?;
-        let mut store = mev_discovery::build_store(
+        let (mut store, watch_infos) = mev_discovery::split_store(
             pools,
             cfg.min_pool_liquidity_usd,
             usd,
@@ -352,6 +358,17 @@ impl Engine {
         if store.is_empty() {
             bail!("no pools passed discovery");
         }
+        // The watch tier: discovered pools that are too thin or have no partner pool to arbitrage against. Not
+        // priced or refreshed, but subscribed and journaled, so the record of the exchanges is not limited to what we
+        // trade. Keyed by the address the journal names the pool by (V4 pools: the id stand-in).
+        let watch: Arc<std::collections::HashMap<Address, String>> = Arc::new(
+            watch_infos
+                .iter()
+                .map(|i| (i.address, i.dex.clone()))
+                .collect(),
+        );
+        let watch_contracts: Vec<Address> = tracked::contract_addresses(watch_infos.iter());
+        info!(trade = store.len(), watch = watch.len(), "pool tiers");
         // Tick maps only for the pools that passed the liquidity filter.
         if cfg.ticks.enabled {
             match mev_discovery::refresh_ticks(&rpc, &mut store, cfg.ticks.window_ticks).await {
@@ -426,8 +443,13 @@ impl Engine {
                 .iter()
                 .map(|d| (d.name.clone(), format!("{:?}", d.kind), d.factory))
                 .collect();
-            let doc =
-                tracked::describe(store.pools().map(|p| &p.info), &dexes, v4_manager, lending);
+            let doc = tracked::describe(
+                store.pools().map(|p| &p.info),
+                &watch_infos,
+                &dexes,
+                v4_manager,
+                lending,
+            );
             if let Err(e) = std::fs::write(data_dir.join("tracked-venues.json"), doc.to_string()) {
                 warn!(error = %e, "could not write tracked-venues.json");
             }
@@ -436,6 +458,7 @@ impl Engine {
                     .into_iter()
                     .collect();
             set.extend(v4_manager);
+            set.extend(watch_contracts.iter().copied());
             Arc::new(set)
         };
 
@@ -458,6 +481,21 @@ impl Engine {
                 "pga.fast_feed enabled but ARBITRUM_FAST_FEED_KEY is not set: using the public feed only"
             );
         }
+        let event_journal = if cfg.journal.pool_events {
+            match mev_presim::record::TxRecorder::open_prefixed(
+                data_dir.clone(),
+                "poolevents",
+                i64::from(cfg.journal.keep_days),
+            ) {
+                Ok(j) => Some(j),
+                Err(e) => {
+                    warn!(error = %e, "pool event journal disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let (dec_tx, dec_rx) = mpsc::unbounded_channel::<pending::DecodedSwap>();
         let (liq_feed, presim_feed) = match cfg.sequencer_feed.clone() {
             Some(url) => {
@@ -685,6 +723,9 @@ impl Engine {
             presim_rx,
             feed_log,
             feed_stats,
+            event_journal,
+            watch: watch.clone(),
+            watch_contracts: watch_contracts.clone(),
             presim_stats,
             decode_stats: std::sync::Mutex::default(),
             pending: pending::PendingSwaps::default(),
@@ -733,7 +774,20 @@ impl Engine {
             // Never exit on network trouble: resubscribe, and if the WS provider itself is dead
             // (alloy gave up reconnecting), replace it — with backoff so outages don't spin.
             let mut logs = loop {
-                match mev_ingest::pool_logs(&self.rpc.ws, self.store.log_addresses()).await {
+                // Trade-tier pools plus the watch tier. If the provider refuses a subscription that large, fall back to
+                // the trade tier alone rather than losing state updates.
+                let mut addrs = self.store.log_addresses();
+                addrs.extend(self.watch_contracts.iter().copied());
+                addrs.sort_unstable();
+                addrs.dedup();
+                let subscribed = match mev_ingest::pool_logs(&self.rpc.ws, addrs).await {
+                    Err(e) if !self.watch_contracts.is_empty() => {
+                        warn!(error = %format!("{e:#}"), watch = self.watch_contracts.len(), "subscription with the watch tier failed; trade tier only");
+                        mev_ingest::pool_logs(&self.rpc.ws, self.store.log_addresses()).await
+                    }
+                    other => other,
+                };
+                match subscribed {
                     Ok(stream) => break Box::pin(stream),
                     Err(e) => {
                         let d = backoff.next_delay();
@@ -752,6 +806,12 @@ impl Engine {
                 tokio::select! {
                     maybe = logs.next() => {
                         let Some(log) = maybe else { warn!("log stream ended; resubscribing"); break };
+                        if let Some(j) = &self.event_journal {
+                            let t_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+                            if let Some(line) = journal::event_line(&log, &self.store, &self.watch, t_ms) {
+                                j.record(&line);
+                            }
+                        }
                         if let Some(h) = log.transaction_hash {
                             self.pending.settle(&h, pending::Settled::Block);
                         }
