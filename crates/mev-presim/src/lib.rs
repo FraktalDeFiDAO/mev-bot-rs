@@ -19,7 +19,7 @@ use alloy::{
     sol_types::SolEvent,
 };
 use anyhow::{Context, Result};
-use mev_bindings::{IPancakeV3Pool, IUniswapV2Pair, IUniswapV3Pool};
+use mev_bindings::{IPancakeV3Pool, IPoolManager, IUniswapV2Pair, IUniswapV3Pool};
 use mev_sequencer::SequencedTx;
 use serde::Deserialize;
 
@@ -69,6 +69,21 @@ pub fn is_pool_event(topic0: &B256) -> bool {
     *topic0 == IUniswapV2Pair::Sync::SIGNATURE_HASH
         || *topic0 == IUniswapV3Pool::Swap::SIGNATURE_HASH
         || *topic0 == IPancakeV3Pool::Swap::SIGNATURE_HASH
+        // Uniswap V4 swaps (from the PoolManager; the pool is named by id in topic 1). Absolute price, liquidity and
+        // tick, like the V3 swap, so applying one early and the real log later cannot double count. Mint / Burn /
+        // ModifyLiquidity are deltas and are deliberately not forwarded.
+        || *topic0 == IPoolManager::Swap::SIGNATURE_HASH
+}
+
+/// The pool a forwarded event belongs to, as the pool store names it: the emitting contract, or for a V4 swap the
+/// stand-in address derived from the pool id (last 20 bytes of topic 1).
+pub fn event_pool(l: &alloy::rpc::types::Log) -> Address {
+    if l.topics().first() == Some(&IPoolManager::Swap::SIGNATURE_HASH)
+        && let Some(id) = l.topics().get(1)
+    {
+        return Address::from_slice(&id[12..]);
+    }
+    l.address()
 }
 
 /// A log the simulated transaction would emit.
@@ -331,7 +346,7 @@ fn tx_line(
     st: &SequencedTx,
     outcome: &str,
     sim_ms: Option<u64>,
-    pools_moved: usize,
+    moved: &[Address],
 ) -> serde_json::Value {
     use alloy::consensus::Transaction as _;
     let now = std::time::SystemTime::now()
@@ -385,7 +400,8 @@ fn tx_line(
         }),
         "presim": outcome,
         "sim_ms": sim_ms,
-        "pools_moved": pools_moved,
+        "pools_moved": moved.len(),
+        "moved": moved.iter().map(|a| format!("{a:#x}")).collect::<Vec<_>>(),
     })
 }
 
@@ -436,7 +452,7 @@ pub async fn run(
         let Ok(permit) = slots.clone().try_acquire_owned() else {
             stats.skipped_busy.fetch_add(1, Relaxed);
             if let Some(r) = &rec {
-                r.record(&tx_line(&st, "busy", None, 0));
+                r.record(&tx_line(&st, "busy", None, &[]));
             }
             continue;
         };
@@ -449,14 +465,14 @@ pub async fn run(
                 Err(_) => {
                     stats.timeouts.fetch_add(1, Relaxed);
                     if let Some(r) = &rec {
-                        r.record(&tx_line(&st, "timeout", None, 0));
+                        r.record(&tx_line(&st, "timeout", None, &[]));
                     }
                     return;
                 }
                 Ok(Err(_)) => {
                     stats.errors.fetch_add(1, Relaxed);
                     if let Some(r) = &rec {
-                        r.record(&tx_line(&st, "error", None, 0));
+                        r.record(&tx_line(&st, "error", None, &[]));
                     }
                     return;
                 }
@@ -466,7 +482,7 @@ pub async fn run(
                     if already_included(sim_block, st.block()) {
                         stats.already_included.fetch_add(1, Relaxed);
                         if let Some(r) = &rec {
-                            r.record(&tx_line(&st, "already_included", None, 0));
+                            r.record(&tx_line(&st, "already_included", None, &[]));
                         }
                         return;
                     }
@@ -481,7 +497,10 @@ pub async fn run(
             if let Some(r) = &rec {
                 let ms = t.elapsed().as_millis() as u64;
                 let outcome = if logs.is_empty() { "none" } else { "moved" };
-                r.record(&tx_line(&st, outcome, Some(ms), logs.len()));
+                let mut moved: Vec<Address> = logs.iter().map(event_pool).collect();
+                moved.sort();
+                moved.dedup();
+                r.record(&tx_line(&st, outcome, Some(ms), &moved));
             }
             if logs.is_empty() {
                 stats.no_pool_effect.fetch_add(1, Relaxed);
@@ -645,5 +664,40 @@ mod tests {
             &watched,
             &watch
         ));
+    }
+
+    #[test]
+    fn v4_swaps_are_forwarded_and_the_pool_is_named_by_its_id() {
+        use alloy::primitives::{Bytes, LogData};
+        assert!(is_pool_event(&IPoolManager::Swap::SIGNATURE_HASH));
+        assert!(
+            !is_pool_event(&IPoolManager::ModifyLiquidity::SIGNATURE_HASH),
+            "liquidity events are deltas"
+        );
+        assert!(!is_pool_event(&IUniswapV3Pool::Mint::SIGNATURE_HASH));
+        let id = B256::repeat_byte(0xab);
+        let manager = Address::with_last_byte(0x36);
+        let v4 = alloy::rpc::types::Log {
+            inner: alloy::primitives::Log {
+                address: manager,
+                data: LogData::new_unchecked(
+                    vec![IPoolManager::Swap::SIGNATURE_HASH, id],
+                    Bytes::new(),
+                ),
+            },
+            ..Default::default()
+        };
+        assert_eq!(event_pool(&v4), Address::from_slice(&id[12..]));
+        let v3 = alloy::rpc::types::Log {
+            inner: alloy::primitives::Log {
+                address: Address::with_last_byte(5),
+                data: LogData::new_unchecked(
+                    vec![IUniswapV3Pool::Swap::SIGNATURE_HASH],
+                    Bytes::new(),
+                ),
+            },
+            ..Default::default()
+        };
+        assert_eq!(event_pool(&v3), Address::with_last_byte(5));
     }
 }

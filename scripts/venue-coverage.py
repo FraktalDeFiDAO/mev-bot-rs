@@ -79,10 +79,18 @@ for h, c in chain.items():
         v[key[1] + " txs"] += 1
         sw, lq = f.get("swap"), f.get("liquidity")
         if key[1] == "swap":
+            on_pool = bool(sw) and pool_matches(sw, p)
+            # Presim's simulation returns the pool events of every leg, whatever the calldata looks like.
+            stand_in = ("0x" + p["v4_id"][-40:]).lower() if p.get("v4_id") else p["address"].lower()
+            by_presim = stand_in in {m.lower() for m in f.get("moved", [])}
             if sw:
                 v["swap decoded"] += 1
-                if pool_matches(sw, p):
-                    v["swap decoded on this pool"] += 1
+            if on_pool:
+                v["swap decoded on this pool"] += 1
+            if by_presim:
+                v["swap seen by presim"] += 1
+            if on_pool or by_presim:
+                v["swap early (either)"] += 1
             else:
                 gaps[p["dex"]][(c.get("to") or "-")[:12]] += 1
         else:
@@ -91,13 +99,15 @@ for h, c in chain.items():
             else:
                 gaps[p["dex"] + " (liquidity)"][(c.get("to") or "-")[:12]] += 1
 
-print(f"\n{'venue':14s} {'pools':>5s} {'active':>6s} | {'swap txs':>8s} {'decoded':>8s} {'on pool':>8s} {'%':>6s} | {'liq txs':>7s} {'decoded':>8s}")
+print("\n'decoded' = the calldata decoder named this very pool; 'presim' = the node simulation returned an event for it;")
+print("'either' = the engine learned of the swap before its block. Everything else is a blind spot.")
+print(f"\n{'venue':14s} {'pools':>5s} {'active':>6s} | {'swap txs':>8s} {'decoded':>8s} {'presim':>7s} {'either':>7s} {'%':>6s} | {'liq txs':>7s} {'decoded':>8s}")
 for dex in sorted({p["dex"] for p in tracked["pools"]}):
     v = venue[dex]; n = sum(1 for p in tracked["pools"] if p["dex"] == dex)
-    st, sd, so = v["swap txs"], v["swap decoded"], v["swap decoded on this pool"]
+    st, so, sp, se = v["swap txs"], v["swap decoded on this pool"], v["swap seen by presim"], v["swap early (either)"]
     lt, ld = v["liquidity txs"], v["liquidity decoded"]
-    print(f"{dex:14s} {n:5d} {len(active[dex]):6d} | {st:8d} {sd:8d} {so:8d} {100*so/st if st else 0:5.1f}% | {lt:7d} {ld:8d}")
-print("\nlargest undecoded destinations per venue (to prefix, tracked-pool swap/liquidity transactions):")
+    print(f"{dex:14s} {n:5d} {len(active[dex]):6d} | {st:8d} {so:8d} {sp:7d} {se:7d} {100*se/st if st else 0:5.1f}% | {lt:7d} {ld:8d}")
+print("\nblind spots (neither decoded nor simulated) by destination (to prefix, tracked-pool swap/liquidity transactions):")
 for dex, cnt in sorted(gaps.items(), key=lambda kv: -sum(kv[1].values())):
     print(f"  {dex}: " + ", ".join(f"{t} {n}" for t, n in cnt.most_common(5)))
 
