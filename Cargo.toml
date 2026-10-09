@@ -71,6 +71,7 @@ mev-protocol-aave-v3 = { path = "crates/mev-protocol-aave-v3" }
 mev-protocol-morpho-blue = { path = "crates/mev-protocol-morpho-blue" }
 mev-protocol-compound-v3 = { path = "crates/mev-protocol-compound-v3" }
 mev-protocol-unidentified = { path = "crates/mev-protocol-unidentified" }
+mev-protocol-fluid = { path = "crates/mev-protocol-fluid" }
 mev-atlas = { path = "crates/mev-atlas" }
 mev-localsim = { path = "crates/mev-localsim" }
 
