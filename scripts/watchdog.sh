@@ -59,6 +59,28 @@ print(sum(1 for l in sys.stdin if json.loads(l).get('ts', '')[:19] >= since))" 2
   (( n == 0 )) || alerts+=("$n cap_reached/mode_switch event(s) in the last hour (bot may be in shadow)")
 fi
 
+# Completeness of the watched-exchange record (DECISIONS #107, #109): the pool event journal must be fresh, and every
+# event the independent receipt sampler saw on a tracked pool must be in it. Checked over the current build's run (at most
+# the last hour); skipped until the sample is large enough to mean something. Both files exist only when [journal]
+# pool_events and [presim] chain_sample_every are on.
+journal="$D/poolevents-$(date -u +%F).jsonl"
+if [[ -f $journal ]]; then
+  jage=$(( $(date +%s) - $(stat -c %Y "$journal") ))
+  (( jage <= ${MAX_JOURNAL_AGE:-300} )) || alerts+=("pool event journal stale: ${jage}s (is the log subscription alive?)")
+  started="$(podman inspect "$NAME" --format '{{.State.StartedAt}}' 2>/dev/null | cut -c1-19 | tr ' ' T)"
+  hour="$(date -u -d '1 hour ago' +%FT%T)"
+  since="$hour"; [[ -n $started && $started > $hour ]] && since="$started"
+  out="$(python3 scripts/exchange-view.py "$D" --since "$since" 2>/dev/null | grep '^COMPLETENESS' || true)"
+  # "COMPLETENESS vs the receipt sampler: 1493/1493 events on tracked pools are in the journal (100.00%)"
+  if [[ $out =~ :\ ([0-9]+)/([0-9]+)\ events ]]; then
+    have="${BASH_REMATCH[1]}"; seen="${BASH_REMATCH[2]}"
+    if (( seen >= ${MIN_COMPLETENESS_SAMPLE:-300} )); then
+      python3 -c "import sys; sys.exit(0 if $have/$seen >= ${MIN_COMPLETENESS:-0.998} else 1)" \
+        || alerts+=("journal incomplete: $have/$seen tracked-pool events in the last run (< ${MIN_COMPLETENESS:-0.998}); see scripts/exchange-view.py")
+    fi
+  fi
+fi
+
 if (( ${#alerts[@]} == 0 )); then
   echo "ok ${eth:+(wallet $eth ETH)}"
   exit 0
