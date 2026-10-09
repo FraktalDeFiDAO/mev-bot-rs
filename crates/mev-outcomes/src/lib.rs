@@ -18,7 +18,7 @@ use std::{
 };
 
 use alloy::{
-    primitives::B256,
+    primitives::{Address, B256},
     providers::{DynProvider, Provider},
 };
 use futures::StreamExt;
@@ -38,9 +38,17 @@ fn hex_u64(v: &serde_json::Value) -> Option<u64> {
 ///
 /// Receipts are read as raw JSON, not as the standard Ethereum receipt type: Arbitrum receipts include chain-specific
 /// transaction types (for example the internal system transaction, type `0x6a`) that the standard parser rejects.
-fn interesting(logs: &[serde_json::Value]) -> (Vec<serde_json::Value>, Vec<&'static str>) {
+fn interesting(
+    logs: &[serde_json::Value],
+    tracked: &std::collections::HashSet<Address>,
+) -> (
+    Vec<serde_json::Value>,
+    Vec<&'static str>,
+    Vec<serde_json::Value>,
+) {
     let mut out = Vec::new();
     let mut classes: Vec<&'static str> = Vec::new();
+    let mut unknown = Vec::new();
     for l in logs {
         let topics: Vec<&str> = l["topics"]
             .as_array()
@@ -50,6 +58,15 @@ fn interesting(logs: &[serde_json::Value]) -> (Vec<serde_json::Value>, Vec<&'sta
             continue;
         };
         let Some((kind, class)) = classify(&t0) else {
+            // An event we do not recognise, from a pool or manager we track: recorded by topic only, so the decoder's
+            // table can be checked for events it has never heard of.
+            if l["address"]
+                .as_str()
+                .and_then(|a| a.parse::<Address>().ok())
+                .is_some_and(|a| tracked.contains(&a))
+            {
+                unknown.push(serde_json::json!({ "addr": l["address"], "topic0": topics[0] }));
+            }
             continue;
         };
         if !classes.contains(&class) {
@@ -63,17 +80,21 @@ fn interesting(logs: &[serde_json::Value]) -> (Vec<serde_json::Value>, Vec<&'sta
             "data": &data[..data.len().min(512)],
         }));
     }
-    (out, classes)
+    (out, classes, unknown)
 }
 
 /// The line for a raw receipt, or `None` if it is neither a recorded feed transaction nor an event we keep.
-pub fn outcome_line(r: &serde_json::Value, feed: &TxRecorder) -> Option<serde_json::Value> {
+pub fn outcome_line(
+    r: &serde_json::Value,
+    feed: &TxRecorder,
+    tracked: &std::collections::HashSet<Address>,
+) -> Option<serde_json::Value> {
     let hash = r["transactionHash"].as_str()?.to_lowercase();
     let was_candidate = feed.was_recorded(&hash);
     let empty = Vec::new();
     let all_logs = r["logs"].as_array().unwrap_or(&empty);
-    let (logs, classes) = interesting(all_logs);
-    if !was_candidate && logs.is_empty() {
+    let (logs, classes, unknown) = interesting(all_logs, tracked);
+    if !was_candidate && logs.is_empty() && unknown.is_empty() {
         return None;
     }
     Some(serde_json::json!({
@@ -90,6 +111,7 @@ pub fn outcome_line(r: &serde_json::Value, feed: &TxRecorder) -> Option<serde_js
         "candidate": was_candidate,
         "classes": classes,
         "logs": logs,
+        "unknown_topics": unknown,
     }))
 }
 
@@ -125,7 +147,13 @@ async fn fetch(ws: &DynProvider, n: u64) -> Option<Vec<serde_json::Value>> {
 }
 
 /// Follow new blocks forever (reconnecting), sampling every `every_n`-th block into `out`.
-pub async fn run(ws: DynProvider, feed: Arc<TxRecorder>, out: Arc<TxRecorder>, every_n: u64) {
+pub async fn run(
+    ws: DynProvider,
+    feed: Arc<TxRecorder>,
+    out: Arc<TxRecorder>,
+    every_n: u64,
+    tracked: Arc<std::collections::HashSet<Address>>,
+) {
     let every_n = every_n.max(1);
     let c = Arc::new(Counters::default());
     let mut tick = tokio::time::interval(Duration::from_secs(60));
@@ -147,7 +175,7 @@ pub async fn run(ws: DynProvider, feed: Arc<TxRecorder>, out: Arc<TxRecorder>, e
                     if h.number % every_n != 0 {
                         continue;
                     }
-                    let (ws, feed, out, c) = (ws.clone(), feed.clone(), out.clone(), c.clone());
+                    let (ws, feed, out, c, tracked) = (ws.clone(), feed.clone(), out.clone(), c.clone(), tracked.clone());
                     tokio::spawn(async move {
                         let Some(receipts) = fetch(&ws, h.number).await else {
                             c.empty.fetch_add(1, Relaxed);
@@ -159,7 +187,7 @@ pub async fn run(ws: DynProvider, feed: Arc<TxRecorder>, out: Arc<TxRecorder>, e
                             if r["status"].as_str() != Some("0x1") {
                                 c.reverted.fetch_add(1, Relaxed);
                             }
-                            if let Some(line) = outcome_line(r, &feed) {
+                            if let Some(line) = outcome_line(r, &feed, &tracked) {
                                 c.recorded.fetch_add(1, Relaxed);
                                 out.record(&line);
                             }
@@ -218,7 +246,8 @@ mod tests {
             { "address": "0xpool", "topics": [swap_topic()], "data": "0x01" },
             { "address": "0xother", "topics": [format!("{:#x}", B256::repeat_byte(0x11))], "data": "0x" },
         ]);
-        let (kept, classes) = interesting(logs.as_array().unwrap());
+        let (kept, classes, unknown) = interesting(logs.as_array().unwrap(), &Default::default());
+        assert!(unknown.is_empty(), "untracked emitters are not reported");
         assert_eq!(kept.len(), 1);
         assert_eq!(classes, vec!["swap"]);
         assert_eq!(kept[0]["kind"], "swap_v3");
@@ -230,11 +259,12 @@ mod tests {
         let rec = recorder("internal");
         let r = receipt("0xaa", "0x1", "0x6a", serde_json::json!([]));
         assert!(
-            outcome_line(&r, &rec).is_none(),
+            outcome_line(&r, &rec, &Default::default()).is_none(),
             "neither a candidate nor an event we keep"
         );
         rec.record(&serde_json::json!({ "hash": "0xaa" }));
-        let line = outcome_line(&r, &rec).expect("a recorded candidate is kept");
+        let line =
+            outcome_line(&r, &rec, &Default::default()).expect("a recorded candidate is kept");
         assert_eq!(line["type"], "0x6a");
         assert_eq!(line["status"], true);
         assert_eq!(line["gas_used"], 21000);
@@ -248,7 +278,7 @@ mod tests {
         let rec = recorder("both");
         rec.record(&serde_json::json!({ "hash": "0xbb" }));
         let reverted = receipt("0xBB", "0x0", "0x2", serde_json::json!([])); // upper-case hash still matches
-        let line = outcome_line(&reverted, &rec).unwrap();
+        let line = outcome_line(&reverted, &rec, &Default::default()).unwrap();
         assert_eq!(line["status"], false);
         assert_eq!(line["candidate"], true);
         let event_only = receipt(
@@ -257,8 +287,32 @@ mod tests {
             "0x2",
             serde_json::json!([{ "address": "0xpool", "topics": [swap_topic()], "data": "0x" }]),
         );
-        let line = outcome_line(&event_only, &rec).unwrap();
+        let line = outcome_line(&event_only, &rec, &Default::default()).unwrap();
         assert_eq!(line["candidate"], false);
         assert_eq!(line["classes"], serde_json::json!(["swap"]));
+    }
+
+    #[test]
+    fn an_unrecognised_event_from_a_tracked_pool_is_recorded_by_topic_and_untracked_ones_are_not() {
+        let rec = recorder("unknown");
+        let pool: Address = "0x0000000000000000000000000000000000000abc"
+            .parse()
+            .unwrap();
+        let tracked: std::collections::HashSet<Address> = [pool].into_iter().collect();
+        let odd = format!("{:#x}", B256::repeat_byte(0x42));
+        let logs = serde_json::json!([
+            { "address": format!("{pool:#x}"), "topics": [odd.clone()], "data": "0x" },
+            { "address": "0x0000000000000000000000000000000000000def", "topics": [odd], "data": "0x" },
+        ]);
+        let r = receipt("0xdd", "0x1", "0x2", logs);
+        let line = outcome_line(&r, &rec, &tracked)
+            .expect("a tracked pool's unknown event is worth a line");
+        let unknown = line["unknown_topics"].as_array().unwrap();
+        assert_eq!(unknown.len(), 1, "only the tracked emitter is reported");
+        assert_eq!(unknown[0]["addr"], format!("{pool:#x}"));
+        assert!(
+            outcome_line(&r, &rec, &Default::default()).is_none(),
+            "with nothing tracked it is just noise"
+        );
     }
 }
