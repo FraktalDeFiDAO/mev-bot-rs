@@ -6,6 +6,7 @@
 
 mod decode_check;
 mod pending;
+mod tracked;
 
 use std::{
     collections::HashMap,
@@ -407,6 +408,36 @@ impl Engine {
         let risk = RiskGuard::new(limits, data_dir.join("STOP"))
             .with_max_in_flight(cfg.risk.max_concurrent_sends);
         info!(pools = store.len(), kill_switch = %data_dir.join("STOP").display(), "ready");
+        // What is tracked, written out so decoding can be checked against it (scripts/venue-coverage.py).
+        let tracked_contracts: Arc<std::collections::HashSet<Address>> = {
+            let v4_manager = cfg
+                .uniswap_v4
+                .as_ref()
+                .filter(|v| v.enabled)
+                .map(|v| v.pool_manager);
+            let lending = json!({
+                "aave_v3": cfg.aave.as_ref().filter(|a| a.enabled).map(|a| format!("{:#x}", a.pool)),
+                "compound_v3": cfg.compound_v3.as_ref().filter(|c| c.enabled).map(|c| c.comets.iter().map(|m| format!("{:#x}", m.address)).collect::<Vec<_>>()),
+                "morpho_blue": cfg.morpho.as_ref().filter(|m| m.enabled).map(|m| format!("{:#x}", m.morpho)),
+                "fluid_vaults": cfg.fluid.as_ref().filter(|f| f.enabled).map(|f| f.vaults.iter().map(|v| format!("{v:#x}")).collect::<Vec<_>>()),
+            });
+            let dexes: Vec<(String, String, Address)> = cfg
+                .dexes
+                .iter()
+                .map(|d| (d.name.clone(), format!("{:?}", d.kind), d.factory))
+                .collect();
+            let doc =
+                tracked::describe(store.pools().map(|p| &p.info), &dexes, v4_manager, lending);
+            if let Err(e) = std::fs::write(data_dir.join("tracked-venues.json"), doc.to_string()) {
+                warn!(error = %e, "could not write tracked-venues.json");
+            }
+            let mut set: std::collections::HashSet<Address> =
+                tracked::contract_addresses(store.pools().map(|p| &p.info))
+                    .into_iter()
+                    .collect();
+            set.extend(v4_manager);
+            Arc::new(set)
+        };
 
         // Sequencer feed, shared by the liquidation runner (price-feed triggers, backruns) and the
         // pre-simulator (feed-driven arbitrage).
@@ -559,6 +590,7 @@ impl Engine {
                                 feed_rec.clone(),
                                 out,
                                 pc.chain_sample_every,
+                                tracked_contracts.clone(),
                             ));
                         }
                         Err(e) => warn!(error = %e, "chain outcome recorder disabled"),
@@ -721,7 +753,7 @@ impl Engine {
                     maybe = logs.next() => {
                         let Some(log) = maybe else { warn!("log stream ended; resubscribing"); break };
                         if let Some(h) = log.transaction_hash {
-                            self.pending.settle(&h);
+                            self.pending.settle(&h, pending::Settled::Block);
                         }
                         if let Some(pool) = self.store.apply_log(&log) {
                             self.metrics.update(|c| c.updates += 1);
@@ -737,7 +769,7 @@ impl Engine {
                     }
                     Some(pre) = recv_opt(&mut presim_rx) => {
                         // Presim applies this transaction's effect below: it is no longer missing from our state.
-                        self.pending.settle(&pre.tx);
+                        self.pending.settle(&pre.tx, pending::Settled::Presim);
                         if !pre.call.is_null() {
                             if self.trigger_calls.len() > 512 {
                                 self.trigger_calls.retain(|_, (t, _, _)| t.elapsed() < TRIGGER_CALL_KEEP);
@@ -1386,7 +1418,15 @@ impl Engine {
                 "fast feed (last minute)"
             );
         }
-        info!(stats = %self.feed_stats.take_summary(), pending_decoded_swaps = self.pending.len(), "sequencer feed (last minute)");
+        let (inserted, by_presim, by_block) = self.pending.take_counts();
+        info!(
+            stats = %self.feed_stats.take_summary(),
+            decoded_swaps_on_tracked_pools = inserted,
+            settled_by_presim = by_presim,
+            settled_by_block_log = by_block,
+            still_open = self.pending.len(),
+            "sequencer feed (last minute)"
+        );
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
             info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
             info!(stats = %self.decode_stats.lock().unwrap().take_summary(), "local swap decoder vs node simulation (last minute)");
