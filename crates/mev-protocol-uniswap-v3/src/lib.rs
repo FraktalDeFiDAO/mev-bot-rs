@@ -5,7 +5,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use alloy::{
-    primitives::{Address, U256, address},
+    primitives::{Address, U256, address, b256},
     sol,
     sol_types::{SolCall, SolEvent},
 };
@@ -129,6 +129,16 @@ impl Protocol for UniswapV3 {
                 NftManager::DecreaseLiquidity::SIGNATURE_HASH,
                 "decrease_liquidity_nft",
                 Class::Liquidity,
+                p,
+            ),
+            // Camelot V3 (Algebra) emits this just before each `Swap`: no indexed arguments, two values (seen as 250 and
+            // 250, i.e. 0.025%), most likely the fee in effect for the swap. Signature not known, so the topic is
+            // given directly. Recognised (state class) so it stops showing up as an unknown event; its data is not
+            // used yet.
+            EventKind::new(
+                b256!("8a89de70856bccec096661388f305b9a75f5f65cb0d8a0e1e803c39dabedb57f"),
+                "fee_algebra_observed",
+                Class::State,
                 p,
             ),
         ]
