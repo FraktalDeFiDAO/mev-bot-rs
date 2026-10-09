@@ -17,6 +17,7 @@ clap = { workspace = true }
 mev-decode = { workspace = true, default-features = false }
 mev-sequencer = { workspace = true }
 seqscope-core = { workspace = true }
+seqscope-server = { workspace = true }
 seqscope-store = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

@@ -2,8 +2,8 @@
 
 `seqscope` reads every transaction on the sequencer feed, decodes it (including calls inside multicalls, Multicall3, smart
 accounts and ERC-4337 bundles), judges each call against rules you write, and keeps what matches in a local database.
-It needs no bot, no key and no RPC. Spec and roadmap: `docs/tasks/sequencer-decoder-app.md`. Milestone 1 (engine,
-storage, CLI) is built; the web UI and desktop shell are not.
+It needs no bot, no key and no RPC. Spec and roadmap: `docs/tasks/sequencer-decoder-app.md`. Milestones 1 and 2 (engine, storage, CLI, local server and web
+interface) are built; the desktop shell is not.
 
 Build and run through the project container: `scripts/dev.sh cargo build --release -p seqscope-cli`, binary
 `target/release/seqscope`.
@@ -23,6 +23,27 @@ seqscope query --kind swap --minutes 10       # newest first
 seqscope sql "SELECT to_addr, count(*) FROM v_rows WHERE kind='swap' GROUP BY 1 ORDER BY 2 DESC LIMIT 10"
 seqscope decode 0xA51a... 0x3593564c...       # every action inside one call
 ```
+
+## The web interface
+
+`seqscope serve` (default http://127.0.0.1:7878) collects like `run` and serves the interface and its API. Without a
+network: `seqscope serve --replay rec.jsonl --speed 10`.
+
+* **Live**: stored rows as they arrive; click one for the inspector (every field, its wrapper path, and "make a rule like
+  this"). The **probe** box tries any rule on live traffic *without saving it* (it first shows what the last few minutes
+  would have matched), and a mistake is explained in place.
+* **Rules**: the rules file with live validation (errors name the rule, the column and a suggestion); **Save** only
+  works for a valid file and switches the running collector at once. The builder assembles a condition list into rule
+  text, **dry-runs** it on the last 5,000 transactions, can **watch it live**, and **adds** it to a profile of the file.
+* **Explore**: filters over stored rows, and read-only SQL (`rows`, and `v_rows` with text addresses) with CSV / JSON download.
+* **Gaps**: what the decoder cannot read, busiest first; "draft rule" turns a line into a dry run.
+* **Stats**: counts, drop counters, per-rule matches, tx/s.
+
+It answers only to localhost names, refuses requests from other sites (Host and Origin checks), and requires an
+`X-Seqscope` header for anything that changes state; `--allow-remote` lifts the first check. Interface files are built into the
+binary (set `SEQSCOPE_UI_DIR` to edit them live). Tests: `scripts/test-seqscope-ui.sh` drives the real interface in headless
+Chromium (every page, builder, save, probe, phone width, dark mode, a clean console) and `crates/seqscope-server/tests/api.rs`
+covers the API.
 
 ## Rules
 
@@ -64,11 +85,13 @@ queue drops rows *and counts them* (the status line shows `dropped`).
 | `seqscope-core` unit + engine tests | the rule language (parser property tests), every compiler error message, engine semantics, the rule file |
 | `seqscope-core` corpus tests | 2,049 real feed transactions (`tests/fixtures/corpus.jsonl`): invariants for every call, decoder accuracy against the chain (receipts in `corpus_chain.json`: 75/75 swaps name a pool the transaction really swapped in, 12/12 liquidity changes have an event), a golden summary of what the decoder reads, mutation fuzzing of 24,000 damaged inputs, engine properties |
 | `seqscope-store` tests | lossless round trip, filters, read-only SQL, `written + dropped + failed = sent` under pressure, persistence, schema versions, pruning, reading while writing |
+| `seqscope-server` API tests | rules read / validate / save (never half applied), file edits and broken edits, dry runs, rows / SQL / stats / gaps, live and probe sockets, the Host / Origin / header guards, a replay driving the whole pipeline |
+| web interface tests (`--ui`) | pure logic under node (rule text building, TOML editing, formatting) and 12 browser tests on every page |
 | `seqscope-cli` end-to-end tests | the real binary: every offline command and exit code, deterministic output, and the collector run against a local fake sequencer feed with a SIGTERM stop |
 | performance and load guards | under 20 microseconds per transaction with 100 rules; 10,000 tx/s with zero drops |
 
 `--live` adds a smoke test against the real feed (record 30 s, every template over the recording, database invariants, a
-20 s collector run that must drop nothing). `scripts/mutation-check-seqscope.sh` plants ten known bugs one at a time and
+20 s collector run that must drop nothing). `scripts/mutation-check-seqscope.sh` plants fifteen known bugs one at a time and
 fails if the suite does not notice any of them. After a deliberate decoder improvement the golden summary fails on
 purpose: regenerate it with `UPDATE_GOLDEN=1 scripts/test-seqscope.sh`, read the diff, commit it. To refresh the corpus,
 record a new one with `seqscope record`, list the decoded hashes, and run `scripts/build-corpus-truth.py`.

@@ -387,3 +387,35 @@ fn the_engine_feeds_the_store_end_to_end() {
             .all(|x| x.kind == "unknown" && x.status == "pending" && x.profile == "gaps")
     );
 }
+
+#[test]
+fn shutdown_does_not_wait_for_other_holders_of_the_sender_and_still_accounts_for_every_row() {
+    let db = Db::new();
+    let w = Writer::spawn(
+        &db.0,
+        WriterConfig {
+            flush: Duration::from_millis(20),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let held_elsewhere = w.ingest(); // like the server's shared state: it is never dropped before shutdown
+    let sent = 3_000u64;
+    let accepted = (0..sent).filter(|i| held_elsewhere.send(row(*i))).count() as u64;
+    // Run the shutdown on another thread so a regression fails the test instead of hanging it.
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done_tx.send(w.shutdown());
+    });
+    let s = done_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("shutdown waited for another holder of the sender");
+    assert_eq!(s.written, accepted, "{s:?}");
+    // After the stop, nothing more is accepted and every refusal is counted.
+    assert!(!held_elsewhere.send(row(1)));
+    assert_eq!(
+        held_elsewhere.stats().snapshot().dropped,
+        sent - accepted + 1
+    );
+    assert_eq!(Reader::open(&db.0).unwrap().count().unwrap(), accepted);
+}

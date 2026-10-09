@@ -6,6 +6,8 @@
 #   scripts/test-seqscope.sh --live     the above, then a smoke test against the live sequencer feed: record 30 s, run
 #                                       every template over the recording, run the collector 20 s and check its
 #                                       invariants (nothing dropped or failed, every row pending, counts add up)
+#   scripts/test-seqscope.sh --ui       also the web interface in a real browser (scripts/test-seqscope-ui.sh: needs node and chromium)
+#   scripts/test-seqscope.sh --all      everything
 #   UPDATE_GOLDEN=1 scripts/test-seqscope.sh    regenerate crates/seqscope-core/tests/fixtures/corpus_golden.json after a
 #                                       deliberate decoder change (review the diff before committing)
 #
@@ -19,7 +21,8 @@
 #   perf guard ....................... the 20 us/tx target of the spec
 set -euo pipefail
 cd "$(dirname "$0")/.."
-LIVE=0; [[ "${1:-}" == "--live" ]] && LIVE=1
+LIVE=0; UI=0
+for a in "$@"; do case "$a" in --live) LIVE=1 ;; --ui) UI=1 ;; --all) LIVE=1; UI=1 ;; esac; done
 
 scripts/dev.sh bash -c '
 set -euo pipefail
@@ -29,11 +32,11 @@ step() { printf "\n== %s\n" "$*"; }
 
 step "format and lints"
 cargo fmt --all --check
-cargo clippy -q --message-format=short -p mev-decode -p seqscope-core -p seqscope-store -p seqscope-cli --all-targets -- -D warnings
+cargo clippy -q --message-format=short -p mev-decode -p seqscope-core -p seqscope-store -p seqscope-server -p seqscope-cli --all-targets -- -D warnings
 
 step "tests"
-cargo test -q -p mev-decode -p seqscope-core -p seqscope-store -p seqscope-cli 2>&1 | grep -E "^test result|FAILED|panicked|error" || true
-cargo test -q -p mev-decode -p seqscope-core -p seqscope-store -p seqscope-cli 2>&1 | grep -qE "FAILED|panicked|^error" && { echo "TESTS FAILED"; exit 1; } || true
+cargo test -q -p mev-decode -p seqscope-core -p seqscope-store -p seqscope-server -p seqscope-cli 2>&1 | grep -E "^test result|FAILED|panicked|error" || true
+cargo test -q -p mev-decode -p seqscope-core -p seqscope-store -p seqscope-server -p seqscope-cli 2>&1 | grep -qE "FAILED|panicked|^error" && { echo "TESTS FAILED"; exit 1; } || true
 
 step "performance guard (release): rule engine, 100 rules, decoding included"
 OUT=$(cargo run -q --release -p seqscope-core --example bench 2>&1)
@@ -74,3 +77,8 @@ if [ "'"$LIVE"'" = 1 ]; then
   echo "LIVE SMOKE: OK"
 fi
 '
+
+if [[ "$UI" == 1 ]]; then
+  echo; echo "== web interface"
+  scripts/test-seqscope-ui.sh
+fi

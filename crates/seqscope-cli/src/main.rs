@@ -1,6 +1,7 @@
 //! `seqscope`: watch the Arbitrum sequencer feed through rules, keep what matches, and look at it.
 //!
 //!   seqscope run      collect: feed -> rules -> database        (the usual way to run it)
+//!   seqscope serve    collect and serve the web interface (http://127.0.0.1:7878)
 //!   seqscope tail     watch matches live, nothing saved
 //!   seqscope record   save raw transactions from the feed to a file (to replay and tune rules offline)
 //!   seqscope replay   run a recorded file through rules
@@ -82,6 +83,30 @@ enum Cmd {
         /// Also print each stored row.
         #[arg(long)]
         print: bool,
+    },
+    /// Collect, and serve the web interface and API on this machine (http://127.0.0.1:7878 by default).
+    Serve {
+        #[command(flatten)]
+        source: Source,
+        #[command(flatten)]
+        rules: RulesArg,
+        #[command(flatten)]
+        db: DbArg,
+        /// Address to listen on. Only loopback addresses are accepted unless --allow-remote.
+        #[arg(long, default_value = "127.0.0.1:7878")]
+        bind: std::net::SocketAddr,
+        /// Replay a recording (from `seqscope record`) instead of reading the feed; no network needed.
+        #[arg(long)]
+        replay: Option<PathBuf>,
+        /// Replay pace: 1 = recorded, 10 = ten times faster, 0 = as fast as possible.
+        #[arg(long, default_value_t = 1.0)]
+        speed: f64,
+        /// Do not read any transactions: serve an existing database only.
+        #[arg(long)]
+        idle: bool,
+        /// Accept requests that are not addressed to localhost. The interface can edit the rules file: only on a network you trust.
+        #[arg(long)]
+        allow_remote: bool,
     },
     /// Watch matches live without saving.
     Tail {
@@ -220,6 +245,32 @@ fn main() -> Result<()> {
             every,
             print,
         } => runtime()?.block_on(run(source, rules, db, every, print)),
+        Cmd::Serve {
+            source,
+            rules,
+            db,
+            bind,
+            replay,
+            speed,
+            idle,
+            allow_remote,
+        } => {
+            let src = if idle {
+                seqscope_server::Source::Idle
+            } else if let Some(file) = replay {
+                seqscope_server::Source::Replay { file, speed }
+            } else {
+                seqscope_server::Source::Feed(source.url)
+            };
+            runtime()?.block_on(seqscope_server::serve(seqscope_server::Config {
+                rules: rules.rules,
+                db: db.db,
+                bind,
+                allow_remote,
+                source: src,
+                writer: WriterConfig::default(),
+            }))
+        }
         Cmd::Tail {
             source,
             rules,
