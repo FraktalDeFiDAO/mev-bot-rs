@@ -6,7 +6,7 @@ sequencer_rpc = "https://arb1-sequencer.arbitrum.io/rpc"
 # Real-time stream of sequenced txs (free; ~0.9 s ahead of RPC receipts).
 sequencer_feed = "wss://arb1.arbitrum.io/feed"
 min_pool_liquidity_usd = 2500.0   # was 5000: thin long-tail pools are where few bots look
-max_cycles = 100000               # was 20000 (default): keep the thin long-tail triangles too
+max_cycles = 200000               # was 100000, 20000 before: a wider pool set means more triangles; the cap still bounds search memory
 gas_limit_estimate = 1500000
 # Executors since 0x5932C0887173B7E9C4258EaCaB2bAc395137CB29 (2026-10-05) have executeFlashSwap: V3-first routes
 # borrow from their first pool (no fee, no Balancer cap). DECISIONS #46.
@@ -32,7 +32,7 @@ pairs = [
 
 [auto_discovery]
 enabled = true
-blocks = 12000           # ~50 min of Arbitrum blocks (was 2400): more of the long tail shows up
+blocks = 72000           # ~5 h of Arbitrum blocks (was 12000 = 50 min, then 2400): the 50-minute scan found only 91 tokens, so steady-but-quiet pairs (RLC, LPT, PEAR, WINR, ...) never entered; 16% of swap activity was on pools we did not hold (DECISIONS #105)
 step = 200
 log_rpc = "https://arb1.arbitrum.io/rpc"   # official RPC allows wide getLogs ranges
 pair_with = ["WETH", "USDC", "USDT", "ARB", "WBTC", "DAI"]   # more bases: more triangles
@@ -128,10 +128,10 @@ enabled = true
 pool_manager = "0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32"
 log_rpc = "https://arb1.arbitrum.io/rpc"
 first_block = 250000000   # before the manager's deployment (first pool: block 298,076,243)
-blocks = 12000            # swap-activity window (~50 min)
+blocks = 72000            # swap-activity window (~5 h; was 12000 = ~50 min: 82 of 4,292 hookless pools active in it)
 step = 500
 min_swaps = 1             # swaps in the window to be tracked (was 3: ~52 pools; 1 tracks every pool that swapped)
-max_pools = 150
+max_pools = 400
 presimulate = true        # eth_call every route through a V4 pool before sending it (optional; costs one call per candidate)
 
 [gate]
