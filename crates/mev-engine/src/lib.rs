@@ -5,6 +5,7 @@
 //! `Engine::bootstrap(cfg, secrets, Mode::Shadow, data_dir).await?.run().await`.
 
 mod decode_check;
+mod journal;
 mod pending;
 mod tracked;
 
@@ -198,6 +199,8 @@ pub struct Engine {
     feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>>,
     /// Continuity counters of the standard sequencer feed (gaps, replays, reconnects).
     feed_stats: Arc<mev_sequencer::FeedStats>,
+    /// On-chain event journal of the tracked pools (`[journal] pool_events`).
+    event_journal: Option<Arc<mev_presim::record::TxRecorder>>,
     presim_stats: Arc<mev_presim::PresimStats>,
     decode_stats: std::sync::Mutex<decode_check::DecodeStats>,
     /// Decoded rival swaps from the feed, from arrival until presim or a block log has put them in our state.
@@ -458,6 +461,21 @@ impl Engine {
                 "pga.fast_feed enabled but ARBITRUM_FAST_FEED_KEY is not set: using the public feed only"
             );
         }
+        let event_journal = if cfg.journal.pool_events {
+            match mev_presim::record::TxRecorder::open_prefixed(
+                data_dir.clone(),
+                "poolevents",
+                i64::from(cfg.journal.keep_days),
+            ) {
+                Ok(j) => Some(j),
+                Err(e) => {
+                    warn!(error = %e, "pool event journal disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let (dec_tx, dec_rx) = mpsc::unbounded_channel::<pending::DecodedSwap>();
         let (liq_feed, presim_feed) = match cfg.sequencer_feed.clone() {
             Some(url) => {
@@ -685,6 +703,7 @@ impl Engine {
             presim_rx,
             feed_log,
             feed_stats,
+            event_journal,
             presim_stats,
             decode_stats: std::sync::Mutex::default(),
             pending: pending::PendingSwaps::default(),
@@ -752,6 +771,12 @@ impl Engine {
                 tokio::select! {
                     maybe = logs.next() => {
                         let Some(log) = maybe else { warn!("log stream ended; resubscribing"); break };
+                        if let Some(j) = &self.event_journal {
+                            let t_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+                            if let Some(line) = journal::event_line(&log, &self.store, t_ms) {
+                                j.record(&line);
+                            }
+                        }
                         if let Some(h) = log.transaction_hash {
                             self.pending.settle(&h, pending::Settled::Block);
                         }

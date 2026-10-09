@@ -1450,4 +1450,51 @@ mod tests {
         assert_eq!(s.version(&addr), v, "and not versioned as a change");
         assert_eq!(s.tentative_len(), 0, "the mark is dropped either way");
     }
+
+    #[test]
+    fn journal_only_events_leave_pool_state_and_versions_alone() {
+        use alloy::primitives::{B256, Bytes, LogData};
+        // Events the journal records (V2 swaps, V3 fee collection and flash loans, V4 pool creation) must not move a pool.
+        let (mut s, addr) = v2_store(1);
+        let v0 = s.version(&addr);
+        let before = s.get(&addr).unwrap().state.clone();
+        for topic in [
+            mev_decode::events::kinds()
+                .iter()
+                .find(|k| k.name == "swap_v2")
+                .unwrap()
+                .topic0,
+            mev_decode::events::kinds()
+                .iter()
+                .find(|k| k.name == "collect_v3")
+                .unwrap()
+                .topic0,
+            mev_decode::events::kinds()
+                .iter()
+                .find(|k| k.name == "flash_v3")
+                .unwrap()
+                .topic0,
+            mev_decode::events::kinds()
+                .iter()
+                .find(|k| k.name == "initialize_v4")
+                .unwrap()
+                .topic0,
+            B256::repeat_byte(0x77),
+        ] {
+            let l = rpc_log(
+                addr,
+                LogData::new_unchecked(
+                    vec![topic, B256::ZERO, B256::ZERO],
+                    Bytes::from(vec![1u8; 160]),
+                ),
+            );
+            assert_eq!(s.apply_log(&l), None, "{topic:#x}");
+        }
+        assert_eq!(s.get(&addr).unwrap().state, before);
+        assert_eq!(
+            s.version(&addr),
+            v0,
+            "and the opportunity versions do not move"
+        );
+    }
 }
