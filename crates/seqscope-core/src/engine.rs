@@ -148,6 +148,17 @@ impl std::fmt::Display for RuleError {
     }
 }
 
+impl Row {
+    /// A hash from stored bytes (zeros if the length is wrong, which a database written by this crate never has).
+    pub fn hash_from(b: &[u8]) -> B256 {
+        if b.len() == 32 {
+            B256::from_slice(b)
+        } else {
+            B256::ZERO
+        }
+    }
+}
+
 /// One stored record: a call that matched a rule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Row {
