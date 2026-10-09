@@ -5,12 +5,15 @@ accounts and ERC-4337 bundles), judges each call against rules you write, and ke
 It needs no bot, no key and no RPC. Spec and roadmap: `docs/tasks/sequencer-decoder-app.md`. Milestones 1 and 2 (engine, storage, CLI, local server and web
 interface) are built; the desktop shell is not.
 
-Build and run through the project container: `scripts/dev.sh cargo build --release -p seqscope-cli`, binary
-`target/release/seqscope`.
+Run it with `scripts/seqscope.sh <command>` (builds on first use; your rules, database and recordings live in
+`data/seqscope/`; the web interface is then at http://127.0.0.1:7878 in your own browser). The binary itself is inside the
+project container's build volume (`/workspace/target/release/seqscope`), not on the host: do not look for `target/release/` on the host.
 
 ## Five minutes
 
 ```
+# every command below is `scripts/seqscope.sh …` (written here as `seqscope …`)
+seqscope serve                                # the web interface, collecting from the live feed
 seqscope rules template                       # starter templates
 seqscope rules template aave-lending > seqscope.toml
 seqscope rules check seqscope.toml            # compiles it; mistakes come with a place and a hint
