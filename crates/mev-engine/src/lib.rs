@@ -5,6 +5,7 @@
 //! `Engine::bootstrap(cfg, secrets, Mode::Shadow, data_dir).await?.run().await`.
 
 mod decode_check;
+mod pending;
 
 use std::{
     collections::HashMap,
@@ -198,6 +199,9 @@ pub struct Engine {
     feed_stats: Arc<mev_sequencer::FeedStats>,
     presim_stats: Arc<mev_presim::PresimStats>,
     decode_stats: std::sync::Mutex<decode_check::DecodeStats>,
+    /// Decoded rival swaps from the feed, from arrival until presim or a block log has put them in our state.
+    pending: pending::PendingSwaps,
+    dec_rx: Option<mpsc::UnboundedReceiver<pending::DecodedSwap>>,
     localsim_stats: Arc<mev_localsim::worker::LocalStats>,
     /// Pools + tokens a feed tx must mention to be pre-simulated (refreshed on resync).
     presim_watch: mev_presim::Watchlist,
@@ -423,6 +427,7 @@ impl Engine {
                 "pga.fast_feed enabled but ARBITRUM_FAST_FEED_KEY is not set: using the public feed only"
             );
         }
+        let (dec_tx, dec_rx) = mpsc::unbounded_channel::<pending::DecodedSwap>();
         let (liq_feed, presim_feed) = match cfg.sequencer_feed.clone() {
             Some(url) => {
                 let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<mev_sequencer::SequencedTx>();
@@ -439,6 +444,7 @@ impl Engine {
                 tokio::spawn(mev_sequencer::run_tracked(url, raw_tx, feed_stats.clone()));
                 let (liq_tx, liq_rx) = mpsc::unbounded_channel();
                 let (pre_tx, pre_rx) = mpsc::unbounded_channel();
+                let dec_tx = dec_tx.clone();
                 let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
                 let log = feed_log.clone();
                 let tip_book = feed_tips.clone();
@@ -452,6 +458,17 @@ impl Engine {
                         log.lock().unwrap().record(&st);
                         if let Some(t) = st.bid_tip_wei().filter(|t| *t >= bot_floor) {
                             tip_book.lock().unwrap().record(t, now_secs());
+                        }
+                        // Read the swap straight from the calldata, at arrival, before any node round trip.
+                        if let Some(to) = st.to
+                            && let Some(mev_decode::Decoded::Swap(intent)) =
+                                mev_decode::decode_call(to, &st.input)
+                        {
+                            let _ = dec_tx.send(pending::DecodedSwap {
+                                hash: st.hash,
+                                intent,
+                                received: st.received,
+                            });
                         }
                         if want_pre {
                             let _ = pre_tx.send(st.clone());
@@ -638,6 +655,8 @@ impl Engine {
             feed_stats,
             presim_stats,
             decode_stats: std::sync::Mutex::default(),
+            pending: pending::PendingSwaps::default(),
+            dec_rx: Some(dec_rx),
             localsim_stats,
             presim_watch,
             meters,
@@ -664,6 +683,7 @@ impl Engine {
         info!(cycles = self.cycles.len(), "triangular cycles indexed");
         let mut liq_rx = self.liq.as_mut().and_then(|l| l.rx.take());
         let mut presim_rx = self.presim_rx.take();
+        let mut dec_rx = self.dec_rx.take();
         let mut atlas_auctions = self.atlas.as_mut().and_then(|a| a.auction_rx.take());
         let mut atlas_events = self.atlas.as_mut().and_then(|a| a.event_rx.take());
         // Created once, outside the loops: a signal arriving while a handler runs is not lost.
@@ -700,13 +720,24 @@ impl Engine {
                 tokio::select! {
                     maybe = logs.next() => {
                         let Some(log) = maybe else { warn!("log stream ended; resubscribing"); break };
+                        if let Some(h) = log.transaction_hash {
+                            self.pending.settle(&h);
+                        }
                         if let Some(pool) = self.store.apply_log(&log) {
                             self.metrics.update(|c| c.updates += 1);
                             let trigger = Trigger { tx: log.transaction_hash, source: "block", seen: Instant::now() };
                             self.on_pool_update(pool, trigger, &tx_done).await;
                         }
                     }
+                    Some(d) = recv_opt(&mut dec_rx) => {
+                        let pools = pending::resolve_pools(&self.store, &d.intent);
+                        if !pools.is_empty() {
+                            self.pending.insert(d.hash, pools, d.received);
+                        }
+                    }
                     Some(pre) = recv_opt(&mut presim_rx) => {
+                        // Presim applies this transaction's effect below: it is no longer missing from our state.
+                        self.pending.settle(&pre.tx);
                         if !pre.call.is_null() {
                             if self.trigger_calls.len() > 512 {
                                 self.trigger_calls.retain(|_, (t, _, _)| t.elapsed() < TRIGGER_CALL_KEEP);
@@ -1355,7 +1386,7 @@ impl Engine {
                 "fast feed (last minute)"
             );
         }
-        info!(stats = %self.feed_stats.take_summary(), "sequencer feed (last minute)");
+        info!(stats = %self.feed_stats.take_summary(), pending_decoded_swaps = self.pending.len(), "sequencer feed (last minute)");
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
             info!(stats = %self.presim_stats.take_summary(), "presim (last minute)");
             info!(stats = %self.decode_stats.lock().unwrap().take_summary(), "local swap decoder vs node simulation (last minute)");
@@ -1391,6 +1422,7 @@ impl Engine {
         info!(
             updates = c.updates,
             presim_updates = c.presim_updates,
+            vetoed = c.vetoed,
             candidates = c.candidates,
             simulated = c.simulated,
             profitable = c.sim_profitable,
@@ -1587,6 +1619,17 @@ impl Engine {
             "arb opportunity"
         );
 
+        // A decoded rival swap on one of these pools is in the feed but not yet in our state: the trade was built on
+        // a pool that has already moved. Applies in shadow too, so the events show what it would have stopped.
+        let route_pools: Vec<Address> = opp.versions.iter().map(|(p, _)| *p).collect();
+        if let Some(rival) = self.pending.conflict(&route_pools, Instant::now()) {
+            self.metrics.update(|c| c.vetoed += 1);
+            self.metrics.event(
+                "opp_vetoed",
+                json!({ "opp": base, "rival_tx": format!("{rival:#x}"), "source": trigger.source }),
+            );
+            return;
+        }
         if !self.sending(true) {
             // Shadow: log the PGA bid this would have placed (nothing is sent).
             let _ = self.pga_bid(profit_usd, gas, gas_price, native_px, &base);

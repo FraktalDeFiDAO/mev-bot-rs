@@ -3136,6 +3136,7 @@ dependencies = [
  "mev-atlas",
  "mev-bindings",
  "mev-config",
+ "mev-decode",
  "mev-dex",
  "mev-discovery",
  "mev-exec",
