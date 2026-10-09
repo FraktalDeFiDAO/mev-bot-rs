@@ -108,6 +108,26 @@ impl Default for RuleSet {
 }
 
 impl RuleSet {
+    /// One profile with one `store` rule: a rule typed on its own (the CLI's `--when`, a UI probe).
+    pub fn single(when: &str) -> RuleSet {
+        RuleSet {
+            version: FORMAT_VERSION,
+            profile: vec![Profile {
+                name: "probe".into(),
+                enabled: true,
+                mode: Mode::All,
+                rule: vec![Rule {
+                    name: "when".into(),
+                    enabled: true,
+                    when: when.into(),
+                    action: ActionKind::Store,
+                    tag: None,
+                    sample: 1,
+                }],
+            }],
+        }
+    }
+
     pub fn from_toml(text: &str) -> Result<Self, String> {
         let set: RuleSet = toml::from_str(text).map_err(|e| e.to_string())?;
         if set.version != FORMAT_VERSION {

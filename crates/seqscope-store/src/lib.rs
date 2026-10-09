@@ -16,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, RecvTimeoutError, SyncSender, TrySendError},
     },
     thread::JoinHandle,
@@ -217,11 +217,17 @@ impl Default for WriterConfig {
 pub struct Ingest {
     tx: SyncSender<Row>,
     stats: Arc<Stats>,
+    /// Set by [`Writer::shutdown`]: no more rows are accepted, whoever still holds a clone of this sender.
+    closing: Arc<AtomicBool>,
 }
 
 impl Ingest {
     /// Queue a row without waiting. `false` means it was dropped (and counted).
     pub fn send(&self, row: Row) -> bool {
+        if self.closing.load(Ordering::Acquire) {
+            self.stats.dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
         match self.tx.try_send(row) {
             Ok(()) => true,
             Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
@@ -248,7 +254,8 @@ impl Writer {
         let conn = open_rw(&path)?;
         let (tx, rx) = mpsc::sync_channel::<Row>(cfg.queue.max(1));
         let stats = Arc::new(Stats::default());
-        let st = stats.clone();
+        let closing = Arc::new(AtomicBool::new(false));
+        let (st, stop) = (stats.clone(), closing.clone());
         let join = std::thread::Builder::new()
             .name("seqscope-writer".into())
             .spawn(move || {
@@ -275,6 +282,17 @@ impl Writer {
                     batch.clear();
                 };
                 loop {
+                    if stop.load(Ordering::Acquire) {
+                        // Shutting down: write what is already queued, whoever still holds a sender.
+                        while let Ok(r) = rx.try_recv() {
+                            batch.push(r);
+                            if batch.len() >= cfg.batch {
+                                flush(&mut batch);
+                            }
+                        }
+                        flush(&mut batch);
+                        break;
+                    }
                     match rx.recv_timeout(cfg.flush) {
                         Ok(r) => {
                             batch.push(r);
@@ -299,7 +317,7 @@ impl Writer {
             })
             .map_err(|e| StoreError::Other(e.to_string()))?;
         Ok(Writer {
-            ingest: Some(Ingest { tx, stats }),
+            ingest: Some(Ingest { tx, stats, closing }),
             join: Some(join),
         })
     }
@@ -308,14 +326,13 @@ impl Writer {
         self.ingest.clone().expect("writer is running")
     }
 
-    /// Stop accepting rows, write everything queued, and return the final counters.
+    /// Stop accepting rows (from every clone of the sender), write everything queued, and return the final counters.
+    /// Does not wait for other holders of an [`Ingest`] to let go of it.
     pub fn shutdown(mut self) -> StatsSnapshot {
-        let stats = self
-            .ingest
-            .as_ref()
-            .map(|i| i.stats.clone())
-            .expect("writer is running");
-        self.ingest = None; // drops our sender; clones held elsewhere keep the queue open until they drop
+        let ingest = self.ingest.take().expect("writer is running");
+        ingest.closing.store(true, Ordering::Release);
+        let stats = ingest.stats.clone();
+        drop(ingest);
         if let Some(j) = self.join.take() {
             let _ = j.join();
         }
@@ -325,6 +342,9 @@ impl Writer {
 
 impl Drop for Writer {
     fn drop(&mut self) {
+        if let Some(i) = &self.ingest {
+            i.closing.store(true, Ordering::Release);
+        }
         self.ingest = None;
         if let Some(j) = self.join.take() {
             let _ = j.join();
