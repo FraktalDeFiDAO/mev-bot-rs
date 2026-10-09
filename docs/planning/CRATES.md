@@ -93,6 +93,7 @@ mev-bot/
 | L0 | `mev-protocol-fluid` | Fluid vaults: `LogLiquidate` / `LogAbsorb` events and `liquidate` calldata (by price range, so a vault, not an account) |
 | L1 | `seqscope-core` | seqscope's rule engine: typed fields, a small rule language (text and data), compiler with located errors, `Engine` over feed transactions producing rows, TOML rule file, catalogue for UIs. No network, no database, no UI (docs/tasks/sequencer-decoder-app.md) |
 | L1 | `seqscope-store` | seqscope's storage: rows in SQLite (WAL, five indexes, `v_rows` text view) behind a batching writer thread that never blocks the feed (full queue = counted drop), read-only readers for filtered queries and free-form SQL, versioned schema, retention. Depends on `seqscope-core` for the `Row` type only |
+| L2 | `seqscope-cli` | The `seqscope` binary: `run`, `tail`, `record`, `replay`, `rules check/test/template`, `decode`, `query`, `sql`, `stats`, `gaps`, `catalogue`; hot-reloading rules file; quiet on closed pipes |
 | L0 | `mev-protocol-unidentified` | The two unidentified swap contracts (A, B) read from landed transactions |
 | L2 | `mev-outcomes` | Chain-side ground truth: sampled `eth_getBlockReceipts` → `chaintx-DATE.jsonl` (status, gas, block position, swap/liquidity/liquidation events) joined to the feed recording on the tx hash; coverage audit of the decoders |
 | L1 | `mev-oracle` | Resolve price sources (Chainlink proxies, Aave CAPO adapters, Morpho oracles) to aggregators; `FeedWatcher` matches feed txs incl. Chainlink forwarder `forward(aggregator, …)` |

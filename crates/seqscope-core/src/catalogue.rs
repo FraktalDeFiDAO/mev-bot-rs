@@ -86,6 +86,7 @@ pub fn catalogue() -> Catalogue {
             "multicall3",
             "self_multicall",
             "account_execute",
+            "entrypoint_v6",
             "entrypoint_v7",
         ]),
         _ => None,
@@ -129,6 +130,7 @@ pub fn catalogue() -> Catalogue {
             "multicall3",
             "self_multicall",
             "account_execute",
+            "entrypoint_v6",
             "entrypoint_v7",
         ],
         kinds: vec![

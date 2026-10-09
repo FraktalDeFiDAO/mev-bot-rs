@@ -69,7 +69,7 @@ fields! {
     Selector, "selector", Sel, "call", "Function selector of this call.";
     Input, "input", Bytes, "call", "Calldata of this call (use `contains`).";
     Len, "len", Num, "call", "Calldata length in bytes.";
-    Via, "via", StrList, "call", "Wrappers this call was found through: multicall3, self_multicall, account_execute, entrypoint_v7.";
+    Via, "via", StrList, "call", "Wrappers this call was found through: multicall3, self_multicall, account_execute, entrypoint_v6, entrypoint_v7.";
     Depth, "depth", Num, "call", "How many wrappers deep (0 = called directly by the transaction).";
     Known, "known", Str, "call", "Name of the identified destination contract.";
     Protocol, "protocol", Str, "call", "Protocol id that owns the destination.";

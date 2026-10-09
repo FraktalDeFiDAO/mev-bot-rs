@@ -104,6 +104,7 @@ fn closed_set(f: FieldId) -> Option<Vec<&'static str>> {
             "multicall3",
             "self_multicall",
             "account_execute",
+            "entrypoint_v6",
             "entrypoint_v7",
         ]),
         _ => None,

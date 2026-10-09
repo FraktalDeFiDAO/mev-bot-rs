@@ -32,6 +32,7 @@ redb = "4.3"
 
 seqscope-core = { path = "crates/seqscope-core" }
 seqscope-store = { path = "crates/seqscope-store" }
+seqscope-cli = { path = "crates/seqscope-cli" }
 mev-types = { path = "crates/mev-types" }
 mev-config = { path = "crates/mev-config" }
 mev-bindings = { path = "crates/mev-bindings" }
