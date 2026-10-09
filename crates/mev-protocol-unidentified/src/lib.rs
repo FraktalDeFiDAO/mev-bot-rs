@@ -115,7 +115,7 @@ impl Protocol for Unidentified {
             },
             Contract {
                 address: packed::ROUTER_D,
-                name: "unidentified packed-calldata bot (b2460c48, b42ebb63, b7f49f3f decoded; 6bfd6286 not)",
+                name: "unidentified packed-calldata bot (b2460c48, b42ebb63, b7f49f3f on V3 pools; 6bfd6286 on V4 pools)",
                 decoded: true,
             },
         ]
