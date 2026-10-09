@@ -28,11 +28,26 @@ fn mev_protocol_v4_stand_in(id: &alloy::primitives::B256) -> Address {
 }
 
 /// One journal line for a log, or `None` when it is not an event the table knows (nothing is invented for those).
-pub fn event_line(log: &Log, store: &PoolStore, t_ms: u64) -> Option<Value> {
+pub fn event_line(
+    log: &Log,
+    store: &PoolStore,
+    watch: &std::collections::HashMap<Address, String>,
+    t_ms: u64,
+) -> Option<Value> {
     let topic0 = log.topics().first()?;
     let kind = events::classify(topic0)?;
     let pool = event_pool(log, kind.name);
     let known = store.get(&pool);
+    let dex = known
+        .map(|p| p.info.dex.clone())
+        .or_else(|| watch.get(&pool).cloned());
+    let tier = if known.is_some() {
+        "trade"
+    } else if dex.is_some() {
+        "watch"
+    } else {
+        "unlisted"
+    };
     let fields: serde_json::Map<String, Value> =
         events::describe(kind, log.topics(), log.data().data.as_ref())
             .into_iter()
@@ -46,8 +61,9 @@ pub fn event_line(log: &Log, store: &PoolStore, t_ms: u64) -> Option<Value> {
         "log_index": log.log_index,
         "pool": format!("{pool:#x}"),
         "emitter": format!("{:#x}", log.address()),
-        "dex": known.map(|p| p.info.dex.clone()),
-        "tracked": known.is_some(),
+        "dex": dex,
+        "tier": tier,
+        "tracked": tier != "unlisted",
         "kind": kind.name,
         "class": kind.class.as_str(),
         "protocol": kind.protocol,
@@ -101,10 +117,13 @@ mod tests {
             vec![kind_topic("swap_v3"), B256::ZERO, B256::ZERO],
             data,
         );
-        let v = event_line(&l, &PoolStore::default(), 1_000).unwrap();
+        let v = event_line(&l, &PoolStore::default(), &Default::default(), 1_000).unwrap();
         assert_eq!(v["kind"], "swap_v3");
         assert_eq!(v["class"], "swap");
-        assert_eq!(v["tracked"], false);
+        assert_eq!(
+            (v["tracked"].as_bool(), v["tier"].as_str()),
+            (Some(false), Some("unlisted"))
+        );
         assert_eq!(v["pool"], format!("{pool:#x}"));
         assert_eq!(
             (v["block"].as_u64(), v["log_index"].as_u64()),
@@ -123,7 +142,7 @@ mod tests {
             vec![kind_topic("swap_v4"), id, B256::ZERO],
             vec![0u8; 32 * 6],
         );
-        let v = event_line(&l, &PoolStore::default(), 1).unwrap();
+        let v = event_line(&l, &PoolStore::default(), &Default::default(), 1).unwrap();
         assert_eq!(v["pool"], format!("{:#x}", Address::from_slice(&id[12..])));
         assert_eq!(v["emitter"], format!("{manager:#x}"));
         assert_eq!(v["fields"]["pool_id"], format!("{id:#x}"));
@@ -136,10 +155,10 @@ mod tests {
             vec![B256::repeat_byte(0x11)],
             vec![],
         );
-        assert!(event_line(&l, &PoolStore::default(), 1).is_none());
+        assert!(event_line(&l, &PoolStore::default(), &Default::default(), 1).is_none());
         let none = Log::default();
         assert!(
-            event_line(&none, &PoolStore::default(), 1).is_none(),
+            event_line(&none, &PoolStore::default(), &Default::default(), 1).is_none(),
             "a log with no topics"
         );
     }
@@ -158,8 +177,29 @@ mod tests {
                 vec![kind_topic(name), B256::ZERO, B256::ZERO, B256::ZERO],
                 vec![0u8; 32 * 6],
             );
-            let v = event_line(&l, &PoolStore::default(), 1).unwrap();
+            let v = event_line(&l, &PoolStore::default(), &Default::default(), 1).unwrap();
             assert_eq!(v["class"], "liquidity", "{name}");
         }
+    }
+
+    #[test]
+    fn a_pool_in_the_watch_tier_is_journaled_as_watched_with_its_venue() {
+        let pool = Address::with_last_byte(0x61);
+        let watch: std::collections::HashMap<Address, String> =
+            [(pool, "uniswap_v3".to_string())].into_iter().collect();
+        let l = log(
+            pool,
+            vec![kind_topic("swap_v3"), B256::ZERO, B256::ZERO],
+            vec![0u8; 32 * 5],
+        );
+        let v = event_line(&l, &PoolStore::default(), &watch, 1).unwrap();
+        assert_eq!(
+            (
+                v["tier"].as_str(),
+                v["dex"].as_str(),
+                v["tracked"].as_bool()
+            ),
+            (Some("watch"), Some("uniswap_v3"), Some(true))
+        );
     }
 }

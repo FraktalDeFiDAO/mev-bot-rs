@@ -30,27 +30,32 @@ pub fn contract_addresses<'a>(pools: impl Iterator<Item = &'a PoolInfo>) -> Vec<
 
 pub fn describe<'a>(
     pools: impl Iterator<Item = &'a PoolInfo>,
+    watch: &[PoolInfo],
     dexes: &[(String, String, Address)],
     v4_manager: Option<Address>,
     lending: Value,
 ) -> Value {
-    let pools: Vec<Value> = pools
-        .map(|p| {
-            let (kind, fee) = kind_name(&p.kind);
-            let v4_id = match &p.kind {
-                PoolKind::UniV4 { id, .. } => Some(format!("{id:#x}")),
-                _ => None,
-            };
-            json!({
-                "address": format!("{:#x}", p.address),
-                "dex": p.dex,
-                "kind": kind,
-                "fee": fee,
-                "token0": format!("{:#x}", p.token0),
-                "token1": format!("{:#x}", p.token1),
-                "v4_id": v4_id,
-            })
+    // Trade-tier pools first, then the watch tier; `tier` tells them apart, and both are "tracked" for decoding checks.
+    let entry = |p: &PoolInfo, tier: &str| {
+        let (kind, fee) = kind_name(&p.kind);
+        let v4_id = match &p.kind {
+            PoolKind::UniV4 { id, .. } => Some(format!("{id:#x}")),
+            _ => None,
+        };
+        json!({
+            "address": format!("{:#x}", p.address),
+            "dex": p.dex,
+            "kind": kind,
+            "fee": fee,
+            "token0": format!("{:#x}", p.token0),
+            "token1": format!("{:#x}", p.token1),
+            "v4_id": v4_id,
+            "tier": tier,
         })
+    };
+    let pools: Vec<Value> = pools
+        .map(|p| entry(p, "trade"))
+        .chain(watch.iter().map(|p| entry(p, "watch")))
         .collect();
     json!({
         "dexes": dexes.iter().map(|(n, k, f)| json!({ "name": n, "kind": k, "factory": format!("{f:#x}") })).collect::<Vec<_>>(),
@@ -95,6 +100,7 @@ mod tests {
         ];
         let v = describe(
             ps.iter(),
+            &[info(7, PoolKind::UniV3 { fee: 500 })],
             &[(
                 "uniswap_v3".into(),
                 "UniV3".into(),
@@ -109,6 +115,12 @@ mod tests {
             .iter()
             .map(|p| p["kind"].as_str().unwrap().to_string())
             .collect();
+        assert_eq!(
+            v["pools"][6]["tier"], "watch",
+            "the watch tier follows the trade tier, marked"
+        );
+        assert_eq!(v["pools"][0]["tier"], "trade");
+        let kinds = &kinds[..6];
         assert_eq!(
             kinds,
             [
