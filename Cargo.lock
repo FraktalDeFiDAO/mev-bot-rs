@@ -5016,13 +5016,17 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "base64 0.23.1",
  "clap",
+ "futures",
  "mev-decode",
+ "mev-protocol-uniswap-router",
  "mev-sequencer",
  "seqscope-core",
  "seqscope-store",
  "serde_json",
  "tokio",
+ "tokio-tungstenite 0.30.0",
 ]
 
 [[package]]

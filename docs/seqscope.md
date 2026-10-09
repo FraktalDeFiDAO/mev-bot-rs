@@ -53,3 +53,22 @@ Measured in release (`cargo run --release -p seqscope-core --example bench`, `-p
 2.0 microseconds per transaction with 100 rules on an unknown contract, 4.6 on a Universal Router V4 swap (decoding
 included); the database takes 10,000 transactions/s (10x the feed's peak) storing every one with no drops, and a full
 queue drops rows *and counts them* (the status line shows `dropped`).
+
+## Testing
+
+`scripts/test-seqscope.sh` runs everything, offline, in the container, with no input from anyone:
+
+| Layer | What it protects |
+|---|---|
+| `mev-decode` unit + `calls` tests | wrapper unwrapping: Multicall3, router multicalls, smart accounts, ERC-4337 v0.6 and v0.7, depth and width bounds |
+| `seqscope-core` unit + engine tests | the rule language (parser property tests), every compiler error message, engine semantics, the rule file |
+| `seqscope-core` corpus tests | 2,049 real feed transactions (`tests/fixtures/corpus.jsonl`): invariants for every call, decoder accuracy against the chain (receipts in `corpus_chain.json`: 75/75 swaps name a pool the transaction really swapped in, 12/12 liquidity changes have an event), a golden summary of what the decoder reads, mutation fuzzing of 24,000 damaged inputs, engine properties |
+| `seqscope-store` tests | lossless round trip, filters, read-only SQL, `written + dropped + failed = sent` under pressure, persistence, schema versions, pruning, reading while writing |
+| `seqscope-cli` end-to-end tests | the real binary: every offline command and exit code, deterministic output, and the collector run against a local fake sequencer feed with a SIGTERM stop |
+| performance and load guards | under 20 microseconds per transaction with 100 rules; 10,000 tx/s with zero drops |
+
+`--live` adds a smoke test against the real feed (record 30 s, every template over the recording, database invariants, a
+20 s collector run that must drop nothing). `scripts/mutation-check-seqscope.sh` plants ten known bugs one at a time and
+fails if the suite does not notice any of them. After a deliberate decoder improvement the golden summary fails on
+purpose: regenerate it with `UPDATE_GOLDEN=1 scripts/test-seqscope.sh`, read the diff, commit it. To refresh the corpus,
+record a new one with `seqscope record`, list the decoded hashes, and run `scripts/build-corpus-truth.py`.

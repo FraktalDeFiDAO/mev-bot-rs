@@ -281,6 +281,29 @@ fn main() -> Result<()> {
     }
 }
 
+/// Ctrl-C or SIGTERM (what `kill`, systemd and `podman stop` send): either way the collector must flush its queue.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
 fn runtime() -> Result<tokio::runtime::Runtime> {
     Ok(tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -459,6 +482,8 @@ async fn run(source: Source, rules: RulesArg, db: DbArg, every: u64, print: bool
         source.url
     );
     let mut rx = feed(&source);
+    let stop = shutdown_signal();
+    tokio::pin!(stop);
     let mut tick = tokio::time::interval(Duration::from_secs(every.max(1)));
     tick.tick().await;
     let (mut txs, mut stored, mut last_txs) = (0u64, 0u64, 0u64);
@@ -483,7 +508,7 @@ async fn run(source: Source, rules: RulesArg, db: DbArg, every: u64, print: bool
                 last_txs = txs;
                 if let Some(err) = s.last_error { eprintln!("storage error: {err}"); }
             }
-            _ = tokio::signal::ctrl_c() => {
+            _ = &mut stop => {
                 eprintln!("stopping; writing what is queued…");
                 break;
             }
@@ -506,6 +531,8 @@ async fn tail(source: Source, rules: RulesArg, json: bool, limit: Option<u64>) -
     }
     let mut live = Live::open(&rules)?;
     let mut rx = feed(&source);
+    let stop = shutdown_signal();
+    tokio::pin!(stop);
     let mut shown = 0u64;
     loop {
         tokio::select! {
@@ -517,7 +544,7 @@ async fn tail(source: Source, rules: RulesArg, json: bool, limit: Option<u64>) -
                     if limit.is_some_and(|l| shown >= l) { return Ok(()); }
                 }
             }
-            _ = tokio::signal::ctrl_c() => return Ok(()),
+            _ = &mut stop => return Ok(()),
         }
     }
 }

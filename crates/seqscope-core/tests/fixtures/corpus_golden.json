@@ -1,0 +1,19 @@
+{
+  "liquidity/uniswap_v3": 12,
+  "swap/unidentified": 77,
+  "swap/uniswap_router": 3,
+  "swap/uniswap_v2": 7,
+  "transactions": 2049,
+  "undecoded_known/-": 5,
+  "undecoded_known/aave_v3": 2,
+  "undecoded_known/unidentified": 31,
+  "undecoded_known/uniswap_router": 3,
+  "undecoded_known/uniswap_v3": 1,
+  "unknown/-": 2138,
+  "wrapped/account_execute": 7,
+  "wrapped/entrypoint_v6>account_execute": 44,
+  "wrapped/entrypoint_v7": 19,
+  "wrapped/multicall3": 16,
+  "wrapped/self_multicall": 188,
+  "wrapped/self_multicall>self_multicall": 44
+}
