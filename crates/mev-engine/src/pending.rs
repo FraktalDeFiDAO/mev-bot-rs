@@ -92,8 +92,13 @@ impl PendingSwaps {
             .retain(|_, (_, at)| now.saturating_duration_since(*at) < PENDING_TTL);
     }
 
-    pub fn len(&self) -> usize {
-        self.open.len()
+    /// Entries still within their time limit. (Expired ones stay in the map until the next sweep; they no longer
+    /// count and no longer block anything.)
+    pub fn open_count(&self, now: Instant) -> usize {
+        self.open
+            .values()
+            .filter(|(_, at)| now.saturating_duration_since(*at) < PENDING_TTL)
+            .count()
     }
 
     #[cfg(test)]
@@ -165,7 +170,10 @@ mod tests {
                 .is_some()
         );
         assert_eq!(p.conflict(&[a(1)], t0 + PENDING_TTL), None);
+        assert_eq!(p.open_count(t0 + PENDING_TTL - Duration::from_millis(1)), 1);
+        assert_eq!(p.open_count(t0 + PENDING_TTL), 0);
+        assert_eq!(p.open.len(), 1, "swept only on prune");
         p.prune(t0 + PENDING_TTL);
-        assert_eq!(p.len(), 0);
+        assert_eq!(p.open.len(), 0);
     }
 }

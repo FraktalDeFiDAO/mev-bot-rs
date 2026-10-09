@@ -1424,7 +1424,7 @@ impl Engine {
             decoded_swaps_on_tracked_pools = inserted,
             settled_by_presim = by_presim,
             settled_by_block_log = by_block,
-            still_open = self.pending.len(),
+            still_open = self.pending.open_count(Instant::now()),
             "sequencer feed (last minute)"
         );
         if self.presim_rx.is_some() || self.cfg.presim.as_ref().is_some_and(|p| p.enabled) {
