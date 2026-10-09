@@ -20,7 +20,7 @@ use alloy::{
     sol_types::SolCall,
 };
 
-use crate::{Decoded, decode_call};
+use crate::{Decoded, decode_calls};
 
 sol! {
     interface Multicall3 {
@@ -96,9 +96,24 @@ pub fn calls_in(to: Address, input: &[u8]) -> Vec<Leaf> {
 pub fn actions_in(to: Address, input: &[u8]) -> Vec<Action> {
     calls_in(to, input)
         .into_iter()
-        .map(|leaf| {
-            let decoded = decode_call(leaf.to, &leaf.input);
-            Action { leaf, decoded }
+        .flat_map(|leaf| {
+            // One action per intent in the leaf (a Universal Router `execute` can hold several swaps); a leaf nothing
+            // reads is a single action with no decoding.
+            let intents = decode_calls(leaf.to, &leaf.input);
+            if intents.is_empty() {
+                vec![Action {
+                    leaf,
+                    decoded: None,
+                }]
+            } else {
+                intents
+                    .into_iter()
+                    .map(|d| Action {
+                        leaf: leaf.clone(),
+                        decoded: Some(d),
+                    })
+                    .collect()
+            }
         })
         .collect()
 }

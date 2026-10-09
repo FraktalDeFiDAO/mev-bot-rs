@@ -163,6 +163,11 @@ pub trait Protocol: Sync {
     fn decode_call(&self, _to: Address, _input: &[u8]) -> Option<Decoded> {
         None
     }
+    /// Every intent in a call to `to`, for calls that carry several (a Universal Router `execute` with a swap per
+    /// command). Defaults to the single `decode_call` result.
+    fn decode_calls(&self, to: Address, input: &[u8]) -> Vec<Decoded> {
+        self.decode_call(to, input).into_iter().collect()
+    }
     /// Destinations identified for this protocol, decoded or not.
     fn contracts(&self) -> Vec<Contract> {
         Vec::new()

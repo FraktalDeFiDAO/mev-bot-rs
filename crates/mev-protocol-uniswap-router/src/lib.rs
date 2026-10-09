@@ -57,6 +57,11 @@ pub const UNIVERSAL_ROUTER_2: Address = address!("2d01411773c8c24805306e89a41f78
 /// Universal Router command ids (low 5 bits of each command byte; the top bit means "allow revert").
 const CMD_V3_SWAP_EXACT_IN: u8 = 0x00;
 const CMD_V2_SWAP_EXACT_IN: u8 = 0x08;
+const CMD_V4_SWAP: u8 = 0x10;
+/// Uniswap V4 router action ids inside a `V4_SWAP` command (v4-periphery `Actions`).
+const V4_SWAP_EXACT_IN_SINGLE: u8 = 0x06;
+const V4_SWAP_EXACT_IN: u8 = 0x07;
+const V4_SETTLE: u8 = 0x0b;
 /// Nested calls are followed this deep (a multicall inside a multicall).
 const MAX_DEPTH: usize = 2;
 
@@ -193,31 +198,189 @@ fn swap_router_v1(input: &[u8]) -> Option<SwapIntent> {
     None
 }
 
-fn universal_router(input: &[u8]) -> Option<SwapIntent> {
-    let (sel, args) = abi::split(input)?;
+/// Every exact-input swap in a Universal Router `execute`, in command order: V3 and V2 exact-in commands and the
+/// exact-in swaps inside `V4_SWAP` commands. Exact-output swaps and swaps that spend the router's own balance are not
+/// read (their input amount is not in the calldata).
+fn universal_router(input: &[u8]) -> Vec<SwapIntent> {
+    let Some((sel, args)) = abi::split(input) else {
+        return Vec::new();
+    };
     let (commands, inputs) = if sel == UniversalRouter::executeCall::SELECTOR {
-        let c = UniversalRouter::executeCall::abi_decode_raw(args).ok()?;
-        (c.commands, c.inputs)
+        match UniversalRouter::executeCall::abi_decode_raw(args) {
+            Ok(c) => (c.commands, c.inputs),
+            Err(_) => return Vec::new(),
+        }
     } else if sel == UniversalRouterNoDeadline::executeCall::SELECTOR {
-        let c = UniversalRouterNoDeadline::executeCall::abi_decode_raw(args).ok()?;
-        (c.commands, c.inputs)
+        match UniversalRouterNoDeadline::executeCall::abi_decode_raw(args) {
+            Ok(c) => (c.commands, c.inputs),
+            Err(_) => return Vec::new(),
+        }
     } else {
-        return None;
+        return Vec::new();
     };
     commands
         .iter()
         .zip(inputs.iter())
-        .find_map(|(cmd, data)| match cmd & 0x1f {
-            CMD_V3_SWAP_EXACT_IN => {
-                let c = UrV3ExactIn::inputCall::abi_decode_raw(data).ok()?;
-                v3_path_swap(&c.path, c.amountIn)
+        .flat_map(|(cmd, data)| -> Vec<SwapIntent> {
+            match cmd & 0x1f {
+                CMD_V3_SWAP_EXACT_IN => UrV3ExactIn::inputCall::abi_decode_raw(data)
+                    .ok()
+                    .and_then(|c| v3_path_swap(&c.path, c.amountIn))
+                    .into_iter()
+                    .collect(),
+                CMD_V2_SWAP_EXACT_IN => UrV2ExactIn::inputCall::abi_decode_raw(data)
+                    .ok()
+                    .and_then(|c| v2_path_swap(&c.path, c.amountIn))
+                    .into_iter()
+                    .collect(),
+                CMD_V4_SWAP => v4_swaps(data),
+                _ => Vec::new(),
             }
-            CMD_V2_SWAP_EXACT_IN => {
-                let c = UrV2ExactIn::inputCall::abi_decode_raw(data).ok()?;
-                v2_path_swap(&c.path, c.amountIn)
-            }
+        })
+        .collect()
+}
+
+sol! {
+    interface UrV4Swap {
+        function input(bytes actions, bytes[] params) external;
+    }
+    struct V4PoolKey { address currency0; address currency1; uint24 fee; int24 tickSpacing; address hooks; }
+    struct V4ExactInSingle { V4PoolKey poolKey; bool zeroForOne; uint128 amountIn; uint128 amountOutMinimum; bytes hookData; }
+    function v4ExactInSingle(V4ExactInSingle params) external;
+}
+
+/// The word at byte `at` of `data`, if it is all there.
+fn word_at(data: &[u8], at: usize) -> Option<U256> {
+    data.get(at..at.checked_add(32)?).map(U256::from_be_slice)
+}
+
+fn addr_at(data: &[u8], at: usize) -> Option<Address> {
+    let w = data.get(at..at.checked_add(32)?)?;
+    w[..12]
+        .iter()
+        .all(|b| *b == 0)
+        .then(|| Address::from_slice(&w[12..]))
+}
+
+fn usize_at(data: &[u8], at: usize) -> Option<usize> {
+    usize::try_from(word_at(data, at)?)
+        .ok()
+        .filter(|v| *v < (1 << 24))
+}
+
+/// A V4 first hop: the pool's stand-in address (see `mev_protocol::v4`), swapping `token_in` for the other currency.
+fn v4_hop(
+    token_in: Address,
+    other: Address,
+    (fee, tick_spacing, hooks): (u32, i32, Address),
+    amount_in: U256,
+    hops: u8,
+) -> Option<SwapIntent> {
+    let (c0, c1) = if token_in < other {
+        (token_in, other)
+    } else {
+        (other, token_in)
+    };
+    let id = mev_protocol::v4::pool_id(c0, c1, fee, tick_spacing, hooks);
+    Some(SwapIntent {
+        pool: PoolRef::Address(mev_protocol::v4::stand_in(id)),
+        token_in,
+        amount_in: real_amount(amount_in)?,
+        sqrt_limit_x96: None,
+        hops,
+    })
+}
+
+/// `SWAP_EXACT_IN_SINGLE`: `abi.encode(ExactInputSingleParams)`.
+fn v4_exact_in_single(p: &[u8], settled: &[(Address, U256)]) -> Option<SwapIntent> {
+    let c = v4ExactInSingleCall::abi_decode_raw(p).ok()?;
+    let k = &c.params.poolKey;
+    let token_in = if c.params.zeroForOne {
+        k.currency0
+    } else {
+        k.currency1
+    };
+    let other = if c.params.zeroForOne {
+        k.currency1
+    } else {
+        k.currency0
+    };
+    let mut amount = U256::from(c.params.amountIn);
+    if amount.is_zero() {
+        // OPEN_DELTA: swap whatever the earlier SETTLE paid in.
+        amount = settled.iter().find(|(cur, _)| *cur == token_in)?.1;
+    }
+    v4_hop(
+        token_in,
+        other,
+        (k.fee.to::<u32>(), k.tickSpacing.as_i32(), k.hooks),
+        amount,
+        1,
+    )
+}
+
+/// `SWAP_EXACT_IN` (multi-hop): `abi.encode(ExactInputParams)`, whose first hop is read. Two layouts are live: the
+/// first deployment has `(currencyIn, path, amountIn, amountOutMinimum)`, the newer one adds a `maxHopSlippage` array
+/// after `path`; the offset of `path` (4 or 5 head words) tells them apart.
+fn v4_exact_in(p: &[u8], settled: &[(Address, U256)]) -> Option<SwapIntent> {
+    if usize_at(p, 0)? != 32 {
+        return None;
+    }
+    let s = 32;
+    let currency_in = addr_at(p, s)?;
+    let path_off = usize_at(p, s + 32)?;
+    let amount_at = match path_off {
+        128 => s + 64,
+        160 => s + 96,
+        _ => return None,
+    };
+    let mut amount = word_at(p, amount_at)?;
+    let path = s + path_off;
+    let n = usize_at(p, path)?;
+    if n == 0 || n > 8 {
+        return None;
+    }
+    // Elements are dynamic structs (they end in `bytes hookData`), so each is reached through an offset.
+    let el = path + 32 + usize_at(p, path + 32)?;
+    let intermediate = addr_at(p, el)?;
+    let fee = u32::try_from(word_at(p, el + 32)?).ok()?;
+    let spacing_word = p.get(el + 64..el + 96)?;
+    let tick_spacing = i32::from_be_bytes(spacing_word[28..32].try_into().ok()?);
+    let hooks = addr_at(p, el + 96)?;
+    if amount.is_zero() {
+        amount = settled.iter().find(|(cur, _)| *cur == currency_in)?.1;
+    }
+    v4_hop(
+        currency_in,
+        intermediate,
+        (fee, tick_spacing, hooks),
+        amount,
+        u8::try_from(n).ok()?,
+    )
+}
+
+/// Every exact-input swap inside a `V4_SWAP` command's input (`abi.encode(bytes actions, bytes[] params)`).
+fn v4_swaps(data: &[u8]) -> Vec<SwapIntent> {
+    let Ok(c) = UrV4Swap::inputCall::abi_decode_raw(data) else {
+        return Vec::new();
+    };
+    // Amounts the actions settle first, for swaps that use "whatever was settled".
+    let settled: Vec<(Address, U256)> = c
+        .actions
+        .iter()
+        .zip(c.params.iter())
+        .filter(|(a, _)| **a == V4_SETTLE)
+        .filter_map(|(_, p)| Some((addr_at(p, 0)?, word_at(p, 32)?)))
+        .collect();
+    c.actions
+        .iter()
+        .zip(c.params.iter())
+        .filter_map(|(a, p)| match *a {
+            V4_SWAP_EXACT_IN_SINGLE => v4_exact_in_single(p, &settled),
+            V4_SWAP_EXACT_IN => v4_exact_in(p, &settled),
             _ => None,
         })
+        .collect()
 }
 
 pub struct UniswapRouter;
@@ -237,11 +400,22 @@ impl Protocol for UniswapRouter {
         } else if to == SWAP_ROUTER_V1 {
             swap_router_v1(input)
         } else if to == UNIVERSAL_ROUTER || to == UNIVERSAL_ROUTER_2 {
-            universal_router(input)
+            universal_router(input).into_iter().next()
         } else {
             None
         };
         swap.map(Decoded::Swap)
+    }
+
+    fn decode_calls(&self, to: Address, input: &[u8]) -> Vec<Decoded> {
+        if to == UNIVERSAL_ROUTER || to == UNIVERSAL_ROUTER_2 {
+            universal_router(input)
+                .into_iter()
+                .map(Decoded::Swap)
+                .collect()
+        } else {
+            self.decode_call(to, input).into_iter().collect()
+        }
     }
 
     fn contracts(&self) -> Vec<Contract> {
@@ -258,12 +432,12 @@ impl Protocol for UniswapRouter {
             },
             Contract {
                 address: UNIVERSAL_ROUTER,
-                name: "Uniswap Universal Router (V2/V3 exact-in commands decoded)",
+                name: "Uniswap Universal Router (V2/V3/V4 exact-in commands decoded)",
                 decoded: true,
             },
             Contract {
                 address: UNIVERSAL_ROUTER_2,
-                name: "Universal Router, second deployment (V2/V3 exact-in commands decoded)",
+                name: "Universal Router, second deployment (V2/V3/V4 exact-in commands decoded)",
                 decoded: true,
             },
         ]
@@ -542,5 +716,137 @@ mod tests {
         assert_eq!(first_hop(&[0u8; 44]), None);
         assert!(first_hop(&[0u8; 43]).is_some());
         assert_eq!(first_hop(&[0u8; 66]).map(|h| h.3), Some(2));
+    }
+
+    /// Real Universal Router `V4_SWAP` transactions (three layouts: the newer deployment's multi-hop with
+    /// `maxHopSlippage`, the first deployment's without it, and a SETTLE-first bundle whose swap is not param 0). The
+    /// expected pool is the id the chain's own V4 `Swap` log names for the first hop.
+    #[test]
+    fn real_universal_router_v4_swaps_name_the_pool_the_chain_logged() {
+        let rows = include_str!("../tests/fixtures/ur_v4_rows.csv");
+        let mut n = 0;
+        for row in rows.lines().skip(1) {
+            let f: Vec<&str> = row.split(',').collect();
+            let to: Address = f[1].parse().unwrap();
+            let input = alloy::hex::decode(f[2].trim_start_matches("0x")).unwrap();
+            let id: alloy::primitives::B256 = f[3].parse().unwrap();
+            let swaps = UniswapRouter.decode_calls(to, &input);
+            let first = match swaps.first() {
+                Some(Decoded::Swap(s)) => s,
+                other => panic!("{}: not decoded: {other:?}", f[0]),
+            };
+            assert_eq!(
+                first.pool,
+                PoolRef::Address(mev_protocol::v4::stand_in(id)),
+                "{}",
+                f[0]
+            );
+            assert!(first.amount_in > U256::ZERO, "{}", f[0]);
+            assert_eq!(
+                UniswapRouter.decode_call(to, &input),
+                swaps.first().cloned(),
+                "decode_call is the first of decode_calls"
+            );
+            n += 1;
+        }
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn the_known_amounts_of_the_real_transactions_are_read() {
+        let rows = include_str!("../tests/fixtures/ur_v4_rows.csv");
+        let amounts: Vec<U256> = rows
+            .lines()
+            .skip(1)
+            .map(|row| {
+                let f: Vec<&str> = row.split(',').collect();
+                let input = alloy::hex::decode(f[2].trim_start_matches("0x")).unwrap();
+                match UniswapRouter
+                    .decode_calls(f[1].parse().unwrap(), &input)
+                    .first()
+                {
+                    Some(Decoded::Swap(s)) => s.amount_in,
+                    other => panic!("{other:?}"),
+                }
+            })
+            .collect();
+        // Read off the chain: 110,000,000 (6-decimal token), 0.43 ETH, 78,974,100 (settled by an earlier action).
+        assert_eq!(
+            amounts,
+            vec![
+                U256::from(110_000_000u64),
+                U256::from(430_000_000_000_000_000u64),
+                U256::from(78_974_100u64)
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_v4_params_decode_nothing_and_never_panic() {
+        // Truncations and garbage of a real input, at every length.
+        let rows = include_str!("../tests/fixtures/ur_v4_rows.csv");
+        let f: Vec<&str> = rows.lines().nth(1).unwrap().split(',').collect();
+        let input = alloy::hex::decode(f[2].trim_start_matches("0x")).unwrap();
+        let to: Address = f[1].parse().unwrap();
+        for cut in (0..input.len()).step_by(7) {
+            let _ = UniswapRouter.decode_calls(to, &input[..cut]);
+        }
+        let mut junk = input.clone();
+        for b in junk.iter_mut().skip(200) {
+            *b = 0xff;
+        }
+        assert!(
+            UniswapRouter.decode_calls(to, &junk).is_empty(),
+            "a huge offset or amount decodes nothing"
+        );
+        assert!(v4_swaps(&[0u8; 10]).is_empty());
+    }
+
+    #[test]
+    fn a_v4_single_hop_swap_reads_direction_amount_and_pool_and_one_command_can_hold_two() {
+        let (c0, c1) = (Address::with_last_byte(0x10), Address::with_last_byte(0x20));
+        let hooks = Address::with_last_byte(0x99);
+        let single = |zero_for_one: bool, amount: u128| {
+            v4ExactInSingleCall {
+                params: V4ExactInSingle {
+                    poolKey: V4PoolKey {
+                        currency0: c0,
+                        currency1: c1,
+                        fee: alloy::primitives::Uint::<24, 1>::from(3000u32),
+                        tickSpacing: alloy::primitives::Signed::<24, 1>::try_from(60i32).unwrap(),
+                        hooks,
+                    },
+                    zeroForOne: zero_for_one,
+                    amountIn: amount,
+                    amountOutMinimum: 0,
+                    hookData: Default::default(),
+                },
+            }
+            .abi_encode()[4..]
+                .to_vec()
+        };
+        let v4 = UrV4Swap::inputCall {
+            actions: vec![V4_SWAP_EXACT_IN_SINGLE, V4_SWAP_EXACT_IN_SINGLE].into(),
+            params: vec![single(true, 1_000).into(), single(false, 2_000).into()],
+        }
+        .abi_encode()[4..]
+            .to_vec();
+        let exec = UniversalRouterNoDeadline::executeCall {
+            commands: Bytes::from(vec![CMD_V4_SWAP]),
+            inputs: vec![v4.into()],
+        };
+        let swaps = UniswapRouter.decode_calls(UNIVERSAL_ROUTER, &exec.abi_encode());
+        assert_eq!(swaps.len(), 2, "both swaps of the command, in order");
+        let id = mev_protocol::v4::pool_id(c0, c1, 3000, 60, hooks);
+        let want = |token_in, amount: u64| {
+            Decoded::Swap(SwapIntent {
+                pool: PoolRef::Address(mev_protocol::v4::stand_in(id)),
+                token_in,
+                amount_in: U256::from(amount),
+                sqrt_limit_x96: None,
+                hops: 1,
+            })
+        };
+        assert_eq!(swaps, vec![want(c0, 1_000), want(c1, 2_000)]);
     }
 }
