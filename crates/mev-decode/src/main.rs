@@ -57,17 +57,38 @@ fn liquidation_json(l: &LiquidationIntent) -> Value {
     })
 }
 
+fn decoded_json(d: Decoded) -> Value {
+    match d {
+        Decoded::Swap(s) => swap_json(&s),
+        Decoded::Liquidity(l) => liquidity_json(&l),
+        Decoded::Liquidation(l) => liquidation_json(&l),
+    }
+}
+
+/// The transaction's own decoding, and every action in it (through multicall, Multicall3, smart-account and
+/// ERC-4337 wrappers), each with the wrappers it was found through and whether its destination is identified.
 fn describe(to: Option<Address>, input: &[u8]) -> Value {
     let decoded = to.and_then(|t| mev_decode::decode_call(t, input));
+    let actions: Vec<Value> = to
+        .map(|t| mev_decode::calls::actions_in(t, input))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| {
+            json!({
+                "to": format!("{:#x}", a.leaf.to),
+                "selector": a.leaf.selector().map(alloy::hex::encode),
+                "via": a.leaf.via,
+                "known_contract": known_contract(a.leaf.to).map(|c| json!({ "name": c.name, "decoded": c.decoded })),
+                "decoded": a.decoded.map(decoded_json),
+            })
+        })
+        .collect();
     json!({
         "to": to.map(|a| format!("{a:#x}")),
         "selector": input.get(..4).map(alloy::hex::encode),
         "known_contract": to.and_then(known_contract).map(|c| json!({ "name": c.name, "decoded": c.decoded })),
-        "decoded": decoded.map(|d| match d {
-            Decoded::Swap(s) => swap_json(&s),
-            Decoded::Liquidity(l) => liquidity_json(&l),
-            Decoded::Liquidation(l) => liquidation_json(&l),
-        }),
+        "decoded": decoded.map(decoded_json),
+        "actions": actions,
     })
 }
 

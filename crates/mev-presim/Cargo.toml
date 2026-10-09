@@ -17,3 +17,6 @@ futures = { workspace = true }
 mev-bindings = { workspace = true }
 mev-decode = { workspace = true }
 mev-sequencer = { workspace = true }
+
+[dev-dependencies]
+mev-protocol-uniswap-router = { workspace = true }
