@@ -656,3 +656,293 @@ async fn a_replayed_recording_drives_the_whole_pipeline_with_no_network() {
     tasks.abort();
     assert!(n > 2_000, "the replay stored only {n} rows");
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// The guided interface: plain English, a readable rule list, edits without the text
+
+#[tokio::test]
+async fn any_rule_can_be_explained_in_plain_english_and_a_bad_one_says_why() {
+    let h = H::new(None, false);
+    let (s, v) = h.post("/api/explain", json!({"when": "kind == swap && swap.token_in == 0xaf88d065e77c8cC2239327C5EDb3A432268e5831 && swap.amount_in >= 10000e6"})).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        v["text"],
+        "Catches a call when it is a swap and it sells at least 10,000 USDC."
+    );
+    let (s, v) = h.post("/api/explain", json!({"when": "kind =="})).await;
+    assert_eq!(
+        (s, v["ok"].as_bool()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some(false))
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("expected a value")
+    );
+    assert_eq!(v["error"]["column"], 8);
+    let (s, v) = h
+        .post("/api/explain", json!({"when": "swap.amount > 1"}))
+        .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("did you mean swap.amount_in")
+    );
+}
+
+#[tokio::test]
+async fn the_catalogue_carries_names_for_pickers() {
+    let h = H::new(None, false);
+    let (_, v) = h.get("/api/catalogue").await;
+    assert!(
+        v["tokens"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["symbol"] == "USDC" && t["decimals"] == 6)
+    );
+    assert!(
+        v["protocols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["id"] == "aave_v3" && p["label"] == "Aave V3")
+    );
+    assert!(
+        v["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| !f["label"].as_str().unwrap().is_empty())
+    );
+    assert!(
+        v["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f[0] == "a415bcad" && f[1] == "Aave: borrow")
+    );
+    assert!(v["wrapper_labels"].as_array().unwrap().len() >= 5);
+}
+
+async fn op(h: &H, body: Value) -> (StatusCode, Value) {
+    h.post("/api/rules/op", body).await
+}
+
+fn new_rule(name: &str, when: &str) -> Value {
+    json!({"name": name, "when": when})
+}
+
+#[tokio::test]
+async fn rules_are_added_switched_changed_and_removed_without_touching_text() {
+    let h = H::new(None, false);
+    // Add: the file is created, the running rules switch, and the list says what the rule means.
+    let (s, v) = op(&h, json!({"op": "add_rule", "profile": "My rules", "rule": new_rule("big swaps", "kind == swap && swap.amount_in > 1e15")})).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(
+        std::fs::read_to_string(h.dir.join("r.toml"))
+            .unwrap()
+            .contains("big swaps")
+    );
+    h.feed_corpus(600);
+    assert!(h.wait_rows(1) > 0);
+    let (_, v) = h.get("/api/rules").await;
+    let rule = &v["rules"][0];
+    assert_eq!(
+        (
+            rule["profile"].as_str(),
+            rule["name"].as_str(),
+            rule["enabled"].as_bool()
+        ),
+        (Some("My rules"), Some("big swaps"), Some(true))
+    );
+    assert!(
+        rule["explain"]
+            .as_str()
+            .unwrap()
+            .starts_with("Catches a call when it is a swap")
+    );
+    assert!(rule["matches"].as_u64().unwrap() > 0, "{rule}");
+    assert!(rule["stored"].as_u64().unwrap() > 0);
+
+    // Refusals: a duplicate name, an unknown field, an unknown rule: each says why and changes nothing.
+    let before = std::fs::read_to_string(h.dir.join("r.toml")).unwrap();
+    for (body, needle) in [
+        (
+            json!({"op": "add_rule", "profile": "My rules", "rule": new_rule("big swaps", "true")}),
+            "already a rule named",
+        ),
+        (
+            json!({"op": "add_rule", "profile": "My rules", "rule": new_rule("x", "swap.amount > 1")}),
+            "did you mean swap.amount_in",
+        ),
+        (
+            json!({"op": "add_rule", "profile": "My rules", "rule": new_rule("  ", "true")}),
+            "needs a name",
+        ),
+        (
+            json!({"op": "set_enabled", "profile": "My rules", "rule": "ghost", "enabled": false}),
+            "no rule",
+        ),
+        (
+            json!({"op": "remove_rule", "profile": "nope", "rule": "big swaps"}),
+            "no profile",
+        ),
+        (
+            json!({"op": "add_template", "name": "nope"}),
+            "no starter set",
+        ),
+    ] {
+        let (s, v) = op(&h, body).await;
+        assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+        assert!(v["error"].as_str().unwrap().contains(needle), "{v}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(h.dir.join("r.toml")).unwrap(),
+        before
+    );
+
+    // Switch off: it stops catching, and the list still shows it, off.
+    let (s, _) = op(
+        &h,
+        json!({"op": "set_enabled", "profile": "My rules", "rule": "big swaps", "enabled": false}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let count = Reader::open(h.dir.join("x.db")).unwrap().count().unwrap();
+    h.feed_corpus(600);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        Reader::open(h.dir.join("x.db")).unwrap().count().unwrap(),
+        count,
+        "a switched-off rule stores nothing"
+    );
+    let (_, v) = h.get("/api/rules").await;
+    assert_eq!(v["rules"][0]["enabled"], false);
+
+    // Change it, then remove it.
+    let (s, _) = op(&h, json!({"op": "update_rule", "profile": "My rules", "rule": "big swaps", "patch": {"name": "huge swaps", "action": "alert", "tag": "whale", "enabled": true}})).await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v) = h.get("/api/rules").await;
+    let r = &v["rules"][0];
+    assert_eq!(
+        (
+            r["name"].as_str(),
+            r["action"].as_str(),
+            r["tag"].as_str(),
+            r["enabled"].as_bool()
+        ),
+        (Some("huge swaps"), Some("alert"), Some("whale"), Some(true))
+    );
+    let (s, _) = op(
+        &h,
+        json!({"op": "remove_rule", "profile": "My rules", "rule": "huge swaps"}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (_, v) = h.get("/api/rules").await;
+    assert!(v["rules"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn starter_sets_are_listed_in_words_and_added_once() {
+    let h = H::new(None, false);
+    let (_, v) = h.get("/api/templates").await;
+    let list = v.as_array().unwrap();
+    assert!(list.len() >= 6);
+    let aave = list.iter().find(|t| t["name"] == "aave-lending").unwrap();
+    assert_eq!(aave["new"], 5);
+    assert!(
+        aave["rules"][1]["explain"]
+            .as_str()
+            .unwrap()
+            .contains("Aave: borrow"),
+        "{aave}"
+    );
+    let (s, v) = op(&h, json!({"op": "add_template", "name": "aave-lending"})).await;
+    assert_eq!(
+        (s, v["added"].as_u64(), v["skipped"].as_u64()),
+        (StatusCode::OK, Some(5), Some(0))
+    );
+    let (_, v) = op(&h, json!({"op": "add_template", "name": "aave-lending"})).await;
+    assert_eq!(
+        (v["added"].as_u64(), v["skipped"].as_u64()),
+        (Some(0), Some(5)),
+        "adding it again changes nothing"
+    );
+    let (_, v) = h.get("/api/templates").await;
+    assert_eq!(
+        v.as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "aave-lending")
+            .unwrap()["new"],
+        0
+    );
+    let (_, v) = h.get("/api/rules").await;
+    assert_eq!(v["rules"].as_array().unwrap().len(), 5);
+}
+
+#[tokio::test]
+async fn a_guided_edit_keeps_the_notes_at_the_top_of_the_file_and_refuses_a_broken_file() {
+    let h = H::new(
+        Some(
+            "# my notes: keep these\n# second line\n\nversion = 1\n[[profile]]\nname = \"p\"\n[[profile.rule]]\nname = \"a\"\nwhen = \"kind == swap\"\n",
+        ),
+        false,
+    );
+    let (s, v) = op(
+        &h,
+        json!({"op": "add_rule", "profile": "p", "rule": new_rule("b", "kind == liquidity")}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let text = std::fs::read_to_string(h.dir.join("r.toml")).unwrap();
+    assert!(
+        text.starts_with("# my notes: keep these\n# second line\n"),
+        "{text}"
+    );
+    assert!(text.contains("name = \"b\"") && text.contains("name = \"a\""));
+    // A file that does not even parse cannot be edited this way, and is not overwritten.
+    std::fs::write(h.dir.join("r.toml"), "version = 1\n[[profile]\nbroken").unwrap();
+    h.st.reload_rules_file();
+    let (s, v) = op(
+        &h,
+        json!({"op": "add_rule", "profile": "p", "rule": new_rule("c", "true")}),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        v["error"]
+            .as_str()
+            .unwrap()
+            .contains("fixed in the text view"),
+        "{v}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(h.dir.join("r.toml")).unwrap(),
+        "version = 1\n[[profile]\nbroken"
+    );
+}
+
+#[tokio::test]
+async fn simultaneous_edits_all_land() {
+    let h = Arc::new(H::new(None, false));
+    let mut tasks = Vec::new();
+    for i in 0..8 {
+        let h = h.clone();
+        tasks.push(tokio::spawn(async move { op(&h, json!({"op": "add_rule", "profile": "p", "rule": new_rule(&format!("rule {i}"), "kind == swap")})).await.0 }));
+    }
+    for t in tasks {
+        assert_eq!(t.await.unwrap(), StatusCode::OK);
+    }
+    let (_, v) = h.get("/api/rules").await;
+    assert_eq!(
+        v["rules"].as_array().unwrap().len(),
+        8,
+        "no edit overwrote another"
+    );
+}

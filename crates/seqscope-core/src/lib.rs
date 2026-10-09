@@ -12,12 +12,15 @@
 pub mod catalogue;
 pub mod compile;
 pub mod engine;
+pub mod explain;
 pub mod expr;
 pub mod field;
+pub mod names;
+pub mod templates;
 pub mod tx;
 pub mod value;
 
 pub use engine::{
-    ActionKind, Engine, Mode, Preview, Profile, Row, Rule, RuleError, RuleSet, preview,
+    ActionKind, Engine, Mode, Preview, Profile, Row, Rule, RuleError, RulePatch, RuleSet, preview,
 };
 pub use tx::Tx;

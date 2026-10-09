@@ -34,7 +34,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use seqscope_core::{Engine, Preview, Row, RuleError, RuleSet, Tx, catalogue};
+use seqscope_core::{
+    ActionKind, Engine, Preview, Row, Rule, RuleError, RulePatch, RuleSet, Tx, catalogue,
+};
 use seqscope_store::{Ingest, Query as RowQuery, Reader};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -69,6 +71,8 @@ pub struct AppState {
     rows_tx: broadcast::Sender<Arc<str>>,
     txs_tx: broadcast::Sender<Arc<Tx>>,
     recent: Mutex<VecDeque<Tx>>,
+    /// One rules edit at a time: each reads the file, changes it and writes it back.
+    edits: Mutex<()>,
     txs: AtomicU64,
     rows: AtomicU64,
     started: Instant,
@@ -144,6 +148,7 @@ impl AppState {
             rows_tx,
             txs_tx,
             recent: Mutex::new(VecDeque::with_capacity(RECENT)),
+            edits: Mutex::new(()),
             txs: AtomicU64::new(0),
             rows: AtomicU64::new(0),
             started: Instant::now(),
@@ -351,9 +356,61 @@ async fn get_catalogue() -> Json<catalogue::Catalogue> {
 }
 
 async fn get_rules(State(st): State<Arc<AppState>>) -> Json<Value> {
-    let r = st.rules.read().unwrap();
+    let (text, errors) = {
+        let r = st.rules.read().unwrap();
+        (r.text.clone(), r.errors.clone())
+    };
+    // The rules as a list a person can read: what each one means, and what it has caught.
+    let mut list = Vec::new();
+    if let Ok(set) = RuleSet::from_toml(&text) {
+        let live: std::collections::HashMap<(String, String), u64> = st
+            .engine
+            .read()
+            .unwrap()
+            .stats()
+            .into_iter()
+            .map(|r| ((r.profile, r.rule), r.matches))
+            .collect();
+        let db = st.db_path.clone();
+        let stored: std::collections::HashMap<(String, String), u64> =
+            tokio::task::spawn_blocking(move || {
+                Reader::open(db)
+                    .and_then(|r| {
+                        r.sql(
+                            "SELECT profile, rule, count(*) FROM rows GROUP BY 1,2",
+                            5000,
+                        )
+                    })
+                    .map(|t| {
+                        t.rows
+                            .into_iter()
+                            .filter_map(|c| {
+                                Some((
+                                    (c[0].as_str()?.to_string(), c[1].as_str()?.to_string()),
+                                    c[2].as_u64()?,
+                                ))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default();
+        for p in &set.profile {
+            for r in &p.rule {
+                let key = (p.name.clone(), r.name.clone());
+                list.push(json!({
+                    "profile": p.name, "profile_mode": p.mode, "profile_enabled": p.enabled,
+                    "name": r.name, "enabled": r.enabled && p.enabled, "when": r.when,
+                    "explain": seqscope_core::explain::explain_text(&r.when).unwrap_or_else(|e| e.to_string()),
+                    "action": r.action, "tag": r.tag, "sample": r.sample,
+                    "matches": live.get(&key).copied().unwrap_or(0), "stored": stored.get(&key).copied().unwrap_or(0),
+                }));
+            }
+        }
+    }
     Json(
-        json!({ "text": r.text, "errors": r.errors, "path": st.rules_path.display().to_string(), "exists": st.rules_path.exists() }),
+        json!({ "text": text, "errors": errors, "path": st.rules_path.display().to_string(), "exists": st.rules_path.exists(), "rules": list }),
     )
 }
 
@@ -382,6 +439,173 @@ async fn put_rules(State(st): State<Arc<AppState>>, Json(b): Json<TextBody>) -> 
         Err(errors) => ApiError(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({ "ok": false, "errors": errors }),
+        )
+        .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct WhenBody {
+    when: String,
+}
+
+/// A rule in plain English, or what is wrong with it.
+async fn explain(Json(b): Json<WhenBody>) -> Response {
+    let expr = match seqscope_core::expr::parse(&b.when) {
+        Ok(e) => e,
+        Err(e) => {
+            return ApiError(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({ "ok": false, "error": { "message": e.message, "column": e.pos } }),
+            )
+            .into_response();
+        }
+    };
+    if let Err(e) = seqscope_core::compile::compile(&expr) {
+        return ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "ok": false, "error": { "message": e.0, "column": null } }),
+        )
+        .into_response();
+    }
+    Json(json!({ "ok": true, "text": seqscope_core::explain::explain(&expr) })).into_response()
+}
+
+/// The starter sets: what is in each, in words, and how many of its rules are not in the file yet.
+async fn templates(State(st): State<Arc<AppState>>) -> Json<Value> {
+    let current = RuleSet::from_toml(&st.rules.read().unwrap().text).unwrap_or_default();
+    let list: Vec<Value> = seqscope_core::templates::NAMES
+        .iter()
+        .filter_map(|(name, description)| {
+            let set = RuleSet::from_toml(seqscope_core::templates::get(name)?).ok()?;
+            let mut probe = current.clone();
+            let (new, _) = probe.merge(&set);
+            let rules: Vec<Value> = set
+                .profile
+                .iter()
+                .flat_map(|p| p.rule.iter().map(move |r| (p, r)))
+                .map(|(p, r)| json!({ "profile": p.name, "name": r.name, "explain": seqscope_core::explain::explain_text(&r.when).unwrap_or_default(), "action": r.action }))
+                .collect();
+            Some(json!({ "name": name, "description": description, "rules": rules, "new": new }))
+        })
+        .collect();
+    Json(json!(list))
+}
+
+#[derive(Deserialize)]
+pub struct NewRule {
+    name: String,
+    when: String,
+    #[serde(default)]
+    action: ActionKind,
+    tag: Option<String>,
+    #[serde(default = "one")]
+    sample: u32,
+}
+fn one() -> u32 {
+    1
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum RuleOp {
+    AddRule {
+        profile: String,
+        rule: NewRule,
+    },
+    UpdateRule {
+        profile: String,
+        rule: String,
+        patch: RulePatch,
+    },
+    SetEnabled {
+        profile: String,
+        rule: String,
+        enabled: bool,
+    },
+    RemoveRule {
+        profile: String,
+        rule: String,
+    },
+    AddTemplate {
+        name: String,
+    },
+}
+
+/// The comment lines at the top of a rules file, so a guided edit does not throw away what a person wrote there.
+fn header_of(text: &str) -> String {
+    let mut h = String::new();
+    for l in text.lines() {
+        if l.trim_start().starts_with('#') || (l.trim().is_empty() && !h.is_empty()) {
+            h.push_str(l);
+            h.push('\n');
+        } else {
+            break;
+        }
+    }
+    h
+}
+
+impl AppState {
+    /// One guided edit of the rules file: read it, change it, check it, write it, switch to it.
+    pub fn apply_op(&self, op: RuleOp) -> std::result::Result<Value, String> {
+        let _one_at_a_time = self.edits.lock().unwrap();
+        let old = self.rules.read().unwrap().text.clone();
+        let mut set = if old.trim().is_empty() {
+            RuleSet::default()
+        } else {
+            RuleSet::from_toml(&old).map_err(|e| format!("the rules file cannot be edited this way until it is fixed in the text view: {e}"))?
+        };
+        let mut extra = json!({});
+        match op {
+            RuleOp::AddRule { profile, rule } => set.add_rule(
+                &profile,
+                Rule {
+                    name: rule.name.trim().to_string(),
+                    enabled: true,
+                    when: rule.when,
+                    action: rule.action,
+                    tag: rule.tag.filter(|t| !t.trim().is_empty()),
+                    sample: rule.sample,
+                },
+            )?,
+            RuleOp::UpdateRule {
+                profile,
+                rule,
+                patch,
+            } => set.update_rule(&profile, &rule, &patch)?,
+            RuleOp::SetEnabled {
+                profile,
+                rule,
+                enabled,
+            } => set.set_rule_enabled(&profile, &rule, enabled)?,
+            RuleOp::RemoveRule { profile, rule } => {
+                set.remove_rule(&profile, &rule)?;
+            }
+            RuleOp::AddTemplate { name } => {
+                let t = seqscope_core::templates::get(&name)
+                    .ok_or_else(|| format!("there is no starter set '{name}'"))?;
+                let (added, skipped) = set.merge(&RuleSet::from_toml(t)?);
+                extra = json!({ "added": added, "skipped": skipped });
+            }
+        }
+        let text = format!("{}{}", header_of(&old), set.to_toml()?);
+        self.save_rules(&text)
+            .map_err(|e| e.first().map(ToString::to_string).unwrap_or_default())?;
+        let mut out = json!({ "ok": true, "text": text });
+        if let (Some(o), Some(e)) = (out.as_object_mut(), extra.as_object()) {
+            o.extend(e.clone());
+        }
+        Ok(out)
+    }
+}
+
+async fn rules_op(State(st): State<Arc<AppState>>, Json(op): Json<RuleOp>) -> Response {
+    match st.apply_op(op) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => ApiError(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "ok": false, "error": e }),
         )
         .into_response(),
     }
@@ -609,6 +833,9 @@ pub fn router(st: Arc<AppState>) -> Router {
         .route("/api/catalogue", get(get_catalogue))
         .route("/api/rules", get(get_rules).put(put_rules))
         .route("/api/rules/validate", post(validate_rules))
+        .route("/api/rules/op", post(rules_op))
+        .route("/api/explain", post(explain))
+        .route("/api/templates", get(templates))
         .route("/api/preview", post(preview))
         .route("/api/rows", get(rows))
         .route("/api/sql", post(sql))

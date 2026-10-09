@@ -16,7 +16,6 @@
 
 #[macro_use]
 mod output;
-mod templates;
 
 use std::{
     io::{BufRead, Write},
@@ -752,13 +751,13 @@ fn rules_cmd(cmd: RulesCmd) -> Result<()> {
             Ok(())
         }
         RulesCmd::Template { name: None } => {
-            for (n, d) in templates::NAMES {
+            for (n, d) in seqscope_core::templates::NAMES {
                 say!("{n:<14} {d}");
             }
             say!("\nseqscope rules template NAME > seqscope.toml");
             Ok(())
         }
-        RulesCmd::Template { name: Some(n) } => match templates::get(&n) {
+        RulesCmd::Template { name: Some(n) } => match seqscope_core::templates::get(&n) {
             Some(t) => {
                 say!("{}", t.trim_end_matches('\n'));
                 Ok(())
@@ -941,14 +940,14 @@ mod tests {
 
     #[test]
     fn every_template_is_a_valid_rules_file_that_compiles() {
-        for (name, _) in templates::NAMES {
-            let text = templates::get(name)
+        for (name, _) in seqscope_core::templates::NAMES {
+            let text = seqscope_core::templates::get(name)
                 .unwrap_or_else(|| panic!("template {name} is listed but missing"));
             let set = RuleSet::from_toml(text).unwrap_or_else(|e| panic!("{name}: {e}"));
             compile(&set).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(!set.profile.is_empty(), "{name}");
         }
-        assert!(templates::get("nonexistent").is_none());
+        assert!(seqscope_core::templates::get("nonexistent").is_none());
     }
 
     #[test]

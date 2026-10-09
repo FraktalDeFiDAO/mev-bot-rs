@@ -32,12 +32,20 @@ seqscope decode 0xA51a... 0x3593564c...       # every action inside one call
 `seqscope serve` (default http://127.0.0.1:7878) collects like `run` and serves the interface and its API. Without a
 network: `seqscope serve --replay rec.jsonl --speed 10`.
 
-* **Live**: stored rows as they arrive; click one for the inspector (every field, its wrapper path, and "make a rule like
-  this"). The **probe** box tries any rule on live traffic *without saving it* (it first shows what the last few minutes
-  would have matched), and a mistake is explained in place.
-* **Rules**: the rules file with live validation (errors name the rule, the column and a suggestion); **Save** only
-  works for a valid file and switches the running collector at once. The builder assembles a condition list into rule
-  text, **dry-runs** it on the last 5,000 transactions, can **watch it live**, and **adds** it to a profile of the file.
+* **Live**: stored rows as they arrive, each as a sentence ("Sold 1,234.56 USDC in pool 0x… via Uniswap SwapRouter02");
+  a switch shows the technical columns. Click a row for the inspector. One-click **ideas** ("Swaps", "Big USDC swaps", …) and
+  the **probe** box try a rule on live traffic *without saving it* (it first shows what the last few minutes would have
+  matched), explain it in words, and offer to save it as a rule.
+* **Rules**: start from *what you want to watch*, not from syntax. Pick a recipe (big swaps in a token you choose and an
+  amount you type like a person, everything on one protocol, Aave actions, liquidity added or removed, liquidations, calls
+  to an address, things we cannot read yet, calls hidden in bundles) or add a **starter set**. Every form says in words what
+  the rule will catch ("Catches a call when it is a swap and it sells at least 10,000 USDC"), shows how many calls it
+  *would have* caught in the last 5,000 transactions with examples written as sentences, and asks what to do with a catch
+  (keep, keep and highlight, keep the full call, or just count). **My rules** lists each rule as a card: an on/off
+  switch, its meaning in a sentence, what it has caught, **Edit**, **Copy**, **Delete** (with a confirmation). Mistakes are
+  explained in words ("An address starts with 0x and has 40 more characters") and block saving. The rules file as text, and
+  a condition builder, are under **Advanced** for anyone who wants them. A rule can also be born from the Live probe
+  ("Save this as a rule…"), a row in the inspector ("Watch for more like this"), or a line on the Gaps page ("watch this").
 * **Explore**: filters over stored rows, and read-only SQL (`rows`, and `v_rows` with text addresses) with CSV / JSON download.
 * **Gaps**: what the decoder cannot read, busiest first; "draft rule" turns a line into a dry run.
 * **Stats**: counts, drop counters, per-rule matches, tx/s.
