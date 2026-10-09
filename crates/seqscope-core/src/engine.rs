@@ -64,29 +64,60 @@ fn one() -> u32 {
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub name: String,
-    #[serde(default = "yes")]
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub enabled: bool,
     /// The rule text (see `expr`).
     pub when: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_store")]
     pub action: ActionKind,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
     /// Keep one match in N.
-    #[serde(default = "one")]
+    #[serde(default = "one", skip_serializing_if = "is_one")]
     pub sample: u32,
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+fn is_store(a: &ActionKind) -> bool {
+    *a == ActionKind::Store
+}
+fn is_one(n: &u32) -> bool {
+    *n == 1
+}
+fn is_all(m: &Mode) -> bool {
+    *m == Mode::All
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
     pub name: String,
-    #[serde(default = "yes")]
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
     pub enabled: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_all")]
     pub mode: Mode,
     #[serde(default)]
     pub rule: Vec<Rule>,
+}
+
+/// Fields to change on a rule; `None` leaves a field alone. An empty `tag` removes the tag.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RulePatch {
+    pub name: Option<String>,
+    pub when: Option<String>,
+    pub action: Option<ActionKind>,
+    pub tag: Option<String>,
+    pub sample: Option<u32>,
+    pub enabled: Option<bool>,
+}
+
+/// A rule's text must parse and type-check, or it is refused before anything changes.
+fn check_when(when: &str) -> Result<(), String> {
+    let expr = parse(when).map_err(|e| format!("the rule does not parse {e}"))?;
+    compile(&expr).map(|_| ()).map_err(|e| e.0)
 }
 
 /// The rule file.
@@ -108,6 +139,154 @@ impl Default for RuleSet {
 }
 
 impl RuleSet {
+    fn profile_mut(&mut self, name: &str) -> Result<&mut Profile, String> {
+        self.profile
+            .iter_mut()
+            .find(|p| p.name == name)
+            .ok_or_else(|| format!("there is no profile '{name}'"))
+    }
+
+    /// Add a rule to a profile (the profile is created if it does not exist). Refused when the name is empty or taken
+    /// in that profile, or the rule's text is wrong; nothing changes then.
+    pub fn add_rule(&mut self, profile: &str, rule: Rule) -> Result<(), String> {
+        if rule.name.trim().is_empty() {
+            return Err("a rule needs a name".into());
+        }
+        if rule.sample == 0 {
+            return Err("sample must be at least 1".into());
+        }
+        check_when(&rule.when)?;
+        if let Some(p) = self.profile.iter().find(|p| p.name == profile)
+            && p.rule.iter().any(|r| r.name == rule.name)
+        {
+            return Err(format!(
+                "there is already a rule named '{}' in '{profile}'",
+                rule.name
+            ));
+        }
+        match self.profile.iter_mut().find(|p| p.name == profile) {
+            Some(p) => p.rule.push(rule),
+            None => self.profile.push(Profile {
+                name: profile.to_string(),
+                enabled: true,
+                mode: Mode::All,
+                rule: vec![rule],
+            }),
+        }
+        Ok(())
+    }
+
+    /// Change some fields of a rule. The new name must not clash; the new text must be valid.
+    pub fn update_rule(
+        &mut self,
+        profile: &str,
+        rule: &str,
+        patch: &RulePatch,
+    ) -> Result<(), String> {
+        if let Some(w) = &patch.when {
+            check_when(w)?;
+        }
+        if patch.sample == Some(0) {
+            return Err("sample must be at least 1".into());
+        }
+        let p = self.profile_mut(profile)?;
+        if let Some(n) = &patch.name {
+            if n.trim().is_empty() {
+                return Err("a rule needs a name".into());
+            }
+            if n != rule && p.rule.iter().any(|r| &r.name == n) {
+                return Err(format!(
+                    "there is already a rule named '{n}' in '{profile}'"
+                ));
+            }
+        }
+        let r = p
+            .rule
+            .iter_mut()
+            .find(|r| r.name == rule)
+            .ok_or_else(|| format!("there is no rule '{rule}' in '{profile}'"))?;
+        if let Some(n) = &patch.name {
+            r.name = n.clone();
+        }
+        if let Some(w) = &patch.when {
+            r.when = w.clone();
+        }
+        if let Some(a) = patch.action {
+            r.action = a;
+        }
+        if let Some(t) = &patch.tag {
+            r.tag = (!t.trim().is_empty()).then(|| t.trim().to_string());
+        }
+        if let Some(n) = patch.sample {
+            r.sample = n;
+        }
+        if let Some(e) = patch.enabled {
+            r.enabled = e;
+        }
+        Ok(())
+    }
+
+    pub fn set_rule_enabled(
+        &mut self,
+        profile: &str,
+        rule: &str,
+        enabled: bool,
+    ) -> Result<(), String> {
+        self.update_rule(
+            profile,
+            rule,
+            &RulePatch {
+                enabled: Some(enabled),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Remove a rule (an emptied profile is removed too, so the file does not collect empty shells).
+    pub fn remove_rule(&mut self, profile: &str, rule: &str) -> Result<Rule, String> {
+        let p = self.profile_mut(profile)?;
+        let i = p
+            .rule
+            .iter()
+            .position(|r| r.name == rule)
+            .ok_or_else(|| format!("there is no rule '{rule}' in '{profile}'"))?;
+        let removed = p.rule.remove(i);
+        self.profile.retain(|p| !p.rule.is_empty());
+        Ok(removed)
+    }
+
+    /// Add what another rule set has that this one does not (matched by profile and rule name); returns how many rules
+    /// were added and how many were already there.
+    pub fn merge(&mut self, other: &RuleSet) -> (usize, usize) {
+        let (mut added, mut skipped) = (0, 0);
+        for p in &other.profile {
+            for r in &p.rule {
+                match self.profile.iter().find(|q| q.name == p.name) {
+                    Some(q) if q.rule.iter().any(|x| x.name == r.name) => skipped += 1,
+                    Some(_) => {
+                        let q = self
+                            .profile
+                            .iter_mut()
+                            .find(|q| q.name == p.name)
+                            .expect("just found");
+                        q.rule.push(r.clone());
+                        added += 1;
+                    }
+                    None => {
+                        self.profile.push(Profile {
+                            name: p.name.clone(),
+                            enabled: p.enabled,
+                            mode: p.mode,
+                            rule: vec![r.clone()],
+                        });
+                        added += 1;
+                    }
+                }
+            }
+        }
+        (added, skipped)
+    }
+
     /// One profile with one `store` rule: a rule typed on its own (the CLI's `--when`, a UI probe).
     pub fn single(when: &str) -> RuleSet {
         RuleSet {

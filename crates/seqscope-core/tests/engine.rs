@@ -591,3 +591,183 @@ fn the_field_table_is_consistent() {
         None
     );
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Editing a rule set without the text: what the guided interface does
+
+mod edits {
+    use super::*;
+    use seqscope_core::RulePatch;
+
+    fn base() -> RuleSet {
+        RuleSet::from_toml("version = 1\n[[profile]]\nname = \"p\"\n[[profile.rule]]\nname = \"a\"\nwhen = \"kind == swap\"\n[[profile.rule]]\nname = \"b\"\nwhen = \"kind == liquidity\"\n").unwrap()
+    }
+
+    #[test]
+    fn adding_a_rule_checks_everything_before_changing_anything() {
+        let mut s = base();
+        let before = s.clone();
+        let r = |name: &str, when: &str| Rule {
+            name: name.into(),
+            enabled: true,
+            when: when.into(),
+            action: ActionKind::Store,
+            tag: None,
+            sample: 1,
+        };
+        assert!(
+            s.add_rule("p", r("", "true"))
+                .unwrap_err()
+                .contains("needs a name")
+        );
+        assert!(
+            s.add_rule("p", r("a", "true"))
+                .unwrap_err()
+                .contains("already a rule named 'a'")
+        );
+        assert!(
+            s.add_rule("p", r("c", "swap.amount > 1"))
+                .unwrap_err()
+                .contains("did you mean swap.amount_in")
+        );
+        assert!(
+            s.add_rule("p", r("c", "kind =="))
+                .unwrap_err()
+                .contains("does not parse")
+        );
+        let mut zero = r("c", "true");
+        zero.sample = 0;
+        assert!(s.add_rule("p", zero).is_err());
+        assert_eq!(s, before, "every refusal left the rules untouched");
+        // The same name in another profile is fine, and an unknown profile is created.
+        s.add_rule("other", r("a", "kind == unknown")).unwrap();
+        s.add_rule("p", r("c", "true")).unwrap();
+        assert_eq!(s.profile.len(), 2);
+        assert_eq!(s.profile[0].rule.len(), 3);
+        assert!(Engine::compile(&s).is_ok());
+    }
+
+    #[test]
+    fn rules_can_be_switched_off_renamed_changed_and_removed() {
+        let mut s = base();
+        s.set_rule_enabled("p", "a", false).unwrap();
+        assert!(!s.profile[0].rule[0].enabled);
+        let engine = Engine::compile(&s).unwrap();
+        assert_eq!(
+            engine.stats().len(),
+            1,
+            "a switched-off rule is not even compiled"
+        );
+        s.update_rule(
+            "p",
+            "b",
+            &RulePatch {
+                name: Some("liquidity moves".into()),
+                tag: Some("lp".into()),
+                action: Some(ActionKind::Alert),
+                sample: Some(3),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let b = &s.profile[0].rule[1];
+        assert_eq!(
+            (b.name.as_str(), b.tag.as_deref(), b.action, b.sample),
+            ("liquidity moves", Some("lp"), ActionKind::Alert, 3)
+        );
+        s.update_rule(
+            "p",
+            "liquidity moves",
+            &RulePatch {
+                tag: Some("  ".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(s.profile[0].rule[1].tag, None, "an empty tag clears it");
+        assert!(
+            s.update_rule(
+                "p",
+                "a",
+                &RulePatch {
+                    name: Some("liquidity moves".into()),
+                    ..Default::default()
+                }
+            )
+            .unwrap_err()
+            .contains("already a rule")
+        );
+        assert!(
+            s.update_rule(
+                "p",
+                "a",
+                &RulePatch {
+                    when: Some("nope ==".into()),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            s.update_rule("p", "missing", &RulePatch::default())
+                .unwrap_err()
+                .contains("no rule")
+        );
+        assert!(
+            s.update_rule("nope", "a", &RulePatch::default())
+                .unwrap_err()
+                .contains("no profile")
+        );
+        let gone = s.remove_rule("p", "a").unwrap();
+        assert_eq!(gone.name, "a");
+        s.remove_rule("p", "liquidity moves").unwrap();
+        assert!(
+            s.profile.is_empty(),
+            "an emptied profile goes with its last rule"
+        );
+        assert!(s.remove_rule("p", "a").is_err());
+    }
+
+    #[test]
+    fn a_starter_set_adds_only_what_is_missing() {
+        let mut s = base();
+        let starter =
+            RuleSet::from_toml(seqscope_core::templates::get("dex-swaps").unwrap()).unwrap();
+        let (added, skipped) = s.merge(&starter);
+        assert_eq!((added, skipped), (2, 0));
+        let (added, skipped) = s.merge(&starter);
+        assert_eq!((added, skipped), (0, 2), "adding it again changes nothing");
+        assert!(Engine::compile(&s).is_ok());
+    }
+
+    #[test]
+    fn the_saved_file_stays_tidy_and_round_trips() {
+        let mut s = base();
+        s.set_rule_enabled("p", "a", false).unwrap();
+        s.update_rule(
+            "p",
+            "b",
+            &RulePatch {
+                action: Some(ActionKind::Alert),
+                tag: Some("lp".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let text = s.to_toml().unwrap();
+        assert!(
+            !text.contains("enabled = true")
+                && !text.contains("sample = 1")
+                && !text.contains("mode = \"all\"")
+                && !text.contains("action = \"store\""),
+            "defaults are not written:\n{text}"
+        );
+        assert!(
+            text.contains("enabled = false")
+                && text.contains("action = \"alert\"")
+                && text.contains("tag = \"lp\""),
+            "{text}"
+        );
+        assert_eq!(RuleSet::from_toml(&text).unwrap(), s);
+    }
+}

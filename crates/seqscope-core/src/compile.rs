@@ -45,7 +45,7 @@ fn field(name: &str) -> Result<FieldId, CompileError> {
 }
 
 /// `5e6`, `1_000`, `0xff`, `-60`: a number as written.
-fn parse_uint(raw: &str) -> Result<U256, CompileError> {
+pub(crate) fn parse_uint(raw: &str) -> Result<U256, CompileError> {
     let r: String = raw.chars().filter(|c| *c != '_').collect();
     if let Some(h) = r.strip_prefix("0x").or_else(|| r.strip_prefix("0X")) {
         return U256::from_str_radix(h, 16)
