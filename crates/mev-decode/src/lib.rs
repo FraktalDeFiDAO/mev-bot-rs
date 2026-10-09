@@ -48,6 +48,16 @@ pub fn decode_call(to: Address, input: &[u8]) -> Option<Decoded> {
     protocols().iter().find_map(|p| p.decode_call(to, input))
 }
 
+/// Every intent in a call to `to` (several for a call that carries several, such as a Universal Router `execute` with
+/// a swap per command); empty when no protocol crate reads it. The first intent equals [`decode_call`].
+pub fn decode_calls(to: Address, input: &[u8]) -> Vec<Decoded> {
+    protocols()
+        .iter()
+        .map(|p| p.decode_calls(to, input))
+        .find(|v| !v.is_empty())
+        .unwrap_or_default()
+}
+
 /// Destinations seen in the feed that are identified but whose calls no protocol crate decodes yet.
 const UNDECODED: [Contract; 3] = [
     Contract {
