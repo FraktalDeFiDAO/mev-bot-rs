@@ -107,8 +107,17 @@ for c in chain.values():
     for u in c.get("unknown_topics", []):
         p = pools.get(u["addr"].lower())
         unk[((p["dex"] if p else "v4 manager" if u["addr"].lower() == (tracked.get("v4_manager") or "").lower() else "?"), u["topic0"][:10])] += 1
+LABELS = {
+    "0x70935338": "Collect (fee collection; no price effect)",
+    "0xbdbdb71d": "Flash (flash loan; no price effect)",
+    "0x1b3d7edb": "ERC-6909 Transfer (PoolManager balance accounting)",
+    "0x29ef05ca": "Donate (adds to LP fee growth; no price effect)",
+    "0xdd466e67": "Initialize (new V4 pool)",
+    "0xddf252ad": "ERC-20 Transfer (LP token of a V2 pair)",
+    "0x8a89de70": "Algebra per-swap fee notification (now in the table)",
+}
 for (dex, t0), n in unk.most_common(14):
-    print(f"  {n:6d}  {dex:14s} {t0}")
+    print(f"  {n:6d}  {dex:14s} {t0}  {LABELS.get(t0, 'UNLABELLED')}")
 if not unk:
     print("  none recorded yet (the recorder needs this build running)")
 
