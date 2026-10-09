@@ -90,6 +90,7 @@ mev-bot/
 | L0 | `mev-protocol-aave-v3` | Aave V3 `LiquidationCall` event and `liquidationCall` calldata |
 | L0 | `mev-protocol-morpho-blue` | Morpho Blue `Liquidate` event and `liquidate` calldata (with market id) |
 | L0 | `mev-protocol-compound-v3` | Compound III absorb events and `absorb` calldata on the four configured comets |
+| L0 | `mev-protocol-fluid` | Fluid vaults: `LogLiquidate` / `LogAbsorb` events and `liquidate` calldata (by price range, so a vault, not an account) |
 | L0 | `mev-protocol-unidentified` | The two unidentified swap contracts (A, B) read from landed transactions |
 | L2 | `mev-outcomes` | Chain-side ground truth: sampled `eth_getBlockReceipts` → `chaintx-DATE.jsonl` (status, gas, block position, swap/liquidity/liquidation events) joined to the feed recording on the tx hash; coverage audit of the decoders |
 | L1 | `mev-oracle` | Resolve price sources (Chainlink proxies, Aave CAPO adapters, Morpho oracles) to aggregators; `FeedWatcher` matches feed txs incl. Chainlink forwarder `forward(aggregator, …)` |
