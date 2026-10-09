@@ -33,6 +33,8 @@ pub fn protocol_of(addr: Address) -> Option<&'static str> {
 #[derive(Debug, Serialize)]
 pub struct FieldInfo {
     pub name: &'static str,
+    /// The field as a person names it.
+    pub label: &'static str,
     pub ty: Ty,
     pub group: &'static str,
     pub doc: &'static str,
@@ -58,12 +60,31 @@ pub struct EventInfo {
 #[derive(Debug, Serialize)]
 pub struct ProtocolInfo {
     pub id: &'static str,
+    pub label: String,
     pub contracts: Vec<ContractInfo>,
     pub events: Vec<EventInfo>,
 }
 
 #[derive(Debug, Serialize)]
+pub struct TokenInfo {
+    pub symbol: &'static str,
+    pub address: String,
+    pub decimals: u8,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Named {
+    pub id: &'static str,
+    pub label: &'static str,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Catalogue {
+    /// Tokens people think in, with the decimals that turn a raw amount into a human one.
+    pub tokens: Vec<TokenInfo>,
+    /// Functions worth naming (selector without 0x, name).
+    pub functions: Vec<(&'static str, &'static str)>,
+    pub wrapper_labels: Vec<Named>,
     pub fields: Vec<FieldInfo>,
     pub protocols: Vec<ProtocolInfo>,
     pub wrappers: Vec<&'static str>,
@@ -92,10 +113,33 @@ pub fn catalogue() -> Catalogue {
         _ => None,
     };
     Catalogue {
+        tokens: crate::names::tokens()
+            .into_iter()
+            .map(|t| TokenInfo {
+                symbol: t.symbol,
+                address: format!("{:#x}", t.address),
+                decimals: t.decimals,
+            })
+            .collect(),
+        functions: crate::names::SELECTORS.to_vec(),
+        wrapper_labels: [
+            "multicall3",
+            "self_multicall",
+            "account_execute",
+            "entrypoint_v6",
+            "entrypoint_v7",
+        ]
+        .iter()
+        .map(|w| Named {
+            id: w,
+            label: crate::names::wrapper_label(w),
+        })
+        .collect(),
         fields: FieldId::ALL
             .iter()
             .map(|f| FieldInfo {
                 name: f.name(),
+                label: crate::explain::label(*f),
                 ty: f.ty(),
                 group: f.group(),
                 doc: f.doc(),
@@ -106,6 +150,7 @@ pub fn catalogue() -> Catalogue {
             .iter()
             .map(|p| ProtocolInfo {
                 id: p.id(),
+                label: crate::names::protocol_label(p.id()).to_string(),
                 contracts: p
                     .contracts()
                     .into_iter()
