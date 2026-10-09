@@ -61,7 +61,8 @@ pub fn wants_simulation(
     input: &[u8],
     watch: &std::collections::HashSet<[u8; 20]>,
 ) -> bool {
-    mentions_any(input, watch) || to.is_some_and(|t| mev_decode::decode_call(t, input).is_some())
+    mentions_any(input, watch)
+        || to.is_some_and(|t| !mev_decode::calls::decode_all(t, input).is_empty())
 }
 
 /// Topic0 of the pool events the engine consumes (V2 `Sync`, V3/Algebra `Swap`, PancakeV3 `Swap`).
@@ -341,6 +342,57 @@ impl PresimStats {
     }
 }
 
+/// One call inside a transaction (the transaction itself, or a call within a multicall / Multicall3 / smart account /
+/// ERC-4337 bundle) and what the decoder made of it. A call to a contract we have identified that nothing reads is
+/// marked `undecoded_known`: those are the gaps in "every action on the watched exchanges is decoded".
+pub fn action_json(a: &mev_decode::calls::Action) -> serde_json::Value {
+    use mev_decode::Decoded;
+    let known = mev_decode::known_contract(a.leaf.to);
+    let (kind, detail) = match &a.decoded {
+        Some(Decoded::Swap(s)) => (
+            Some("swap"),
+            serde_json::json!({
+                "pool": match &s.pool {
+                    decode::PoolRef::Address(p) => format!("{p:#x}"),
+                    decode::PoolRef::Pair { token_a, token_b, fee } => format!("{token_a:#x}/{token_b:#x}/{fee}"),
+                    decode::PoolRef::PairV2 { token_a, token_b } => format!("v2:{token_a:#x}/{token_b:#x}"),
+                },
+                "token_in": format!("{:#x}", s.token_in),
+                "amount_in": s.amount_in.to_string(),
+                "limit_x96": s.sqrt_limit_x96.map(|l| l.to_string()),
+                "hops": s.hops,
+            }),
+        ),
+        Some(Decoded::Liquidity(l)) => (
+            Some("liquidity"),
+            serde_json::json!({
+                "protocol": l.protocol,
+                "action": format!("{:?}", l.action).to_lowercase(),
+                "token_id": l.token_id.map(|t| t.to_string()),
+                "liquidity": l.liquidity.map(|t| t.to_string()),
+                "pool": l.pool.as_ref().map(|p| format!("{p:?}")),
+            }),
+        ),
+        Some(Decoded::Liquidation(l)) => (
+            Some("liquidation"),
+            serde_json::json!({
+                "protocol": l.protocol,
+                "borrowers": l.borrowers.iter().map(|b| format!("{b:#x}")).collect::<Vec<_>>(),
+            }),
+        ),
+        None => (None, serde_json::Value::Null),
+    };
+    serde_json::json!({
+        "to": format!("{:#x}", a.leaf.to),
+        "sel": a.leaf.selector().map(alloy::hex::encode),
+        "via": a.leaf.via,
+        "known": known.map(|c| c.name),
+        "kind": kind,
+        "detail": detail,
+        "undecoded_known": kind.is_none() && known.is_some(),
+    })
+}
+
 /// One analysis record for a feed transaction: what it is, what it pays, what we decoded, and what the simulation said.
 fn tx_line(
     st: &SequencedTx,
@@ -353,6 +405,10 @@ fn tx_line(
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
     let intent = st.to.and_then(|to| mev_decode::decode_call(to, &st.input));
+    let actions = st
+        .to
+        .map(|to| mev_decode::calls::actions_in(to, &st.input))
+        .unwrap_or_default();
     let swap = st.to.and_then(|to| decode::decode(to, &st.input)).map(|s| {
         serde_json::json!({
             "pool": match &s.pool {
@@ -398,6 +454,8 @@ fn tx_line(
             })),
             _ => None,
         }),
+        "actions": actions.iter().map(action_json).collect::<Vec<_>>(),
+        "undecoded_known": actions.iter().filter(|a| a.decoded.is_none() && mev_decode::known_contract(a.leaf.to).is_some()).count(),
         "presim": outcome,
         "sim_ms": sim_ms,
         "pools_moved": moved.len(),
@@ -699,5 +757,78 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(event_pool(&v3), Address::with_last_byte(5));
+    }
+
+    #[test]
+    fn a_wrapped_swap_makes_the_transaction_a_simulation_candidate_and_is_listed_in_the_record() {
+        use alloy::{primitives::U256, sol, sol_types::SolCall};
+        sol! {
+            struct P { address tokenIn; address tokenOut; uint24 fee; address recipient; uint256 amountIn; uint256 amountOutMinimum; uint160 sqrtPriceLimitX96; }
+            function exactInputSingle(P params) external payable returns (uint256 amountOut);
+            struct C3 { address target; bool allowFailure; bytes callData; }
+            function aggregate3(C3[] calls) external payable returns (bytes[] returnData);
+        }
+        let swap = exactInputSingleCall {
+            params: P {
+                tokenIn: Address::with_last_byte(0xa1),
+                tokenOut: Address::with_last_byte(0xb2),
+                fee: alloy::primitives::Uint::<24, 1>::from(500u32),
+                recipient: Address::with_last_byte(1),
+                amountIn: U256::from(5_000u64),
+                amountOutMinimum: U256::ZERO,
+                sqrtPriceLimitX96: alloy::primitives::Uint::<160, 3>::ZERO,
+            },
+        }
+        .abi_encode();
+        let input = aggregate3Call {
+            calls: vec![
+                C3 {
+                    target: alloy::primitives::address!("4752ba5DBc23f44D87826276BF6Fd6b1C372aD24"),
+                    allowFailure: true,
+                    callData: vec![1, 2, 3, 4].into(),
+                },
+                C3 {
+                    target: mev_decode::calls::MULTICALL3,
+                    allowFailure: false,
+                    callData: Default::default(),
+                },
+                C3 {
+                    target: mev_protocol_uniswap_router::SWAP_ROUTER_02,
+                    allowFailure: false,
+                    callData: swap.into(),
+                },
+            ],
+        }
+        .abi_encode();
+        let to = mev_decode::calls::MULTICALL3;
+        // A watch set that matches nothing in the calldata, so only the decoder can make it a candidate.
+        let elsewhere: std::collections::HashSet<[u8; 20]> = [[0xee; 20]].into_iter().collect();
+        assert!(
+            wants_simulation(Some(to), &input, &elsewhere),
+            "the swap inside the wrapper is found"
+        );
+        assert!(
+            !wants_simulation(Some(to), &input[..40], &elsewhere),
+            "a truncated wrapper decodes nothing"
+        );
+
+        let line = tx_line(&seq(Some(to), input), "moved", Some(3), &[]);
+        let acts = line["actions"].as_array().unwrap();
+        assert_eq!(acts.len(), 3);
+        let swaps: Vec<_> = acts.iter().filter(|a| a["kind"] == "swap").collect();
+        assert_eq!(swaps.len(), 1);
+        assert_eq!(swaps[0]["detail"]["amount_in"], "5000");
+        assert_eq!(swaps[0]["via"][0], "multicall3");
+        assert!(
+            swaps[0]["known"]
+                .as_str()
+                .unwrap()
+                .starts_with("Uniswap SwapRouter02")
+        );
+        assert_eq!(
+            line["undecoded_known"], 1,
+            "the Camelot router call is to a known destination nothing decodes yet"
+        );
+        assert_eq!(acts[0]["undecoded_known"], true);
     }
 }

@@ -3435,6 +3435,7 @@ dependencies = [
  "futures",
  "mev-bindings",
  "mev-decode",
+ "mev-protocol-uniswap-router",
  "mev-sequencer",
  "serde",
  "serde_json",

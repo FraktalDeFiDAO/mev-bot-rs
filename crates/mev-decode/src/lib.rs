@@ -5,6 +5,8 @@
 //! state, so it can run alone, be used in analysis tools, or be taken in pieces:
 //!
 //!  - [`decode_call`]: what a call's calldata intends ([`Decoded`]): a swap ([`SwapIntent`]) or a liquidation.
+//!  - [`calls::decode_all`] / [`calls::actions_in`]: every action in a transaction, through multicall, Multicall3,
+//!    smart-account and ERC-4337 wrappers.
 //!  - [`events`]: the table of swap / liquidity / liquidation / state event shapes by topic0 and the price a pool
 //!    event leaves behind ([`events::price_update`]).
 //!  - [`known_contract`]: which destinations are identified, and whether their calls are decoded yet.
@@ -12,6 +14,7 @@
 //! What a feed transaction *does* is not knowable from its body: it may revert. Decoded calldata is an intent. Events
 //! from block logs are what happened; prices for charts should come from them.
 
+pub mod calls;
 pub mod events;
 pub mod swap;
 
