@@ -16,8 +16,9 @@ command -v node >/dev/null || { echo "node is needed for the interface tests"; e
 command -v "${CHROMIUM:-chromium}" >/dev/null || { echo "chromium is needed for the interface tests (or set CHROMIUM)"; exit 1; }
 
 echo "== interface logic (node)"
-node --test crates/seqscope-server/ui/test/logic.test.js 2>&1 | grep -E "^(✖|ℹ (tests|pass|fail))" || true
-node --test crates/seqscope-server/ui/test/logic.test.js >/dev/null 2>&1 || { echo "LOGIC TESTS FAILED"; exit 1; }
+LOGIC_OUT="$(node --test crates/seqscope-server/ui/test/logic.test.js 2>&1)" && LOGIC_RC=0 || LOGIC_RC=$?
+echo "$LOGIC_OUT" | grep -E "^(✖|ℹ (tests|pass|fail))" || true
+[[ $LOGIC_RC == 0 ]] || { echo "LOGIC TESTS FAILED"; echo "$LOGIC_OUT" | tail -30; exit 1; }
 
 echo "== build"
 scripts/dev.sh cargo build -q --release -p seqscope-cli
@@ -48,8 +49,8 @@ sleep 3   # let the replay put some rows in the database
 
 echo "== interface in a real browser"
 RC=0
-node --test crates/seqscope-server/ui/test/browser.test.js 2>&1 | grep -E "^(✔|✖)|ℹ (tests|pass|fail)|actual:|Error|timed out" || true
-node --test crates/seqscope-server/ui/test/browser.test.js >/dev/null 2>&1 || RC=1
+BROWSER_OUT="$(node --test crates/seqscope-server/ui/test/browser.test.js 2>&1)" || RC=1
+echo "$BROWSER_OUT" | grep -E "^(✔|✖)|ℹ (tests|pass|fail)|actual:|Error|timed out" || true
 
 echo "== stop (SIGTERM): the server must flush and exit cleanly"
 kill -TERM "$SERVER_PID" 2>/dev/null || true

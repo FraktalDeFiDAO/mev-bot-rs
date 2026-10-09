@@ -36,5 +36,8 @@ try "server accepts unmarked changes"  crates/seqscope-server/src/lib.rs     's/
 try "bad rules are saved anyway"       crates/seqscope-server/src/lib.rs     's/let (_, engine) = validate(text)?;/let engine = Engine::compile(\&RuleSet::default()).unwrap();/'    'cargo test -q -p seqscope-server --test api 2>&1'
 try_host "UI joins conditions with OR"  crates/seqscope-server/ui/app.js     "s/const sep = joiner === 'or' ? ' || ' : ' \&\& ';/const sep = ' || ';/"                                  'node --test crates/seqscope-server/ui/test/logic.test.js 2>&1'
 try_host "UI never shows the status"    crates/seqscope-server/ui/app.js     's/      renderStatus();/      \/\/ renderStatus();/'                                                         'scripts/test-seqscope-ui.sh 2>&1'
+try "a liquidation explained as a swap" crates/seqscope-core/src/explain.rs  's/"liquidation" => "a liquidation",/"liquidation" => "a swap",/'                                       'cargo test -q -p seqscope-core --lib 2>&1'
+try "rule edits skip validation"       crates/seqscope-core/src/engine.rs    's/^        check_when(&rule.when)?;/        \/\/ no check/'                                                           'cargo test -q -p seqscope-core --test engine 2>&1'
+try_host "UI list drops its rules"      crates/seqscope-server/ui/app.js      's/el.replaceChildren(...kids.flat(Infinity)/el.replaceChildren(...kids/'                                                 'scripts/test-seqscope-ui.sh 2>&1'
 if (( missed )); then echo "MUTATION CHECK: FAILED"; exit 1; fi
 echo "MUTATION CHECK: every planted bug was caught"
