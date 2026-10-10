@@ -1,6 +1,7 @@
 {
   "liquidity/uniswap_v3": 12,
   "liquidity/uniswap_v4": 1,
+  "pools/unidentified": 1,
   "swap/camelot_router": 4,
   "swap/cow": 2,
   "swap/kyber": 2,
@@ -14,7 +15,7 @@
   "undecoded_known/unidentified": 1,
   "undecoded_known/uniswap_router": 1,
   "undecoded_known/uniswap_v3": 1,
-  "unknown/-": 2121,
+  "unknown/-": 2120,
   "wrapped/account_execute": 7,
   "wrapped/entrypoint_v6>account_execute": 44,
   "wrapped/entrypoint_v7": 19,

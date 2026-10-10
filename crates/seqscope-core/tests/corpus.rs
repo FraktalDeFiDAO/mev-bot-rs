@@ -108,6 +108,7 @@ fn every_transaction_produces_at_least_one_call_and_every_row_is_well_formed() {
                 "swap",
                 "liquidity",
                 "liquidation",
+                "pools",
                 "undecoded_known",
                 "unknown"
             ]

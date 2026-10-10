@@ -78,11 +78,13 @@ def intents(t):
     out = []
     for a in d.get("actions", []):
         dd = a.get("decoded")
-        if dd and dd.get("kind") == "swap": out.append(dd)
+        if dd and dd.get("kind") in ("swap", "pools"): out.append(dd)
     top = d.get("decoded")
-    if top and top.get("kind") == "swap": out.append(top)
+    if top and top.get("kind") in ("swap", "pools"): out.append(top)
     return out
 def matches(dd, p):
+    if dd.get("kind") == "pools":
+        return p["address"].lower() in [x.lower() for x in dd["pools"]] or ("0x" + (p.get("v4_id") or "")[-40:]).lower() in [x.lower() for x in dd["pools"]]
     pool = dd["pool"]; toks = {p["token0"].lower(), p["token1"].lower()}
     if "address" in pool: return pool["address"].lower() in (p["address"].lower(), ("0x" + (p.get("v4_id") or "")[-40:]).lower())
     if "fee" in pool: return {pool["token_a"].lower(), pool["token_b"].lower()} == toks and (p["fee"] == pool["fee"] or p["kind"] == "algebra_v3")

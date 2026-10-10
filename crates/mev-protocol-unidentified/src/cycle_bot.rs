@@ -14,6 +14,24 @@ use mev_protocol::{PoolRef, SwapIntent};
 pub const BOT: Address = address!("5dbcbd2669e44285547aa9428d16ebe26963d6c6");
 pub const SELECTOR: [u8; 4] = [0xc1, 0xc0, 0xe9, 0xc4];
 
+/// Every pool the base layout names (one per hop, in execution order, placeholders skipped). Measured on 110 landed
+/// calls (2026-10-09): 91.2% of the named pools were swapped and 99.6% of the swapped pools were named, so this is a
+/// conservative set for holding pools back, not an exact list.
+pub fn pools(sel: [u8; 4], d: &[u8]) -> Option<Vec<Address>> {
+    if sel != SELECTOR {
+        return None;
+    }
+    let hops = usize::from(*d.first()?);
+    if !(2..=3).contains(&hops) || d.len() != 61 + 63 * hops + 34 {
+        return None;
+    }
+    let named: Vec<Address> = (0..hops)
+        .map(|k| Address::from_slice(&d[61 + 63 * k..81 + 63 * k]))
+        .filter(|a| !a.is_zero())
+        .collect();
+    (!named.is_empty()).then_some(named)
+}
+
 pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
     if sel != SELECTOR {
         return None;
@@ -58,6 +76,34 @@ mod tests {
             n += 1;
         }
         assert!(n >= 40, "{n}");
+    }
+
+    #[test]
+    fn the_named_pools_are_the_swapped_pools_to_the_measured_precision_and_recall() {
+        let (mut named, mut swapped, mut both) = (0usize, 0usize, 0usize);
+        for l in include_str!("../tests/fixtures/cycle_bot_pools.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let (input, sw) = l.split_once(',').unwrap();
+            let input = hex::decode(input.trim_start_matches("0x")).unwrap();
+            let got = pools(input[..4].try_into().unwrap(), &input[4..])
+                .unwrap_or_else(|| panic!("no pools: {l}"));
+            let want: Vec<Address> = sw.split('|').map(|a| a.parse().unwrap()).collect();
+            named += got.len();
+            swapped += want.len();
+            both += got.iter().filter(|a| want.contains(a)).count();
+        }
+        // Recorded in DECISIONS #161: precision 91.2% and recall 99.6% on the 110-call sample.
+        assert!(
+            both as f64 / named as f64 > 0.88,
+            "precision {both}/{named}"
+        );
+        assert!(
+            both as f64 / swapped as f64 > 0.97,
+            "recall {both}/{swapped}"
+        );
+        assert!(named >= 200, "{named}");
     }
 
     #[test]

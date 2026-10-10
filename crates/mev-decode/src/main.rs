@@ -65,6 +65,11 @@ fn decoded_json(d: Decoded) -> Value {
         Decoded::Swap(s) => swap_json(&s),
         Decoded::Liquidity(l) => liquidity_json(&l),
         Decoded::Liquidation(l) => liquidation_json(&l),
+        Decoded::Pools(p) => json!({
+            "kind": "pools",
+            "protocol": p.protocol,
+            "pools": p.pools.iter().map(|a| format!("{a:#x}")).collect::<Vec<_>>(),
+        }),
     }
 }
 

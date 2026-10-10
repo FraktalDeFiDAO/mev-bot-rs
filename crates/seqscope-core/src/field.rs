@@ -23,12 +23,13 @@ pub struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    /// `swap`, `liquidity`, `liquidation`, `undecoded_known` (an identified contract nothing reads yet) or `unknown`.
+    /// `swap`, `liquidity`, `liquidation`, `pools` (the call names the pools it trades on, no exact swap), `undecoded_known` (an identified contract nothing reads yet) or `unknown`.
     pub fn kind(&self) -> &'static str {
         match self.decoded {
             Some(Decoded::Swap(_)) => "swap",
             Some(Decoded::Liquidity(_)) => "liquidity",
             Some(Decoded::Liquidation(_)) => "liquidation",
+            Some(Decoded::Pools(_)) => "pools",
             None if self.known.is_some() => "undecoded_known",
             None => "unknown",
         }

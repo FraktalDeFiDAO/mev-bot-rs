@@ -141,9 +141,21 @@ pub struct LiquidityIntent {
     pub liquidity: Option<U256>,
 }
 
+/// Pools a call's program names as the ones it trades on, where the calldata does not give one exact swap (no single
+/// token or amount can be stated). Not an exact intent: measured against traces, the named pools are the ones swapped
+/// with `precision` and `recall` stated at each decoder (for example 91-97% and 95-100%). It is meant for holding
+/// back pools a pending rival transaction is about to move, where an extra pool costs a skipped trade and a missing
+/// one costs a stale price; never for sizing or pricing a trade.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolSet {
+    pub protocol: &'static str,
+    pub pools: Vec<Address>,
+}
+
 /// What a call's calldata means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decoded {
+    Pools(PoolSet),
     Swap(SwapIntent),
     Liquidity(LiquidityIntent),
     Liquidation(LiquidationIntent),

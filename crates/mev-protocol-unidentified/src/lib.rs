@@ -3,6 +3,7 @@
 //! contracts we do not control, which may change without notice. Kept apart so they can be renamed or dropped once
 //! identified. Both run one exact-input swap on one Uniswap-V3-style pool with a price limit.
 
+pub mod aa_bot;
 pub mod cycle_bot;
 pub mod dag_router;
 pub mod execute_trade;
@@ -16,7 +17,7 @@ pub mod v2_aggregator;
 pub mod v4_bots;
 
 use alloy::primitives::{Address, address};
-use mev_protocol::{Contract, Decoded, PoolRef, Protocol, SwapIntent, abi};
+use mev_protocol::{Contract, Decoded, PoolRef, PoolSet, Protocol, SwapIntent, abi};
 
 /// Selector `0xa00597a0`: `(amountIn, sqrtPriceLimitX96, tokenIn, flag, pool, deadline, ..)`.
 pub const ROUTER_A: Address = address!("278d858f05b94576C1E6f73285886876ff6eF8D2");
@@ -128,6 +129,28 @@ impl Protocol for Unidentified {
         Some(Decoded::Swap(swap))
     }
 
+    fn decode_calls(&self, to: Address, input: &[u8]) -> Vec<Decoded> {
+        let mut out: Vec<Decoded> = self.decode_call(to, input).into_iter().collect();
+        // Bots that name every pool of a cycle: the exact first hop (where known) plus the set, which a rival's pending
+        // transaction would move. The sets are not exact (see each module for the measured precision and recall).
+        if let Some((sel, d)) = abi::split(input) {
+            let set = if to == cycle_bot::BOT {
+                cycle_bot::pools(sel, d)
+            } else if to == aa_bot::BOT {
+                aa_bot::pools(sel, d)
+            } else {
+                None
+            };
+            if let Some(pools) = set {
+                out.push(Decoded::Pools(PoolSet {
+                    protocol: "unidentified",
+                    pools,
+                }));
+            }
+        }
+        out
+    }
+
     fn contracts(&self) -> Vec<Contract> {
         vec![
             Contract {
@@ -148,6 +171,11 @@ impl Protocol for Unidentified {
             Contract {
                 address: dag_router::ROUTER_G,
                 name: "unidentified aggregator, dagSwapByOrderId (f2c42696) decoded to its tokens",
+                decoded: true,
+            },
+            Contract {
+                address: aa_bot::BOT,
+                name: "unidentified packed MEV bot (7ef88937): the pools it declares; no exact swap",
                 decoded: true,
             },
             Contract {

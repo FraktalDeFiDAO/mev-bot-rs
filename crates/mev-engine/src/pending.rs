@@ -27,7 +27,10 @@ pub const PENDING_TTL: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone)]
 pub struct DecodedSwap {
     pub hash: B256,
-    pub intent: SwapIntent,
+    /// The exact swap, when the calldata gives one.
+    pub intent: Option<SwapIntent>,
+    /// Pools a call names without an exact swap (`Decoded::Pools`): held back like a swap's pools, never used to price.
+    pub named_pools: Vec<Address>,
     pub received: Instant,
 }
 

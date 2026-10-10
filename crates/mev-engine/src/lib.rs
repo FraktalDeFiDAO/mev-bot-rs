@@ -535,25 +535,34 @@ impl Engine {
                         if let Some(to) = st.to {
                             // The call itself (ETH-in forms need the value), else every swap inside the wrappers it
                             // goes through (multicall, smart accounts, the swap forwarders): their pools are pending too.
-                            let intents: Vec<_> = match mev_decode::decode_call_with_value(
+                            // Exact swaps first; a bot that names its pools without an exact swap also holds them back.
+                            let decoded: Vec<_> = match mev_decode::decode_call_with_value(
                                 to,
                                 &st.input,
                                 alloy::consensus::Transaction::value(&st.tx),
                             ) {
-                                Some(mev_decode::Decoded::Swap(s)) => vec![s],
-                                _ => mev_decode::calls::decode_all(to, &st.input)
-                                    .into_iter()
-                                    .filter_map(|d| match d {
-                                        mev_decode::Decoded::Swap(s) => Some(s),
-                                        _ => None,
-                                    })
-                                    .take(8)
-                                    .collect(),
+                                Some(mev_decode::Decoded::Swap(s)) => {
+                                    // A cycle bot also names the rest of its pools (the same registry call, many results).
+                                    let mut v = vec![mev_decode::Decoded::Swap(s)];
+                                    v.extend(
+                                        mev_decode::decode_calls(to, &st.input)
+                                            .into_iter()
+                                            .filter(|d| matches!(d, mev_decode::Decoded::Pools(_))),
+                                    );
+                                    v
+                                }
+                                _ => mev_decode::calls::decode_all(to, &st.input),
                             };
-                            for intent in intents {
+                            for d in decoded.into_iter().take(8) {
+                                let (intent, named_pools) = match d {
+                                    mev_decode::Decoded::Swap(s) => (Some(s), Vec::new()),
+                                    mev_decode::Decoded::Pools(p) => (None, p.pools),
+                                    _ => continue,
+                                };
                                 let _ = dec_tx.send(pending::DecodedSwap {
                                     hash: st.hash,
                                     intent,
+                                    named_pools,
                                     received: st.received,
                                 });
                             }
@@ -847,7 +856,13 @@ impl Engine {
                         }
                     }
                     Some(d) = recv_opt(&mut dec_rx) => {
-                        let pools = pending::resolve_pools(&self.store, &d.intent);
+                        let mut pools = d
+                            .intent
+                            .as_ref()
+                            .map(|i| pending::resolve_pools(&self.store, i))
+                            .unwrap_or_default();
+                        // Named pools count only if we watch them.
+                        pools.extend(d.named_pools.iter().filter(|a| self.store.get(a).is_some()).copied());
                         if !pools.is_empty() {
                             self.pending.insert(d.hash, pools, d.received);
                         }

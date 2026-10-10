@@ -364,6 +364,13 @@ pub fn action_json(a: &mev_decode::calls::Action) -> serde_json::Value {
                 "hops": s.hops,
             }),
         ),
+        Some(Decoded::Pools(p)) => (
+            Some("pools"),
+            serde_json::json!({
+                "protocol": p.protocol,
+                "pools": p.pools.iter().map(|a| format!("{a:#x}")).collect::<Vec<_>>(),
+            }),
+        ),
         Some(Decoded::Liquidity(l)) => (
             Some("liquidity"),
             serde_json::json!({
