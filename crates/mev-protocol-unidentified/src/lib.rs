@@ -49,6 +49,11 @@ pub fn resolve_pool(a: Address) -> Address {
 
 pub const SELECTOR_A: [u8; 4] = [0xa0, 0x05, 0x97, 0xa0];
 pub const SELECTOR_B: [u8; 4] = [0x00, 0x00, 0x00, 0xe7];
+/// Router A's Uniswap-V2-pair variant `0x95435ac9`: `(amountIn, w1, tokenIn, token0In, 99700, pair, deadline)` plus a
+/// trailing byte. Measured 2026-10-10 on 40 of 40 landed calls against the pair's own `Swap` event: pair, input token
+/// and direction exact (`token0In` = 1 when token0 goes in); `amountIn` is within 1e-11 of the amount the pair received
+/// (the contract trims a few wei); `w1` is not a price limit (V2 has none), so none is reported.
+pub const SELECTOR_A_V2: [u8; 4] = [0x95, 0x43, 0x5a, 0xc9];
 
 pub struct Unidentified;
 
@@ -69,6 +74,14 @@ impl Protocol for Unidentified {
                 sqrt_limit_x96: Some(abi::uint(d, 1)?),
                 token_in: abi::addr(d, 2)?,
                 pool: PoolRef::Address(abi::addr(d, 4)?),
+                hops: 1,
+            }
+        } else if to == ROUTER_A && sel == SELECTOR_A_V2 {
+            SwapIntent {
+                amount_in: abi::uint(d, 0)?,
+                sqrt_limit_x96: None,
+                token_in: abi::addr(d, 2)?,
+                pool: PoolRef::Address(abi::addr(d, 5)?),
                 hops: 1,
             }
         } else if to == ROUTER_B && sel == SELECTOR_B {
@@ -95,7 +108,7 @@ impl Protocol for Unidentified {
         vec![
             Contract {
                 address: ROUTER_A,
-                name: "unidentified, selectors a00597a0 (V3) and 669dc5b6 (V4)",
+                name: "unidentified, selectors a00597a0 (V3), 95435ac9 (V2) and 669dc5b6 (V4)",
                 decoded: true,
             },
             Contract {
@@ -171,6 +184,35 @@ mod tests {
         assert_eq!(s.amount_in, U256::from(0x2678e8e1de7d99u64));
         assert_eq!(s.sqrt_limit_x96, Some(U256::from(7_777u64)));
     }
+
+    #[test]
+    fn router_a_v2_variant_names_the_pair_token_and_amount() {
+        // Landed call 0x7f20c845...: 15.2 token swapped on a V2 pair; the pair's Swap event agreed on all three.
+        let pair = address!("b7e50106a5bd3cf21af210a755f9c8740890a8c9");
+        let tok = address!("539bde0d7dbd336b79148aa742883198bbf60342");
+        let input = call(
+            SOME_V2,
+            vec![
+                w(U256::from(0xd25bb5c30d8a9b560u128)),
+                w(U256::from(0x1cc9f0a45aaebabffa7d16au128)),
+                wa(tok),
+                w(U256::from(1)),
+                w(U256::from(99_700u64)),
+                wa(pair),
+                w(U256::from(0x6ac980b9u64)),
+                vec![0x0f],
+            ],
+        );
+        let s = swap(Unidentified.decode_call(ROUTER_A, &input));
+        assert_eq!(s.pool, PoolRef::Address(pair));
+        assert_eq!(s.token_in, tok);
+        assert_eq!(s.amount_in, U256::from(0xd25bb5c30d8a9b560u128));
+        assert_eq!(s.sqrt_limit_x96, None);
+        // Only router A answers to this selector.
+        assert!(Unidentified.decode_call(ROUTER_B, &input).is_none());
+    }
+
+    const SOME_V2: [u8; 4] = SELECTOR_A_V2;
 
     #[test]
     fn router_b_reads_pool_amount_limit_and_token() {
