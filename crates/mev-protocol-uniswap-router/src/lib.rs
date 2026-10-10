@@ -57,6 +57,9 @@ sol! {
 
 pub const SWAP_ROUTER_02: Address = address!("68b3465833fb72A70ecDF485E0e4C7bD8665Fc45");
 pub const SWAP_ROUTER_V1: Address = address!("E592427A0AEce92De3Edee1F18E0157C05861564");
+/// PancakeSwap V3 `SmartRouter`-era `SwapRouter` on Arbitrum: the Uniswap V3 SwapRouter v1 ABI (with a deadline), so the
+/// same decoder reads it. Measured 2026-10-09: `exactInputSingle` exact on 40 of 40 landed calls, `exactInput` on 6 of 6.
+pub const PANCAKE_V3_ROUTER: Address = address!("1b81D678ffb9C0263b24A97847620C99d213eB14");
 pub const UNIVERSAL_ROUTER: Address = address!("A51afAFe0263b40EdaEf0Df8781eA9aa03E381a3");
 /// A second contract that answers to the Universal Router's `execute` selector (98 successful transactions in a few
 /// hours on 2026-10-08, mostly V3 swaps). Treated as a Universal Router; `scripts/verify-decoder.py` checks that.
@@ -452,7 +455,7 @@ impl Protocol for UniswapRouter {
     fn decode_call(&self, to: Address, input: &[u8]) -> Option<Decoded> {
         let swap = if to == SWAP_ROUTER_02 {
             swap_router_02(input, 0)
-        } else if to == SWAP_ROUTER_V1 {
+        } else if to == SWAP_ROUTER_V1 || to == PANCAKE_V3_ROUTER {
             swap_router_v1(input)
         } else if to == UNIVERSAL_ROUTER || to == UNIVERSAL_ROUTER_2 {
             universal_router(input).into_iter().next()
@@ -483,6 +486,11 @@ impl Protocol for UniswapRouter {
             Contract {
                 address: SWAP_ROUTER_V1,
                 name: "Uniswap V3 SwapRouter v1 (exact-in decoded)",
+                decoded: true,
+            },
+            Contract {
+                address: PANCAKE_V3_ROUTER,
+                name: "PancakeSwap V3 SwapRouter (Uniswap v1 ABI: exact-in decoded)",
                 decoded: true,
             },
             Contract {
@@ -567,6 +575,34 @@ mod tests {
         };
         let s = swap(UniswapRouter.decode_call(SWAP_ROUTER_02, &one.abi_encode()));
         assert_eq!(s.amount_out_exact, None);
+    }
+
+    #[test]
+    fn landed_pancake_router_calls_decode_to_pair_fee_hops_and_amount() {
+        let mut n = 0;
+        for l in include_str!("../tests/fixtures/pancake_v3_router.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let f: Vec<&str> = l.split(',').collect();
+            let input = alloy::hex::decode(f[1].trim_start_matches("0x")).unwrap();
+            let s = swap(UniswapRouter.decode_call(PANCAKE_V3_ROUTER, &input));
+            let (tin, tout): (Address, Address) = (f[2].parse().unwrap(), f[3].parse().unwrap());
+            assert_eq!(
+                s.pool,
+                PoolRef::Pair {
+                    token_a: tin,
+                    token_b: tout,
+                    fee: f[4].parse().unwrap()
+                },
+                "{l}"
+            );
+            assert_eq!((s.token_in, s.hops), (tin, f[5].parse().unwrap()), "{l}");
+            assert_eq!(s.amount_in, f[6].parse::<U256>().unwrap(), "{l}");
+            assert_eq!(s.amount_out_exact, None);
+            n += 1;
+        }
+        assert!(n >= 40, "{n}");
     }
 
     const A: Address = Address::with_last_byte(0xa1);
