@@ -31,6 +31,7 @@ mev-protocol-unidentified = { workspace = true }
 mev-protocol-fluid = { workspace = true }
 mev-protocol-oneinch = { workspace = true }
 mev-protocol-cow = { workspace = true }
+mev-protocol-camelot = { workspace = true }
 mev-sequencer = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }

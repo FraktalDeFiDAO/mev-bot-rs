@@ -10,19 +10,31 @@ use mev_protocol::{PoolRef, SwapIntent, abi};
 
 pub const ROUTER_G: Address = address!("09f94b5fc68e227c323a6fbae3bd98c97fd8c849");
 pub const SELECTOR_DAG_SWAP: [u8; 4] = [0xf2, 0xc4, 0x26, 0x96];
+/// `dagSwapTo(uint256 orderId, address receiver, (fromToken, toToken, amount, minReturn, deadline), paths[])`: the
+/// same request one word later. Tokens exact on 34 of 34 landed calls, the amount on 32 (the router's own request
+/// size; two calls moved it through several holders). A native-ETH source (`0xEeee..`) is not decoded.
+pub const SELECTOR_DAG_SWAP_TO: [u8; 4] = [0x0c, 0x30, 0x7f, 0x76];
+const NATIVE: Address = address!("EeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE");
 
 pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
-    if sel != SELECTOR_DAG_SWAP {
+    let shift = if sel == SELECTOR_DAG_SWAP {
+        0
+    } else if sel == SELECTOR_DAG_SWAP_TO {
+        1
+    } else {
+        return None;
+    };
+    let (src, dst) = (abi::addr(d, 1 + shift)?, abi::addr(d, 2 + shift)?);
+    if src == NATIVE {
         return None;
     }
-    let (src, dst) = (abi::addr(d, 1)?, abi::addr(d, 2)?);
     Some(SwapIntent {
         pool: PoolRef::Tokens {
             token_a: src,
             token_b: dst,
         },
         token_in: src,
-        amount_in: abi::uint(d, 3)?,
+        amount_in: abi::uint(d, 3 + shift)?,
         sqrt_limit_x96: None,
         hops: 1,
     })
@@ -66,5 +78,19 @@ mod tests {
             }
         );
         assert!(decode([0; 4], d).is_none());
+        // `dagSwapTo` carries the receiver in word 1, so the request starts one word later.
+        let mut to_call = vec![0u8; 0];
+        to_call.extend(U256::from(1u64).to_be_bytes::<32>());
+        to_call.extend(wa(Address::with_last_byte(5)));
+        to_call.extend(wa(usdc));
+        to_call.extend(wa(out));
+        to_call.extend(U256::from(7u64).to_be_bytes::<32>());
+        to_call.extend(U256::from(1u64).to_be_bytes::<32>());
+        let s = decode(SELECTOR_DAG_SWAP_TO, &to_call).unwrap();
+        assert_eq!((s.token_in, s.amount_in), (usdc, U256::from(7u64)));
+        // A native-ETH source has no amount in the call.
+        let mut native = to_call.clone();
+        native[64..96].copy_from_slice(&wa(NATIVE));
+        assert!(decode(SELECTOR_DAG_SWAP_TO, &native).is_none());
     }
 }
