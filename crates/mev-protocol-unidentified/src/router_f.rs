@@ -28,6 +28,27 @@ fn address_at(b: &[u8], off: usize) -> Option<Address> {
     b.get(off..off + 20).map(Address::from_slice)
 }
 
+/// Both pools of a two-leg `00000001` call (the first leg's, at `31 + wIn + wOut`, and the second 46 bytes on), for
+/// the short shape only. Measured on 33 landed calls (2026-10-10): every swapped pool was named (recall 100%) and 86.4%
+/// of the named pools were swapped (the second leg is sometimes not executed), so a conservative set for holding pools
+/// back, not an exact list.
+pub fn pools(sel: [u8; 4], d: &[u8]) -> Option<Vec<Address>> {
+    if sel != SELECTOR_V2 {
+        return None;
+    }
+    let (legs, w_in, w_out) = (
+        *d.first()?,
+        usize::from(*d.get(1)?),
+        usize::from(*d.get(2)?),
+    );
+    let known = legs == 2 && (3..=10).contains(&w_in) && (3..=10).contains(&w_out);
+    if !known || d.len() != 77 + w_in + w_out + 46 {
+        return None;
+    }
+    let first = 31 + w_in + w_out;
+    Some(vec![address_at(d, first)?, address_at(d, first + 46)?])
+}
+
 pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
     if sel == SELECTOR_V3 {
         // Fixed-size argument; refuse anything else rather than read the wrong offsets.
@@ -148,6 +169,34 @@ mod tests {
             n += 1;
         }
         assert!(n >= 50, "{n}");
+    }
+
+    #[test]
+    fn the_named_pools_of_two_leg_calls_cover_every_swapped_pool() {
+        let (mut named, mut swapped, mut both, mut calls) = (0usize, 0usize, 0usize, 0usize);
+        for l in include_str!("../tests/fixtures/f1_pools.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let (input, sw) = l.split_once(',').unwrap();
+            let input = hex::decode(input.trim_start_matches("0x")).unwrap();
+            let got = pools(SELECTOR_V2, &input[4..]).unwrap_or_else(|| panic!("no pools: {l}"));
+            let want: Vec<Address> = sw.split('|').map(|a| a.parse().unwrap()).collect();
+            calls += 1;
+            named += got.len();
+            swapped += want.len();
+            both += got.iter().filter(|a| want.contains(a)).count();
+        }
+        // DECISIONS #162: precision 86.4% and recall 100% on the 33-call sample.
+        assert!(
+            both as f64 / named as f64 > 0.80,
+            "precision {both}/{named}"
+        );
+        assert!(
+            both as f64 / swapped as f64 > 0.97,
+            "recall {both}/{swapped}"
+        );
+        assert!(calls >= 30, "{calls}");
     }
 
     #[test]

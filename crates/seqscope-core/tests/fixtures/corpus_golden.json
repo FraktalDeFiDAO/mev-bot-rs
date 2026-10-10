@@ -1,7 +1,7 @@
 {
   "liquidity/uniswap_v3": 12,
   "liquidity/uniswap_v4": 1,
-  "pools/unidentified": 1,
+  "pools/unidentified": 5,
   "swap/camelot_router": 4,
   "swap/cow": 2,
   "swap/kyber": 2,
