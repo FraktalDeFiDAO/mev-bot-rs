@@ -104,7 +104,7 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or(0)
     };
     let s = secs as f64;
-    println!("rpc: {url}");
+    println!("rpc: {}", mev_types::redact_secrets(&url));
     println!(
         "feed txs {:.1}/s | candidates {:.1}/s | moved a pool {:.1}/s | skipped (busy) {} | errors {} | rate-limited {}",
         seen.load(Ordering::Relaxed) as f64 / s,

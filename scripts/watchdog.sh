@@ -38,6 +38,11 @@ if [[ -n $addr ]]; then
     low="$(python3 -c "print(1 if int('$hex',16)/1e18 < $MIN_ETH else 0)")"
     eth="$(python3 -c "print('%.5f' % (int('$hex',16)/1e18))")"
     [[ $low == 1 ]] && alerts+=("hot wallet low: $eth ETH (< $MIN_ETH) $addr")
+    # Nearly empty: stop sending rather than burn the last gas on reverts (clear with run.sh resume).
+    empty="$(python3 -c "print(1 if int('$hex',16)/1e18 < ${HALT_ETH:-0.001} else 0)")"
+    if [[ $empty == 1 && ! -f $D/STOP ]]; then
+      touch "$D/STOP" && alerts+=("hot wallet nearly empty ($eth ETH): kill switch set automatically")
+    fi
   else
     alerts+=("could not read hot wallet balance")
   fi

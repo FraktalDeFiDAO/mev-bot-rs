@@ -218,6 +218,14 @@ pub struct TipBudget {
     minute: VecDeque<(u64, f64)>,
     day: u64,
     day_spent: f64,
+    store: Option<crate::persist::Store>,
+}
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct SavedTips {
+    day: u64,
+    day_spent: f64,
+    minute: Vec<(u64, f64)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -234,6 +242,33 @@ impl TipBudget {
             minute: VecDeque::new(),
             day: 0,
             day_spent: 0.0,
+            store: None,
+        }
+    }
+
+    /// Keep tip spend in `path` and resume from it (same UTC day only; the minute window
+    /// self-expires), so a restart does not hand back the per-minute and per-day tip budgets.
+    pub fn with_persistence(mut self, path: std::path::PathBuf, now_secs: u64) -> Self {
+        let store = crate::persist::Store::new(path);
+        if let Some(s) = store.load::<SavedTips>()
+            && s.day == now_secs / 86_400
+        {
+            self.day = s.day;
+            self.day_spent = s.day_spent;
+            self.minute = s.minute.into_iter().collect();
+            self.roll(now_secs);
+        }
+        self.store = Some(store);
+        self
+    }
+
+    fn save(&self) {
+        if let Some(store) = &self.store {
+            store.save(&SavedTips {
+                day: self.day,
+                day_spent: self.day_spent,
+                minute: self.minute.iter().copied().collect(),
+            });
         }
     }
 
@@ -257,6 +292,7 @@ impl TipBudget {
         self.roll(now_secs);
         self.minute.push_back((now_secs, tip_usd));
         self.day_spent += tip_usd;
+        self.save();
     }
 
     fn roll(&mut self, now_secs: u64) {
@@ -271,12 +307,26 @@ impl TipBudget {
         if day != self.day {
             self.day = day;
             self.day_spent = 0.0;
+            self.save();
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tip_budget_survives_a_restart_but_not_a_new_day() {
+        let path = std::env::temp_dir().join(format!("tips-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut a = TipBudget::new(10.0, 2.0).with_persistence(path.clone(), 100);
+        a.record(1.5, 100);
+        let mut b = TipBudget::new(10.0, 2.0).with_persistence(path.clone(), 130);
+        assert!(matches!(b.allow(1.0, 130), Err(TipCap::PerDay { .. })));
+        let mut c = TipBudget::new(10.0, 2.0).with_persistence(path.clone(), 100 + 86_400);
+        assert!(c.allow(1.0, 100 + 86_400).is_ok());
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn a_route_with_history_is_priced_by_its_own_winners() {
         let m = Some(20_000_000);

@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically verify live Nitro RPC readiness
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=5min
+Unit=arbitrum-health.service
+
+[Install]
+WantedBy=timers.target

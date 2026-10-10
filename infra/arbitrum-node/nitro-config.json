@@ -1,40 +1,22 @@
 {
-  "chain": {
-    "id": 42161
-  },
+  "chain": {"id": 42161},
   "init": {
-    "latest": "pruned",
-    "latest-base": "https://snapshot.arbitrum.foundation/",
-    "download-path": "/home/user/.arbitrum/snapshot-download/nitro-pruned.tar"
+    "latest-base": "https://snapshot.arbitrum.foundation/"
   },
-  "node": {
-    "feed": {
-      "input": {
-        "url": ["wss://arb1.arbitrum.io/feed"]
-      }
-    }
-  },
-  "execution": {
-    "forwarding-target": "https://arb1.arbitrum.io/rpc"
-  },
+  "node": {"feed": {"input": {"url": ["wss://arb1.arbitrum.io/feed"]}}},
+  "execution": {"forwarding-target": "https://arb1.arbitrum.io/rpc"},
   "http": {
-    "addr": "0.0.0.0",
-    "port": 8547,
+    "addr": "0.0.0.0", "port": 8547,
     "api": ["net", "web3", "eth", "arb", "debug"],
     "vhosts": ["localhost", "127.0.0.1"],
     "corsdomain": ["localhost", "127.0.0.1"]
   },
   "ws": {
-    "addr": "0.0.0.0",
-    "port": 8548,
+    "addr": "0.0.0.0", "port": 8548,
     "api": ["net", "web3", "eth", "arb", "debug"],
-    "origins": ["localhost", "127.0.0.1"]
+    "origins": ["http://localhost", "http://127.0.0.1", "http://localhost:8548", "http://127.0.0.1:8548"]
   },
-  "ipc": {
-    "path": "/home/user/.arbitrum/nitro.ipc"
-  },
-  "persistent": {
-    "chain": "/home/user/.arbitrum"
-  },
+  "ipc": {"path": "/home/user/.arbitrum/nitro.ipc"},
+  "persistent": {"chain": "/home/user/.arbitrum"},
   "log-level": "INFO"
 }

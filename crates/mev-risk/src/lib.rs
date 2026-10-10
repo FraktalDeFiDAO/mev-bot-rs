@@ -2,10 +2,13 @@
 
 pub mod bid;
 pub mod gate;
+pub mod persist;
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::persist::Store;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RiskLimits {
@@ -42,6 +45,18 @@ pub struct RiskGuard {
     /// Transactions sent and not yet landed, and how many may be.
     in_flight: u32,
     max_in_flight: u32,
+    /// Where today's spend survives a restart (a crash loop must not reset the daily caps).
+    store: Option<Store>,
+}
+
+/// What of the guard survives a restart. `in_flight` does not: nothing is pending after one.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Saved {
+    day: u64,
+    spent_usd: f64,
+    arb_spent_usd: f64,
+    earned_usd: f64,
+    consecutive_failures: u32,
 }
 
 impl RiskGuard {
@@ -56,6 +71,43 @@ impl RiskGuard {
             consecutive_failures: 0,
             in_flight: 0,
             max_in_flight: 1,
+            store: None,
+        }
+    }
+
+    /// Keep today's spend, profit and failure streak in `path`, and resume from it now (if it is
+    /// from the same UTC day as `now_secs`; an older day starts at zero as a rollover would).
+    /// An unreadable file is ignored; an unwritable one only logs.
+    pub fn with_persistence(mut self, path: PathBuf, now_secs: u64) -> Self {
+        let store = Store::new(path);
+        if let Some(s) = store.load::<Saved>()
+            && s.day == now_secs / 86_400
+        {
+            self.day = s.day;
+            self.spent_usd = s.spent_usd;
+            self.arb_spent_usd = s.arb_spent_usd;
+            self.earned_usd = s.earned_usd;
+            self.consecutive_failures = s.consecutive_failures;
+            tracing::info!(
+                spent_usd = s.spent_usd,
+                arb_spent_usd = s.arb_spent_usd,
+                consecutive_failures = s.consecutive_failures,
+                "risk: resumed today's caps from disk"
+            );
+        }
+        self.store = Some(store);
+        self
+    }
+
+    fn save(&self) {
+        if let Some(store) = &self.store {
+            store.save(&Saved {
+                day: self.day,
+                spent_usd: self.spent_usd,
+                arb_spent_usd: self.arb_spent_usd,
+                earned_usd: self.earned_usd,
+                consecutive_failures: self.consecutive_failures,
+            });
         }
     }
 
@@ -136,6 +188,7 @@ impl RiskGuard {
         self.roll_day(now_secs);
         if usd > 0.0 {
             self.earned_usd += usd;
+            self.save();
         }
     }
 
@@ -148,6 +201,7 @@ impl RiskGuard {
     pub fn record_arb_gas(&mut self, gas_usd: f64, now_secs: u64) {
         self.roll_day(now_secs);
         self.arb_spent_usd += gas_usd;
+        self.save();
     }
 
     pub fn mark_sent(&mut self) {
@@ -164,6 +218,7 @@ impl RiskGuard {
         } else {
             self.consecutive_failures += 1
         }
+        self.save();
     }
 
     /// A race lost on-chain (unsimulated or front-run tx reverted by the executor's profit
@@ -174,6 +229,7 @@ impl RiskGuard {
         self.roll_day(now_secs);
         self.in_flight = self.in_flight.saturating_sub(1);
         self.spent_usd += gas_usd;
+        self.save();
     }
 
     pub fn spent_today_usd(&self) -> f64 {
@@ -187,6 +243,7 @@ impl RiskGuard {
             self.spent_usd = 0.0;
             self.arb_spent_usd = 0.0;
             self.earned_usd = 0.0;
+            self.save();
         }
     }
 }
@@ -227,6 +284,36 @@ mod tests {
             max_arb_gas_usd_per_day: 0.5,
         };
         RiskGuard::new(limits, PathBuf::from("/nonexistent/STOP"))
+    }
+
+    #[test]
+    fn caps_and_failure_streak_survive_a_restart() {
+        let path = std::env::temp_dir().join(format!("risk-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut g = guard().with_persistence(path.clone(), 1_000);
+        g.mark_sent();
+        g.record(false, 0.6, 1_000);
+        g.mark_sent();
+        g.record(false, 0.5, 1_000); // $1.1 spent, 2 failures: paused and over the cap
+        let mut g2 = guard().with_persistence(path.clone(), 2_000);
+        assert!((g2.spent_today_usd() - 1.1).abs() < 1e-9);
+        assert!(matches!(
+            g2.check(1.0, 0.01, 2_000),
+            Err(Block::Paused { .. })
+        ));
+        // The next UTC day starts clean.
+        let mut g3 = guard().with_persistence(path.clone(), 90_000);
+        assert!(g3.check(1.0, 0.01, 90_000).is_ok());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn corrupt_state_file_is_ignored() {
+        let path = std::env::temp_dir().join(format!("risk-bad-{}.json", std::process::id()));
+        std::fs::write(&path, b"{not json").unwrap();
+        let mut g = guard().with_persistence(path.clone(), 0);
+        assert!(g.check(1.0, 0.01, 0).is_ok());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -423,7 +423,8 @@ impl Engine {
         let metrics = Arc::new(Metrics::new(data_dir.clone())?);
         metrics.set_live(mode == Mode::Live);
         let risk = RiskGuard::new(limits, data_dir.join("STOP"))
-            .with_max_in_flight(cfg.risk.max_concurrent_sends);
+            .with_max_in_flight(cfg.risk.max_concurrent_sends)
+            .with_persistence(data_dir.join("risk-state.json"), now_secs());
         info!(pools = store.len(), kill_switch = %data_dir.join("STOP").display(), "ready");
         // What is tracked, written out so decoding can be checked against it (scripts/venue-coverage.py).
         let tracked_contracts: Arc<std::collections::HashSet<Address>> = {
@@ -683,7 +684,8 @@ impl Engine {
 
         let pga_policy = bid_policy(&cfg.pga);
         let pga_budget =
-            TipBudget::new(cfg.pga.max_tip_usd_per_minute, cfg.pga.max_tip_usd_per_day);
+            TipBudget::new(cfg.pga.max_tip_usd_per_minute, cfg.pga.max_tip_usd_per_day)
+                .with_persistence(data_dir.join("tip-state.json"), now_secs());
         Ok(Self {
             cfg,
             rpc,
@@ -1807,10 +1809,9 @@ impl Engine {
             return;
         };
         // On-chain floor: the trade must pay for its gas and its bid, or it reverts.
-        let min_profit = if loan_px > 0.0 {
-            U256::from(((gas_usd + tip_usd) / loan_px) as u128)
-        } else {
-            U256::ZERO
+        // No price means no safe floor: skip rather than send with `minProfit = 0`.
+        let Some(min_profit) = profit_floor(gas_usd + tip_usd, loan_px) else {
+            return;
         };
         // `gas` is a calibrated estimate (no estimate_gas round-trip); leave headroom for heavier
         // hops (Algebra pools use ~2x a Uniswap V3 hop).
@@ -2058,10 +2059,9 @@ impl Engine {
         else {
             return;
         };
-        let min_profit = if debt_px > 0.0 {
-            U256::from(((gas_usd + tip_usd) / debt_px) as u128)
-        } else {
-            U256::ZERO
+        // No price means no safe floor: skip rather than send with `minProfit = 0`.
+        let Some(min_profit) = profit_floor(gas_usd + tip_usd, debt_px) else {
+            return;
         };
         self.risk.mark_sent();
         self.metrics.update(|c| c.sent += 1);
@@ -2178,10 +2178,9 @@ impl Engine {
             return;
         };
         // On-chain floor: at least cover gas and the bid, in debt-asset units.
-        let min_profit = if debt_px > 0.0 {
-            U256::from(((gas_usd + tip_usd) / debt_px) as u128)
-        } else {
-            U256::ZERO
+        // No price means no safe floor: skip rather than send with `minProfit = 0`.
+        let Some(min_profit) = profit_floor(gas_usd + tip_usd, debt_px) else {
+            return;
         };
         let gas_limit = gas + gas * 3 / 10;
         self.risk.mark_sent();
@@ -2475,6 +2474,12 @@ async fn recv_opt<T>(rx: &mut Option<mpsc::UnboundedReceiver<T>>) -> Option<T> {
     }
 }
 
+/// On-chain `minProfit` (loan-token raw units) covering `cost_usd`; `None` when the token has no price.
+fn profit_floor(cost_usd: f64, usd_per_raw: f64) -> Option<U256> {
+    (usd_per_raw > 0.0 && usd_per_raw.is_finite())
+        .then(|| U256::from((cost_usd / usd_per_raw) as u128))
+}
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2661,5 +2666,17 @@ mod pga_replay {
         );
         // Default caps: no single tip above $0.25.
         assert!(bid.tips_paid_usd <= 0.25 * bid.bids as f64 + 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod profit_floor_tests {
+    use super::*;
+
+    #[test]
+    fn floor_needs_a_price() {
+        assert_eq!(profit_floor(0.02, 0.0), None);
+        assert_eq!(profit_floor(0.02, f64::NAN), None);
+        assert_eq!(profit_floor(0.02, 1e-6), Some(U256::from(20_000u64)));
     }
 }

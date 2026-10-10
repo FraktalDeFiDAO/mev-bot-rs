@@ -32,3 +32,11 @@ data/
 infra/arbitrum-node/arbitrum-node-resources.env
 *.proptest-regressions
 .seqscope-ui-start.*
+
+# Stray node-provisioning state and local scratch at the repo root
+/arbitrum-*.json
+/arbitrum-node-resources.env*
+/arb-feed.tar.gz
+__pycache__/
+/.scan.sh
+/.noticks.toml

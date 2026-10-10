@@ -46,7 +46,11 @@ case "${1:-}" in
     need_live_keys
     read -r -p "Start LIVE trading with real funds? [y/N] " ok
     [[ $ok == y || $ok == Y ]] || { echo "aborted"; exit 1; }
-    rm -f "$STOP_FILE"
+    # A STOP file means someone (or the watchdog) halted trading: don't clear it silently.
+    if [[ -f $STOP_FILE ]]; then
+      echo "kill switch is ON ($STOP_FILE, set $(date -r "$STOP_FILE" '+%F %T')). Run '$0 resume' first." >&2
+      exit 1
+    fi
     start live ;;
   status)
     podman ps -a --filter name=mev-bot-arbitrum --format '{{.Names}}  {{.Status}}'
@@ -54,7 +58,13 @@ case "${1:-}" in
     [[ -f $STOP_FILE ]] && echo "KILL SWITCH ACTIVE ($STOP_FILE)" || true ;;
   logs)   podman logs -f mev-bot-arbitrum ;;
   halt)   mkdir -p "data/$CHAIN" && touch "$STOP_FILE" && echo "kill switch on — no new trades will be sent" ;;
-  resume) rm -f "$STOP_FILE" && echo "kill switch off" ;;
+  resume)
+    if [[ -f $STOP_FILE ]]; then
+      echo "kill switch set $(date -r "$STOP_FILE" '+%F %T'); daily caps are kept in data/$CHAIN/risk-state.json"
+      read -r -p "Clear the kill switch and allow trading? [y/N] " ok
+      [[ $ok == y || $ok == Y ]] || { echo "aborted"; exit 1; }
+    fi
+    rm -f "$STOP_FILE" && echo "kill switch off" ;;
   stop)   compose down ;;
   *) sed -n '2,10p' "$0"; exit 2 ;;
 esac

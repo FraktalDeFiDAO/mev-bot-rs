@@ -3546,6 +3546,7 @@ dependencies = [
  "mev-decode",
  "mev-protocol-uniswap-router",
  "mev-sequencer",
+ "mev-types",
  "serde",
  "serde_json",
  "tokio",
@@ -3653,6 +3654,7 @@ dependencies = [
  "anyhow",
  "proptest",
  "serde",
+ "serde_json",
  "tracing",
 ]
 
