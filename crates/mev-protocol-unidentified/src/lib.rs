@@ -5,6 +5,7 @@
 
 pub mod dag_router;
 pub mod execute_trade;
+pub mod meta_swap;
 pub mod packed;
 pub mod packed_table;
 pub mod rfq_swap;
@@ -106,6 +107,8 @@ impl Protocol for Unidentified {
             v4_bots::decode_e(sel, d)?
         } else if to == dag_router::ROUTER_G {
             dag_router::decode(sel, d)?
+        } else if to == meta_swap::ROUTER {
+            meta_swap::decode(sel, d)?
         } else if to == rfq_swap::ROUTER {
             rfq_swap::decode(sel, d)?
         } else if to == execute_trade::BOT {
@@ -142,6 +145,11 @@ impl Protocol for Unidentified {
             Contract {
                 address: dag_router::ROUTER_G,
                 name: "unidentified aggregator, dagSwapByOrderId (f2c42696) decoded to its tokens",
+                decoded: true,
+            },
+            Contract {
+                address: meta_swap::ROUTER,
+                name: "meta-aggregator router (5f575529): tokens and amount; the aggregator's own call is not read",
                 decoded: true,
             },
             Contract {
