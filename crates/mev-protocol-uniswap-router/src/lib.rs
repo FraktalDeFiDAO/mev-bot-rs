@@ -27,6 +27,14 @@ sol! {
     interface MulticallDeadline {
         function multicall(uint256 deadline, bytes[] data) external payable returns (bytes[] results);
     }
+    interface SwapRouterV1Out {
+        struct ExactOutputSingleParams { address tokenIn; address tokenOut; uint24 fee; address recipient; uint256 deadline; uint256 amountOut; uint256 amountInMaximum; uint160 sqrtPriceLimitX96; }
+        function exactOutputSingle(ExactOutputSingleParams params) external payable returns (uint256 amountIn);
+    }
+    interface SwapRouter02Out {
+        struct ExactOutputSingleParams { address tokenIn; address tokenOut; uint24 fee; address recipient; uint256 amountOut; uint256 amountInMaximum; uint160 sqrtPriceLimitX96; }
+        function exactOutputSingle(ExactOutputSingleParams params) external payable returns (uint256 amountIn);
+    }
     interface SwapRouterV1 {
         struct ExactInputParams { bytes path; address recipient; uint256 deadline; uint256 amountIn; uint256 amountOutMinimum; }
         struct ExactInputSingleParams { address tokenIn; address tokenOut; uint24 fee; address recipient; uint256 deadline; uint256 amountIn; uint256 amountOutMinimum; uint160 sqrtPriceLimitX96; }
@@ -103,6 +111,7 @@ fn v3_path_swap(path: &[u8], amount_in: U256) -> Option<SwapIntent> {
         amount_in: real_amount(amount_in)?,
         sqrt_limit_x96: None,
         hops,
+        amount_out_exact: None,
     })
 }
 
@@ -123,6 +132,28 @@ fn v3_single(
         amount_in: real_amount(amount_in)?,
         sqrt_limit_x96: limit(sqrt_limit),
         hops: 1,
+        amount_out_exact: None,
+    })
+}
+
+/// An exact-output single-pool swap: the call fixes `amount_out`; `amount_in_max` is only the most it may spend.
+fn v3_single_out(
+    (token_in, token_out, fee): (Address, Address, u32),
+    amount_out: U256,
+    amount_in_max: U256,
+    sqrt_limit: U256,
+) -> Option<SwapIntent> {
+    Some(SwapIntent {
+        pool: PoolRef::Pair {
+            token_a: token_in,
+            token_b: token_out,
+            fee,
+        },
+        token_in,
+        amount_in: real_amount(amount_in_max)?,
+        sqrt_limit_x96: limit(sqrt_limit),
+        hops: 1,
+        amount_out_exact: Some(real_amount(amount_out)?).filter(|a| !a.is_zero()),
     })
 }
 
@@ -137,6 +168,7 @@ fn v2_path_swap(path: &[Address], amount_in: U256) -> Option<SwapIntent> {
         amount_in: real_amount(amount_in)?,
         sqrt_limit_x96: None,
         hops: u8::try_from(path.len() - 1).ok()?,
+        amount_out_exact: None,
     })
 }
 
@@ -155,6 +187,17 @@ fn swap_router_02(input: &[u8], depth: usize) -> Option<SwapIntent> {
             p.tokenOut,
             p.fee.to::<u32>(),
             p.amountIn,
+            U256::from(p.sqrtPriceLimitX96),
+        );
+    }
+    if sel == SwapRouter02Out::exactOutputSingleCall::SELECTOR {
+        let p = SwapRouter02Out::exactOutputSingleCall::abi_decode_raw(args)
+            .ok()?
+            .params;
+        return v3_single_out(
+            (p.tokenIn, p.tokenOut, p.fee.to::<u32>()),
+            p.amountOut,
+            p.amountInMaximum,
             U256::from(p.sqrtPriceLimitX96),
         );
     }
@@ -192,6 +235,17 @@ fn swap_router_v1(input: &[u8]) -> Option<SwapIntent> {
             p.tokenOut,
             p.fee.to::<u32>(),
             p.amountIn,
+            U256::from(p.sqrtPriceLimitX96),
+        );
+    }
+    if sel == SwapRouterV1Out::exactOutputSingleCall::SELECTOR {
+        let p = SwapRouterV1Out::exactOutputSingleCall::abi_decode_raw(args)
+            .ok()?
+            .params;
+        return v3_single_out(
+            (p.tokenIn, p.tokenOut, p.fee.to::<u32>()),
+            p.amountOut,
+            p.amountInMaximum,
             U256::from(p.sqrtPriceLimitX96),
         );
     }
@@ -288,6 +342,7 @@ fn v4_hop(
         amount_in: real_amount(amount_in)?,
         sqrt_limit_x96: None,
         hops,
+        amount_out_exact: None,
     })
 }
 
@@ -448,6 +503,71 @@ impl Protocol for UniswapRouter {
 mod tests {
     use super::*;
     use alloy::primitives::{Bytes, aliases::U24};
+
+    #[test]
+    fn landed_exact_output_calls_fix_the_output_and_bound_the_input() {
+        let mut n = 0;
+        for l in include_str!("../tests/fixtures/exact_output_single_v1.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let f: Vec<&str> = l.split(',').collect();
+            let input = alloy::hex::decode(f[0].trim_start_matches("0x")).unwrap();
+            let s = swap(UniswapRouter.decode_call(SWAP_ROUTER_V1, &input));
+            let (tin, tout): (Address, Address) = (f[1].parse().unwrap(), f[2].parse().unwrap());
+            assert_eq!(s.token_in, tin, "{l}");
+            assert_eq!(
+                s.pool,
+                PoolRef::Pair {
+                    token_a: tin,
+                    token_b: tout,
+                    fee: f[3].parse().unwrap()
+                },
+                "{l}"
+            );
+            assert_eq!(
+                s.amount_out_exact,
+                Some(f[4].parse::<U256>().unwrap()),
+                "{l}"
+            );
+            assert_eq!(s.amount_in, f[5].parse::<U256>().unwrap(), "{l}");
+            n += 1;
+        }
+        assert!(n >= 35, "{n}");
+    }
+
+    #[test]
+    fn swap_router_02_exact_output_single_decodes_and_exact_input_stays_exact() {
+        let c = SwapRouter02Out::exactOutputSingleCall {
+            params: SwapRouter02Out::ExactOutputSingleParams {
+                tokenIn: A,
+                tokenOut: B,
+                fee: U24::from(500u32),
+                recipient: C,
+                amountOut: U256::from(1_000u32),
+                amountInMaximum: U256::from(1_200u32),
+                sqrtPriceLimitX96: Default::default(),
+            },
+        };
+        let s = swap(UniswapRouter.decode_call(SWAP_ROUTER_02, &c.abi_encode()));
+        assert_eq!(s.amount_out_exact, Some(U256::from(1_000u32)));
+        assert_eq!(s.amount_in, U256::from(1_200u32));
+        assert_eq!(s.token_in, A);
+        // Exact-input calls carry no fixed output.
+        let one = SwapRouter02::exactInputSingleCall {
+            params: SwapRouter02::ExactInputSingleParams {
+                tokenIn: A,
+                tokenOut: B,
+                fee: U24::from(500u32),
+                recipient: C,
+                amountIn: U256::from(7u32),
+                amountOutMinimum: U256::ZERO,
+                sqrtPriceLimitX96: Default::default(),
+            },
+        };
+        let s = swap(UniswapRouter.decode_call(SWAP_ROUTER_02, &one.abi_encode()));
+        assert_eq!(s.amount_out_exact, None);
+    }
 
     const A: Address = Address::with_last_byte(0xa1);
     const B: Address = Address::with_last_byte(0xb2);
@@ -845,6 +965,7 @@ mod tests {
                 amount_in: U256::from(amount),
                 sqrt_limit_x96: None,
                 hops: 1,
+                amount_out_exact: None,
             })
         };
         assert_eq!(swaps, vec![want(c0, 1_000), want(c1, 2_000)]);

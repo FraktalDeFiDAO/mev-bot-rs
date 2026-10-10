@@ -97,6 +97,9 @@ pub struct SwapIntent {
     /// `sqrtPriceLimitX96`: the swap stops here with input left over. `None` when the call has none (or it is zero).
     pub sqrt_limit_x96: Option<U256>,
     pub hops: u8,
+    /// `Some(out)` for an exact-output call: it fixes the amount received (`out`, of the other token) and
+    /// `amount_in` is only the most it may spend. `None` for the usual exact-input call.
+    pub amount_out_exact: Option<U256>,
 }
 
 /// A liquidation the call asks for.

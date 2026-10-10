@@ -43,6 +43,7 @@ impl Protocol for OneInch {
             amount_in: abi::uint(d, 5)?,
             sqrt_limit_x96: None,
             hops: 1,
+            amount_out_exact: None,
         }))
     }
 

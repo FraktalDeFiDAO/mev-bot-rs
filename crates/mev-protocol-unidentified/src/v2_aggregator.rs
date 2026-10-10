@@ -38,6 +38,7 @@ pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
         amount_in: amount,
         sqrt_limit_x96: None,
         hops: u8::try_from(pools.len()).ok()?,
+        amount_out_exact: None,
     })
 }
 

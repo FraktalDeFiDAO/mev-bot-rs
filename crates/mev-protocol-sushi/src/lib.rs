@@ -62,6 +62,7 @@ impl Protocol for SushiRouter {
                         amount_in: i.amountIn,
                         sqrt_limit_x96: None,
                         hops: 1,
+                        amount_out_exact: None,
                     }));
                 }
             }

@@ -40,6 +40,7 @@ pub fn label(f: FieldId) -> &'static str {
         FieldId::SwapPool => "pool",
         FieldId::SwapTokenIn => "token sold",
         FieldId::SwapAmountIn => "amount sold (raw units)",
+        FieldId::SwapAmountOut => "amount received (exact-output calls only)",
         FieldId::SwapHops => "route length (hops)",
         FieldId::SwapLimit => "price limit",
         FieldId::LiqAction => "liquidity action",
@@ -197,6 +198,10 @@ fn leaf(field: &str, op: Op, l: &Literal) -> String {
         },
         FieldId::SwapAmountIn => format!(
             "the amount sold is {} {v} (in the token's smallest unit)",
+            op_words(op)
+        ),
+        FieldId::SwapAmountOut => format!(
+            "the exact amount received is {} {v} (in the token's smallest unit)",
             op_words(op)
         ),
         FieldId::SwapHops => format!(

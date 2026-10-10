@@ -122,6 +122,7 @@ fn decode_v4(arg: &[u8]) -> Option<SwapIntent> {
         amount_in: U256::from(mantissa) << shift,
         sqrt_limit_x96: (!limit.is_zero()).then_some(limit),
         hops: 1,
+        amount_out_exact: None,
     })
 }
 
@@ -148,6 +149,7 @@ pub fn decode(to: Address, input: &[u8]) -> Option<SwapIntent> {
         amount_in: U256::from(mantissa) << shift,
         sqrt_limit_x96: (!limit.is_zero()).then_some(limit),
         hops: 1,
+        amount_out_exact: None,
     })
 }
 

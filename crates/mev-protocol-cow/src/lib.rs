@@ -51,6 +51,7 @@ fn intents(input: &[u8]) -> Vec<SwapIntent> {
                 amount_in,
                 sqrt_limit_x96: None,
                 hops: 1,
+                amount_out_exact: None,
             })
         })
         .collect()

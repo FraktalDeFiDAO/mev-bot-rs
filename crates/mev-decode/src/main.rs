@@ -22,6 +22,7 @@ fn swap_json(s: &SwapIntent) -> Value {
         },
         "token_in": format!("{:#x}", s.token_in),
         "amount_in": s.amount_in.to_string(),
+        "amount_out_exact": s.amount_out_exact.map(|a: U256| a.to_string()),
         "sqrt_price_limit_x96": s.sqrt_limit_x96.map(|l: U256| l.to_string()),
         "hops": s.hops,
     })

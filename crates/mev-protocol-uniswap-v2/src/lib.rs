@@ -93,6 +93,7 @@ fn router_swap(input: &[u8]) -> Option<SwapIntent> {
         amount_in,
         sqrt_limit_x96: None,
         hops: u8::try_from(path.len() - 1).ok()?,
+        amount_out_exact: None,
     })
 }
 
@@ -156,6 +157,7 @@ impl Protocol for UniswapV2 {
                 amount_in: value,
                 sqrt_limit_x96: None,
                 hops: u8::try_from(path.len() - 1).unwrap_or(1),
+                amount_out_exact: None,
             })
         })
     }

@@ -51,6 +51,7 @@ impl Protocol for Paraswap {
             amount_in: amount,
             sqrt_limit_x96: None,
             hops: 1,
+            amount_out_exact: None,
         }))
     }
 

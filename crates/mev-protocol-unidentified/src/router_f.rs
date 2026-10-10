@@ -43,6 +43,7 @@ pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
             amount_in: amount,
             sqrt_limit_x96: non_zero(U256::from_be_slice(d.get(121..141)?)),
             hops: 1,
+            amount_out_exact: None,
         });
     }
     if sel == SELECTOR_V2 {
@@ -66,6 +67,7 @@ pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
             amount_in: amount,
             sqrt_limit_x96: None,
             hops: legs,
+            amount_out_exact: None,
         });
     }
     if sel == SELECTOR_V4 {

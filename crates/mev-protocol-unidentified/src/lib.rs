@@ -79,6 +79,7 @@ impl Protocol for Unidentified {
                 token_in: abi::addr(d, 2)?,
                 pool: PoolRef::Address(abi::addr(d, 4)?),
                 hops: 1,
+                amount_out_exact: None,
             }
         } else if to == ROUTER_A && sel == SELECTOR_A_V2 {
             SwapIntent {
@@ -87,6 +88,7 @@ impl Protocol for Unidentified {
                 token_in: abi::addr(d, 2)?,
                 pool: PoolRef::Address(abi::addr(d, 5)?),
                 hops: 1,
+                amount_out_exact: None,
             }
         } else if to == ROUTER_B && sel == SELECTOR_B {
             SwapIntent {
@@ -95,6 +97,7 @@ impl Protocol for Unidentified {
                 sqrt_limit_x96: Some(abi::uint(d, 3)?),
                 token_in: abi::addr(d, 4)?,
                 hops: 1,
+                amount_out_exact: None,
             }
         } else if to == ROUTER_A && sel == v4_bots::SELECTOR_A_V4 {
             v4_bots::decode_a_v4(d)?

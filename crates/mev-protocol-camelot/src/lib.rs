@@ -41,6 +41,7 @@ impl Protocol for CamelotRouter {
             amount_in,
             sqrt_limit_x96: Some(abi::uint(d, 6)?).filter(|l: &U256| !l.is_zero()),
             hops: 1,
+            amount_out_exact: None,
         }))
     }
 
