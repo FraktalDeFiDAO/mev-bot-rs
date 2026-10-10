@@ -3,8 +3,9 @@
 //!   0 hop count (2 or 3) | 1 flags | 2..18 amountIn (uint128, right-aligned) | ... | then one 63-byte record per hop
 //!   starting at 61: `pool(20) tokenIn(20) params(23)` in execution order | 34 trailing bytes.
 //! The base layout has length `61 + 63 * hops + 34`. For it, the first record is the first pool the bot swaps on
-//! (44 of 44), `amountIn` is that swap's `amountSpecified`, and the bot pays exactly that token and amount into the
-//! pool (44 of 44). Other lengths (nine of 53 landed calls) are variants not read. The pools are listed, so a
+//! (108 of 108 with a non-zero first record), `amountIn` is that swap's `amountSpecified`, and the bot pays exactly
+//! that token and amount into the pool (108 of 108); 2 more calls have a zero placeholder first record and are not
+//! decoded. Other lengths (19 of 129 landed calls) are variants not read: their first-hop fields hold on only 15 of 19. The pools are listed, so a
 //! rival's whole cycle could be read; the first hop is reported with the hop count.
 
 use alloy::primitives::{Address, U256, address};
@@ -22,8 +23,10 @@ pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
         return None;
     }
     let amount = U256::from_be_slice(&d[2..18]);
-    (!amount.is_zero()).then(|| SwapIntent {
-        pool: PoolRef::Address(Address::from_slice(&d[61..81])),
+    // A zero first record is a placeholder hop (2 of 110 landed base-layout calls): there is no first pool to name.
+    let pool = Address::from_slice(&d[61..81]);
+    (!amount.is_zero() && !pool.is_zero()).then(|| SwapIntent {
+        pool: PoolRef::Address(pool),
         token_in: Address::from_slice(&d[81..101]),
         amount_in: amount,
         sqrt_limit_x96: None,
@@ -68,6 +71,10 @@ mod tests {
         ok[17] = 1;
         assert!(decode(SELECTOR, &ok).is_some());
         assert!(decode(SELECTOR, &ok[..ok.len() - 1]).is_none());
+        // A placeholder (all-zero) first record names no pool.
+        let mut zero_pool = ok.clone();
+        zero_pool[61..81].fill(0);
+        assert!(decode(SELECTOR, &zero_pool).is_none());
         ok[0] = 4;
         assert!(decode(SELECTOR, &ok).is_none());
         assert!(decode([0; 4], &[0u8; 221]).is_none());
