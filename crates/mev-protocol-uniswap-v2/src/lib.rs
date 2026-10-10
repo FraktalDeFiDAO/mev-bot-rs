@@ -28,12 +28,15 @@ sol! {
     interface V2Router {
         function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) external returns (uint256[] amounts);
         function swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) external;
+        function swapExactTokensForETH(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) external returns (uint256[] amounts);
+        function swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) external;
     }
 }
 
-/// V2-style routers seen in the feed whose factories we do not hold: `(address, factory it answers to)`.
-/// Identified by `factory()` on chain on 2026-10-08, both with swap events of the V2 shape only.
-pub const ROUTERS: [(Address, Address); 2] = [
+/// V2-style routers seen in the feed: `(address, factory it answers to)`. The first two answer to factories we do not
+/// hold (identified by `factory()` on chain on 2026-10-08, swap events of the V2 shape only); the last two are the Sushi
+/// V2 and Camelot V2 routers, whose pairs we do hold (their calls name tokens, so they resolve to `PoolRef::PairV2`).
+pub const ROUTERS: [(Address, Address); 4] = [
     (
         address!("5eb6543d20015e68c4674fba2ce2273d16ad51b7"),
         address!("9b43e504d84adcb7321dc2551a86bff1084ae2e5"),
@@ -41,6 +44,14 @@ pub const ROUTERS: [(Address, Address); 2] = [
     (
         address!("82dfd2b94222bdb603aa6b34a8d37311ab3db800"),
         address!("c8b66e63976670d25feeaad28fe317212766d823"),
+    ),
+    (
+        address!("1b02da8cb0d097eb8d57a175b88c7d8b47997506"),
+        address!("c35dadb65012ec5796536bd9864ed8773abc74c4"),
+    ),
+    (
+        address!("4752ba5dbc23f44d87826276bf6fd6b1c372ad24"),
+        address!("6eccab422d763ac031210895c81787e87b43a652"),
     ),
 ];
 
@@ -55,6 +66,14 @@ fn router_swap(input: &[u8]) -> Option<SwapIntent> {
                 args,
             )
             .ok()?;
+        (c.amountIn, c.path)
+    } else if sel == V2Router::swapExactTokensForETHCall::SELECTOR {
+        let c = V2Router::swapExactTokensForETHCall::abi_decode_raw(args).ok()?;
+        (c.amountIn, c.path)
+    } else if sel == V2Router::swapExactTokensForETHSupportingFeeOnTransferTokensCall::SELECTOR {
+        let c =
+            V2Router::swapExactTokensForETHSupportingFeeOnTransferTokensCall::abi_decode_raw(args)
+                .ok()?;
         (c.amountIn, c.path)
     } else {
         return None;
@@ -112,7 +131,7 @@ impl Protocol for UniswapV2 {
             .iter()
             .map(|(address, _)| Contract {
                 address: *address,
-                name: "V2-style router (swapExactTokensForTokens and fee-on-transfer variant decoded)",
+                name: "V2-style router (swapExactTokensFor{Tokens,ETH} and fee-on-transfer variants decoded; ETH-in variants not)",
                 decoded: true,
             })
             .collect()
@@ -123,6 +142,35 @@ impl Protocol for UniswapV2 {
 mod tests {
     use super::*;
     use alloy::primitives::b256;
+
+    #[test]
+    fn landed_router_calls_decode_to_their_first_hop_token_and_amount() {
+        let mut n = 0;
+        for l in include_str!("../tests/fixtures/router_rows.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let f: Vec<&str> = l.split(',').collect();
+            let input = alloy::hex::decode(f[1].trim_start_matches("0x")).unwrap();
+            let Some(Decoded::Swap(s)) = UniswapV2.decode_call(f[0].parse().unwrap(), &input)
+            else {
+                panic!("not decoded: {l}")
+            };
+            assert_eq!(s.token_in, f[2].parse::<Address>().unwrap(), "{l}");
+            assert_eq!(
+                s.pool,
+                PoolRef::PairV2 {
+                    token_a: f[2].parse().unwrap(),
+                    token_b: f[3].parse().unwrap()
+                },
+                "{l}"
+            );
+            assert_eq!(s.hops, f[4].parse::<u8>().unwrap(), "{l}");
+            assert_eq!(s.amount_in, f[5].parse::<U256>().unwrap(), "{l}");
+            n += 1;
+        }
+        assert!(n >= 50, "{n}");
+    }
 
     #[test]
     fn topics_match_the_known_mainnet_values() {

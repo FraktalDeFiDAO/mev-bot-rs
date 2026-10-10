@@ -63,18 +63,11 @@ pub fn decode_calls(to: Address, input: &[u8]) -> Vec<Decoded> {
 }
 
 /// Destinations seen in the feed that are identified but whose calls no protocol crate decodes yet.
-const UNDECODED: [Contract; 2] = [
-    Contract {
-        address: address!("4752ba5DBc23f44D87826276BF6Fd6b1C372aD24"),
-        name: "Camelot Router (V2)",
-        decoded: false,
-    },
-    Contract {
-        address: address!("0000000071727De22E5E9d8BAf0edAc6f37da032"),
-        name: "ERC-4337 EntryPoint v0.7 (wraps arbitrary calls)",
-        decoded: false,
-    },
-];
+const UNDECODED: [Contract; 1] = [Contract {
+    address: address!("0000000071727De22E5E9d8BAf0edAc6f37da032"),
+    name: "ERC-4337 EntryPoint v0.7 (wraps arbitrary calls)",
+    decoded: false,
+}];
 
 /// Every identified destination: the protocol crates' contracts, then the undecoded ones.
 pub fn contracts() -> &'static [Contract] {
