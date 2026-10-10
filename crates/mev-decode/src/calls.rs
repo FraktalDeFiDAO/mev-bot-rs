@@ -47,6 +47,14 @@ sol! {
         function executeBatch(address[] dest, bytes[] func) external;
         function executeBatchValue(address[] dest, uint256[] value, bytes[] func) external;
     }
+    struct BatchCall { address target; bool allowFailure; uint256 value; bytes callData; }
+    struct TokenPermissions { address token; uint256 amount; }
+    struct PermitBatch { TokenPermissions[] permitted; uint256 nonce; uint256 deadline; }
+    interface PullAndCall {
+        function transferAndMulticall(address[] tokens, uint256[] amounts, BatchCall[] calls, address refundTo, address receiver, bytes data) external payable;
+        function permit2TransferAndMulticall(address owner, PermitBatch permit, BatchCall[] calls, address refundTo, address receiver, bytes data, bytes signature) external payable;
+        function multicall(BatchCall[] calls, address refundTo, address receiver, bytes data) external payable;
+    }
     interface UniversalRouterExec {
         function execute(bytes commands, bytes[] inputs, uint256 deadline) external payable;
     }
@@ -265,6 +273,35 @@ fn unwrap(to: Address, input: &[u8]) -> Option<(&'static str, Vec<Sub>)> {
         let data = args.get(32 * (off + 1)..32 * (off + 1) + len)?;
         return Some(("swap_proxy", vec![(router, data.to_vec())]));
     }
+    // Executors that pull tokens (or take a Permit2 signature) and then run a list of `(target, allowFailure, value, data)`
+    // calls: 119 blind swap events on one day came from `transferAndMulticall` and `permit2TransferAndMulticall`.
+    let pull: Option<Vec<Sub>> = match sel {
+        PullAndCall::transferAndMulticallCall::SELECTOR => Some(
+            dec!(PullAndCall::transferAndMulticallCall)
+                .calls
+                .into_iter()
+                .map(|c| pair(c.target, c.callData))
+                .collect(),
+        ),
+        PullAndCall::permit2TransferAndMulticallCall::SELECTOR => Some(
+            dec!(PullAndCall::permit2TransferAndMulticallCall)
+                .calls
+                .into_iter()
+                .map(|c| pair(c.target, c.callData))
+                .collect(),
+        ),
+        PullAndCall::multicallCall::SELECTOR => Some(
+            dec!(PullAndCall::multicallCall)
+                .calls
+                .into_iter()
+                .map(|c| pair(c.target, c.callData))
+                .collect(),
+        ),
+        _ => None,
+    };
+    if let Some(p) = pull {
+        return Some(("pull_and_call", p));
+    }
     // Self-multicalls: the router or position manager calls itself with each element.
     let batch = match sel {
         SelfMulticall::multicallCall::SELECTOR => Some(dec!(SelfMulticall::multicallCall).data),
@@ -364,6 +401,41 @@ mod tests {
         );
         assert_eq!(l[1].input.as_ref(), &[2, 2, 2, 2, 9]);
         assert!(l.iter().all(|x| x.via == vec!["multicall3"]));
+    }
+
+    #[test]
+    fn pull_and_call_wrappers_yield_their_inner_calls() {
+        let inner = |n: u8| BatchCall {
+            target: target(n),
+            allowFailure: false,
+            value: U256::ZERO,
+            callData: Bytes::from(vec![0xde, 0xad, 0xbe, n]),
+        };
+        let a = PullAndCall::transferAndMulticallCall {
+            tokens: vec![target(9)],
+            amounts: vec![U256::from(5u8)],
+            calls: vec![inner(1), inner(2)],
+            refundTo: target(3),
+            receiver: target(4),
+            data: Bytes::new(),
+        }
+        .abi_encode();
+        let leaves = calls_in(target(7), &a);
+        assert_eq!(leaves.len(), 2);
+        assert_eq!(leaves[0].to, target(1));
+        assert_eq!(leaves[1].to, target(2));
+        assert!(leaves.iter().all(|l| l.via == ["pull_and_call"]));
+        // The same list inside the Permit2 variant and the plain `multicall`.
+        let b = PullAndCall::multicallCall {
+            calls: vec![inner(5)],
+            refundTo: target(3),
+            receiver: target(4),
+            data: Bytes::new(),
+        }
+        .abi_encode();
+        assert_eq!(calls_in(target(7), &b)[0].to, target(5));
+        // Truncated input stays a leaf: nothing is invented.
+        assert_eq!(calls_in(target(7), &a[..a.len() - 40]).len(), 1);
     }
 
     #[test]
