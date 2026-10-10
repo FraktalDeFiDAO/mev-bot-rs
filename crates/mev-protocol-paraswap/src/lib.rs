@@ -10,6 +10,11 @@ use alloy::primitives::{Address, address};
 use mev_protocol::{Contract, Decoded, EventKind, PoolRef, Protocol, SwapIntent, abi};
 
 pub const AUGUSTUS: Address = address!("def171fe48cf0115b1d80b88dc8eab59176fee57");
+/// Augustus V6.2: `swapExactAmountIn(executor, (srcToken, destToken, fromAmount, toAmount, quotedAmount, metadata,
+/// beneficiary), partnerAndFee, permit, executorData)`; the data tuple is static, so its fields are words 1..8. Measured
+/// 2026-10-09 on 37 of 37 landed calls: tokens and `fromAmount` exact (Transfer logs, or the value for native).
+pub const AUGUSTUS_V6: Address = address!("6a000f20005980200259b80c5102003040001068");
+pub const SWAP_EXACT_AMOUNT_IN: [u8; 4] = [0xe3, 0xea, 0xd5, 0x9e];
 pub const SIMPLE_SWAP: [u8; 4] = [0x54, 0xe3, 0xf3, 0x1b];
 pub const DIRECT_UNI_V3_SWAP: [u8; 4] = [0xa6, 0x88, 0x6d, 0xa9];
 const NATIVE: Address = address!("EeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE");
@@ -28,6 +33,22 @@ impl Protocol for Paraswap {
 
     fn decode_call(&self, to: Address, input: &[u8]) -> Option<Decoded> {
         let (sel, d) = abi::split(input)?;
+        if to == AUGUSTUS_V6 && sel == SWAP_EXACT_AMOUNT_IN {
+            let wrap = |a: Address| if a == NATIVE { WETH } else { a };
+            let (src, dst) = (wrap(abi::addr(d, 1)?), wrap(abi::addr(d, 2)?));
+            let amount = abi::uint(d, 3)?;
+            return (src != dst && !amount.is_zero()).then_some(Decoded::Swap(SwapIntent {
+                pool: PoolRef::Tokens {
+                    token_a: src,
+                    token_b: dst,
+                },
+                token_in: src,
+                amount_in: amount,
+                sqrt_limit_x96: None,
+                hops: 1,
+                amount_out_exact: None,
+            }));
+        }
         if to != AUGUSTUS {
             return None;
         }
@@ -56,11 +77,18 @@ impl Protocol for Paraswap {
     }
 
     fn contracts(&self) -> Vec<Contract> {
-        vec![Contract {
-            address: AUGUSTUS,
-            name: "Paraswap Augustus v5 (simpleSwap and directUniV3Swap decoded; multiSwap and others not)",
-            decoded: true,
-        }]
+        vec![
+            Contract {
+                address: AUGUSTUS,
+                name: "Paraswap Augustus v5 (simpleSwap and directUniV3Swap decoded; multiSwap and others not)",
+                decoded: true,
+            },
+            Contract {
+                address: AUGUSTUS_V6,
+                name: "Paraswap Augustus v6.2 (swapExactAmountIn decoded)",
+                decoded: true,
+            },
+        ]
     }
 }
 
@@ -96,6 +124,31 @@ mod tests {
             n += 1;
         }
         assert!(n >= 55 && native >= 8, "{n} {native} {wraps}");
+    }
+
+    #[test]
+    fn landed_v6_calls_decode_to_their_tokens_and_amount() {
+        let mut n = 0;
+        for l in include_str!("../tests/fixtures/v6_rows.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let f: Vec<&str> = l.split(',').collect();
+            let input = hex::decode(f[0].trim_start_matches("0x")).unwrap();
+            let wrap = |a: Address| if a == NATIVE { WETH } else { a };
+            let (src, dst): (Address, Address) = (f[1].parse().unwrap(), f[2].parse().unwrap());
+            if wrap(src) == wrap(dst) {
+                assert!(Paraswap.decode_call(AUGUSTUS_V6, &input).is_none(), "{l}");
+                continue;
+            }
+            let Some(Decoded::Swap(s)) = Paraswap.decode_call(AUGUSTUS_V6, &input) else {
+                panic!("not decoded: {l}")
+            };
+            assert_eq!(s.token_in, wrap(src), "{l}");
+            assert_eq!(s.amount_in, f[3].parse::<U256>().unwrap(), "{l}");
+            n += 1;
+        }
+        assert!(n >= 30, "{n}");
     }
 
     #[test]
