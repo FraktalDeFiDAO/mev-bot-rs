@@ -21,6 +21,9 @@ sol! {
         event Sync(uint112 reserve0, uint112 reserve1);
         event Mint(address indexed sender, uint256 amount0, uint256 amount1);
         event Burn(address indexed sender, uint256 amount0, uint256 amount1, address indexed to);
+        // The pair's own LP token (ERC-20): the same topics as any ERC-20, labelled so a tracked pair's logs are all known.
+        event Transfer(address indexed from, address indexed to, uint256 value);
+        event Approval(address indexed owner, address indexed spender, uint256 value);
     }
 }
 
@@ -111,6 +114,19 @@ impl Protocol for UniswapV2 {
             EventKind::new(Pair::Sync::SIGNATURE_HASH, "sync_v2", Class::State, p),
             EventKind::new(Pair::Mint::SIGNATURE_HASH, "mint_v2", Class::Liquidity, p),
             EventKind::new(Pair::Burn::SIGNATURE_HASH, "burn_v2", Class::Liquidity, p),
+            // LP-token movements: no price or liquidity effect on their own (Mint / Burn carry the liquidity change).
+            EventKind::new(
+                Pair::Transfer::SIGNATURE_HASH,
+                "lp_transfer",
+                Class::State,
+                p,
+            ),
+            EventKind::new(
+                Pair::Approval::SIGNATURE_HASH,
+                "lp_approval",
+                Class::State,
+                p,
+            ),
         ]
     }
 
@@ -244,6 +260,27 @@ mod tests {
             n += 1;
         }
         assert!(n >= 20, "{n}");
+    }
+
+    #[test]
+    fn lp_token_events_use_the_standard_erc20_topics() {
+        let by = |n: &str| {
+            UniswapV2
+                .events()
+                .into_iter()
+                .find(|k| k.name == n)
+                .unwrap()
+                .topic0
+        };
+        // ERC-20 Transfer(address,address,uint256) and Approval(address,address,uint256).
+        assert_eq!(
+            by("lp_transfer"),
+            b256!("ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
+        );
+        assert_eq!(
+            by("lp_approval"),
+            b256!("8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925")
+        );
     }
 
     #[test]

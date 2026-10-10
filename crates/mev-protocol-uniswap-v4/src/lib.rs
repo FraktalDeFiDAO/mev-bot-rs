@@ -136,6 +136,10 @@ sol! {
         event ModifyLiquidity(bytes32 indexed id, address indexed sender, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt);
         event Initialize(bytes32 indexed id, address indexed currency0, address indexed currency1, uint24 fee, int24 tickSpacing, address hooks, uint160 sqrtPriceX96, int24 tick);
         event Donate(bytes32 indexed id, address indexed sender, uint256 amount0, uint256 amount1);
+        // ERC-6909 claim-token accounting of the PoolManager (balances of currencies held inside it).
+        event Transfer(address caller, address indexed from, address indexed to, uint256 indexed id, uint256 amount);
+        event OperatorSet(address indexed owner, address indexed spender, bool approved);
+        event Approval(address indexed owner, address indexed spender, uint256 indexed id, uint256 amount);
     }
 }
 
@@ -166,6 +170,25 @@ impl Protocol for UniswapV4 {
             EventKind::new(
                 PoolManager::Donate::SIGNATURE_HASH,
                 "donate_v4",
+                Class::State,
+                p,
+            ),
+            // ERC-6909 claim tokens the PoolManager keeps for swappers' settled balances.
+            EventKind::new(
+                PoolManager::Transfer::SIGNATURE_HASH,
+                "erc6909_transfer_v4",
+                Class::State,
+                p,
+            ),
+            EventKind::new(
+                PoolManager::OperatorSet::SIGNATURE_HASH,
+                "erc6909_operator_v4",
+                Class::State,
+                p,
+            ),
+            EventKind::new(
+                PoolManager::Approval::SIGNATURE_HASH,
+                "erc6909_approval_v4",
                 Class::State,
                 p,
             ),
@@ -202,6 +225,23 @@ impl Protocol for UniswapV4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erc6909_events_are_known_and_distinct_from_erc20() {
+        let names: Vec<_> = UniswapV4
+            .events()
+            .into_iter()
+            .map(|k| (k.name, k.topic0))
+            .collect();
+        let t = |n: &str| names.iter().find(|(k, _)| *k == n).unwrap().1;
+        // The PoolManager's balance-accounting Transfer seen on chain starts 0x1b3d7edb.
+        assert_eq!(
+            &t("erc6909_transfer_v4").as_slice()[..4],
+            &[0x1b, 0x3d, 0x7e, 0xdb]
+        );
+        assert_ne!(t("erc6909_approval_v4"), t("erc6909_operator_v4"));
+    }
+
     #[test]
     fn position_manager_calls_decode_to_the_liquidity_the_chain_confirmed() {
         let mut n = 0;
@@ -267,11 +307,12 @@ mod tests {
     }
 
     #[test]
-    fn the_four_events_are_distinct_and_only_swap_has_a_price() {
+    fn the_events_are_distinct_and_only_swap_has_a_price() {
         let ev = UniswapV4.events();
-        assert_eq!(ev.len(), 4);
+        // Swap, ModifyLiquidity, Initialize, Donate and the three ERC-6909 accounting events.
+        assert_eq!(ev.len(), 7);
         let topics: std::collections::HashSet<_> = ev.iter().map(|k| k.topic0).collect();
-        assert_eq!(topics.len(), 4);
+        assert_eq!(topics.len(), 7);
         let data = vec![0u8; 32 * 6];
         for k in &ev {
             assert_eq!(
