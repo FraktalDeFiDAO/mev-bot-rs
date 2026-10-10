@@ -405,7 +405,13 @@ fn tx_line(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
-    let intent = st.to.and_then(|to| mev_decode::decode_call(to, &st.input));
+    let intent = st.to.and_then(|to| {
+        mev_decode::decode_call_with_value(
+            to,
+            &st.input,
+            alloy::consensus::Transaction::value(&st.tx),
+        )
+    });
     let actions = st
         .to
         .map(|to| mev_decode::calls::actions_in(to, &st.input))

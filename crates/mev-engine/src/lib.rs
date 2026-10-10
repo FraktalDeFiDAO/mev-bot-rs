@@ -532,7 +532,11 @@ impl Engine {
                         // Read the swap straight from the calldata, at arrival, before any node round trip.
                         if let Some(to) = st.to
                             && let Some(mev_decode::Decoded::Swap(intent)) =
-                                mev_decode::decode_call(to, &st.input)
+                                mev_decode::decode_call_with_value(
+                                    to,
+                                    &st.input,
+                                    alloy::consensus::Transaction::value(&st.tx),
+                                )
                         {
                             let _ = dec_tx.send(pending::DecodedSwap {
                                 hash: st.hash,

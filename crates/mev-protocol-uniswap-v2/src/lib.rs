@@ -28,6 +28,8 @@ sol! {
     interface V2Router {
         function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) external returns (uint256[] amounts);
         function swapExactTokensForTokensSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) external;
+        function swapExactETHForTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline) external payable returns (uint256[] amounts);
+        function swapExactETHForTokensSupportingFeeOnTransferTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline) external payable;
         function swapExactTokensForETH(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) external returns (uint256[] amounts);
         function swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline) external;
     }
@@ -126,6 +128,38 @@ impl Protocol for UniswapV2 {
             .map(Decoded::Swap)
     }
 
+    fn decode_payable(&self, to: Address, input: &[u8], value: U256) -> Option<Decoded> {
+        if !ROUTERS.iter().any(|(r, _)| *r == to) {
+            return None;
+        }
+        let (sel, args) = abi::split(input)?;
+        let path = if sel == V2Router::swapExactETHForTokensCall::SELECTOR {
+            V2Router::swapExactETHForTokensCall::abi_decode_raw(args)
+                .ok()?
+                .path
+        } else if sel == V2Router::swapExactETHForTokensSupportingFeeOnTransferTokensCall::SELECTOR
+        {
+            V2Router::swapExactETHForTokensSupportingFeeOnTransferTokensCall::abi_decode_raw(args)
+                .ok()?
+                .path
+        } else {
+            return None;
+        };
+        let (a, b) = (*path.first()?, *path.get(1)?);
+        (a != b && !value.is_zero()).then(|| {
+            Decoded::Swap(SwapIntent {
+                pool: PoolRef::PairV2 {
+                    token_a: a,
+                    token_b: b,
+                },
+                token_in: a,
+                amount_in: value,
+                sqrt_limit_x96: None,
+                hops: u8::try_from(path.len() - 1).unwrap_or(1),
+            })
+        })
+    }
+
     fn contracts(&self) -> Vec<Contract> {
         ROUTERS
             .iter()
@@ -170,6 +204,44 @@ mod tests {
             n += 1;
         }
         assert!(n >= 50, "{n}");
+    }
+
+    #[test]
+    fn eth_in_router_calls_take_their_amount_from_the_transaction_value() {
+        let mut n = 0;
+        for l in include_str!("../tests/fixtures/eth_in_rows.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let f: Vec<&str> = l.split(',').collect();
+            let input = alloy::hex::decode(f[1].trim_start_matches("0x")).unwrap();
+            let value: U256 = f[2].parse().unwrap();
+            let to: Address = f[0].parse().unwrap();
+            // Without the value there is no amount: the plain decoder says nothing.
+            assert!(UniswapV2.decode_call(to, &input).is_none(), "{l}");
+            assert!(
+                UniswapV2.decode_payable(to, &input, U256::ZERO).is_none(),
+                "{l}"
+            );
+            let Some(Decoded::Swap(s)) = UniswapV2.decode_payable(to, &input, value) else {
+                panic!("not decoded: {l}")
+            };
+            assert_eq!(
+                (s.token_in, s.amount_in),
+                (f[3].parse().unwrap(), value),
+                "{l}"
+            );
+            assert_eq!(
+                s.pool,
+                PoolRef::PairV2 {
+                    token_a: f[3].parse().unwrap(),
+                    token_b: f[4].parse().unwrap()
+                },
+                "{l}"
+            );
+            n += 1;
+        }
+        assert!(n >= 20, "{n}");
     }
 
     #[test]

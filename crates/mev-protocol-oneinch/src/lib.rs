@@ -3,8 +3,7 @@
 //! ("every pool we hold for these tokens"), not one pool. Layout measured 2026-10-10 on 60 of 60 landed calls against
 //! the transfer events: word 1 = source token, word 2 = destination token, word 5 = amount, all exact.
 //!
-//! Not decoded: a native-ETH source (the amount is the transaction value, which `decode_call` is not given), and the
-//! other entry points (`unoswap*`, `ethUnoswap*`, `clipperSwap*`), which carry packed pool addresses.
+//! Not decoded: the other entry points (`unoswap*`, `ethUnoswap*`, `clipperSwap*`), which carry packed pool addresses.
 
 use alloy::primitives::{Address, address};
 use mev_protocol::{Contract, Decoded, EventKind, PoolRef, Protocol, SwapIntent, abi};
@@ -31,12 +30,10 @@ impl Protocol for OneInch {
         if to != ROUTER_V6 || sel != SELECTOR_SWAP {
             return None;
         }
-        let src = abi::addr(d, 1)?;
-        let dst = abi::addr(d, 2)?;
-        if src == NATIVE {
-            return None;
-        }
-        let dst = if dst == NATIVE { WETH } else { dst };
+        // Native ETH on either side is WETH for pool purposes; the amount is in the call (and equals the transaction
+        // value when ETH goes in: 4 of 4 landed calls).
+        let wrap = |a: Address| if a == NATIVE { WETH } else { a };
+        let (src, dst) = (wrap(abi::addr(d, 1)?), wrap(abi::addr(d, 2)?));
         Some(Decoded::Swap(SwapIntent {
             pool: PoolRef::Tokens {
                 token_a: src,
@@ -110,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn native_out_means_weth_and_native_in_is_not_decoded() {
+    fn native_on_either_side_means_weth() {
         let Some(Decoded::Swap(s)) = OneInch.decode_call(ROUTER_V6, &call(USDC, NATIVE, 5)) else {
             panic!("expected a swap")
         };
@@ -121,11 +118,10 @@ mod tests {
                 token_b: WETH
             }
         );
-        assert!(
-            OneInch
-                .decode_call(ROUTER_V6, &call(NATIVE, USDC, 5))
-                .is_none()
-        );
+        let Some(Decoded::Swap(s)) = OneInch.decode_call(ROUTER_V6, &call(NATIVE, USDC, 5)) else {
+            panic!("expected a swap")
+        };
+        assert_eq!((s.token_in, s.amount_in), (WETH, U256::from(5u8)));
     }
 
     #[test]

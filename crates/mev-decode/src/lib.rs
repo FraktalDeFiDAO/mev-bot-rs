@@ -52,6 +52,24 @@ pub fn decode_call(to: Address, input: &[u8]) -> Option<Decoded> {
     protocols().iter().find_map(|p| p.decode_call(to, input))
 }
 
+/// Like [`decode_call`], for a top-level transaction that also carries native ETH: the functions whose amount is the
+/// transaction value (`swapExactETHForTokens`) decode here. Calls nested in wrappers have no value of their own.
+pub fn decode_call_with_value(
+    to: Address,
+    input: &[u8],
+    value: alloy::primitives::U256,
+) -> Option<Decoded> {
+    decode_call(to, input).or_else(|| {
+        (!value.is_zero())
+            .then(|| {
+                protocols()
+                    .iter()
+                    .find_map(|p| p.decode_payable(to, input, value))
+            })
+            .flatten()
+    })
+}
+
 /// Every intent in a call to `to` (several for a call that carries several, such as a Universal Router `execute` with
 /// a swap per command); empty when no protocol crate reads it. The first intent equals [`decode_call`].
 pub fn decode_calls(to: Address, input: &[u8]) -> Vec<Decoded> {

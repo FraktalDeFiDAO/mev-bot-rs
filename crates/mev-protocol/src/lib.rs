@@ -169,6 +169,11 @@ pub trait Protocol: Sync {
     fn decode_call(&self, _to: Address, _input: &[u8]) -> Option<Decoded> {
         None
     }
+    /// The intent of a call that pays native ETH (`value`), for functions whose amount is the transaction value
+    /// (`swapExactETHForTokens`): not readable from the calldata alone. Defaults to none.
+    fn decode_payable(&self, _to: Address, _input: &[u8], _value: U256) -> Option<Decoded> {
+        None
+    }
     /// Every intent in a call to `to`, for calls that carry several (a Universal Router `execute` with a swap per
     /// command). Defaults to the single `decode_call` result.
     fn decode_calls(&self, to: Address, input: &[u8]) -> Vec<Decoded> {

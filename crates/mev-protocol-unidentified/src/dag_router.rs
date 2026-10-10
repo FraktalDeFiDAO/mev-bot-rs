@@ -12,8 +12,9 @@ pub const ROUTER_G: Address = address!("09f94b5fc68e227c323a6fbae3bd98c97fd8c849
 pub const SELECTOR_DAG_SWAP: [u8; 4] = [0xf2, 0xc4, 0x26, 0x96];
 /// `dagSwapTo(uint256 orderId, address receiver, (fromToken, toToken, amount, minReturn, deadline), paths[])`: the
 /// same request one word later. Tokens exact on 34 of 34 landed calls, the amount on 32 (the router's own request
-/// size; two calls moved it through several holders). A native-ETH source (`0xEeee..`) is not decoded.
+/// size; two calls moved it through several holders). A native-ETH source (`0xEeee..`) is mapped to WETH.
 pub const SELECTOR_DAG_SWAP_TO: [u8; 4] = [0x0c, 0x30, 0x7f, 0x76];
+const WETH: Address = address!("82aF49447D8a07e3bd95BD0d56f35241523fBab1");
 const NATIVE: Address = address!("EeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE");
 
 pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
@@ -24,10 +25,11 @@ pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
     } else {
         return None;
     };
-    let (src, dst) = (abi::addr(d, 1 + shift)?, abi::addr(d, 2 + shift)?);
-    if src == NATIVE {
-        return None;
-    }
+    let wrap = |a: Address| if a == NATIVE { WETH } else { a };
+    let (src, dst) = (
+        wrap(abi::addr(d, 1 + shift)?),
+        wrap(abi::addr(d, 2 + shift)?),
+    );
     Some(SwapIntent {
         pool: PoolRef::Tokens {
             token_a: src,
@@ -88,9 +90,10 @@ mod tests {
         to_call.extend(U256::from(1u64).to_be_bytes::<32>());
         let s = decode(SELECTOR_DAG_SWAP_TO, &to_call).unwrap();
         assert_eq!((s.token_in, s.amount_in), (usdc, U256::from(7u64)));
-        // A native-ETH source has no amount in the call.
+        // Native ETH is WETH; the request amount is in the call (it equals the transaction value on 4 of 5 landed calls).
         let mut native = to_call.clone();
         native[64..96].copy_from_slice(&wa(NATIVE));
-        assert!(decode(SELECTOR_DAG_SWAP_TO, &native).is_none());
+        let s = decode(SELECTOR_DAG_SWAP_TO, &native).unwrap();
+        assert_eq!((s.token_in, s.amount_in), (WETH, U256::from(7u64)));
     }
 }
