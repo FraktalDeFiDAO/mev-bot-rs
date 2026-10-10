@@ -11,6 +11,9 @@
 //! `execute(address,uint256,bytes)` and `executeBatch` (both shapes); ERC-4337 EntryPoint v0.6 and v0.7 `handleOps`, whose
 //! operations' `callData` is unwrapped the same way. Anything else is a leaf.
 //!
+//! Also two swap forwarders seen on 2026-10-09 (see `SWAP_FORWARDER`, `SWAP_PROXY`), each a call to a named router with
+//! that router's calldata inside.
+//!
 //! Not read: the ETH `value` of a call (so ETH-in swaps through a wrapper keep the router's own accounting), EntryPoint
 //! v0.6 `handleOps`, and wrappers that use delegatecall to a chosen implementation.
 
@@ -44,6 +47,12 @@ sol! {
         function executeBatch(address[] dest, bytes[] func) external;
         function executeBatchValue(address[] dest, uint256[] value, bytes[] func) external;
     }
+    interface UniversalRouterExec {
+        function execute(bytes commands, bytes[] inputs, uint256 deadline) external payable;
+    }
+    interface SwapForwarder {
+        function execute(address router, address token, uint256 amount, bytes commands, bytes[] inputs, uint256 deadline) external;
+    }
     interface EntryPointV6 {
         struct UserOperation {
             address sender; uint256 nonce; bytes initCode; bytes callData; uint256 callGasLimit;
@@ -71,6 +80,15 @@ pub const MULTICALL3: Address = address!("cA11bde05977b3631167028862bE2a173976CA
 pub const ENTRYPOINT_V7: Address = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
 /// ERC-4337 EntryPoint v0.6 (still widely used; its operations have a different layout).
 pub const ENTRYPOINT_V6: Address = address!("5FF137D4b0FDCD49DcA30c7CF57E578a026d2789");
+
+/// A forwarder that pulls `token` and calls the Universal Router named in the call (`execute(address router, address
+/// token, uint256 amount, bytes commands, bytes[] inputs, uint256 deadline)`, selector `0x2894adf9`): 514 feed
+/// transactions on 2026-10-09. The inner call is the router's own `execute(commands, inputs, deadline)`.
+pub const SWAP_FORWARDER: Address = address!("02e5be68d46dac0b524905bff209cf47ee6db2a9");
+/// A swap proxy (selector `0x708909ad`) whose struct names a router and carries that router's calldata in a `bytes`
+/// (element 4 = router, element 6 = offset of the bytes): 1,365 feed transactions on 2026-10-09.
+pub const SWAP_PROXY: Address = address!("09fc9b7545020f6a51d113e495e0a451597969d3");
+const SWAP_PROXY_SELECTOR: [u8; 4] = [0x70, 0x89, 0x09, 0xad];
 
 /// One call found in a transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,6 +245,25 @@ fn unwrap(to: Address, input: &[u8]) -> Option<(&'static str, Vec<Sub>)> {
                 .map(|o| pair(o.sender, o.callData))
                 .collect(),
         ));
+    }
+    if to == SWAP_FORWARDER && sel == SwapForwarder::executeCall::SELECTOR {
+        let c = dec!(SwapForwarder::executeCall);
+        let inner = UniversalRouterExec::executeCall {
+            commands: c.commands,
+            inputs: c.inputs,
+            deadline: c.deadline,
+        }
+        .abi_encode();
+        return Some(("swap_forwarder", vec![(c.router, inner)]));
+    }
+    if to == SWAP_PROXY && sel == SWAP_PROXY_SELECTOR {
+        use mev_protocol::abi;
+        let t = usize::try_from(abi::uint(args, 0)?).ok()? / 32;
+        let router = abi::addr(args, t + 4)?;
+        let off = t + usize::try_from(abi::uint(args, t + 6)?).ok()? / 32;
+        let len = usize::try_from(abi::uint(args, off)?).ok()?;
+        let data = args.get(32 * (off + 1)..32 * (off + 1) + len)?;
+        return Some(("swap_proxy", vec![(router, data.to_vec())]));
     }
     // Self-multicalls: the router or position manager calls itself with each element.
     let batch = match sel {
