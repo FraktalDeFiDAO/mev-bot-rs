@@ -3,6 +3,7 @@
 //! contracts we do not control, which may change without notice. Kept apart so they can be renamed or dropped once
 //! identified. Both run one exact-input swap on one Uniswap-V3-style pool with a price limit.
 
+pub mod dag_router;
 pub mod packed;
 pub mod packed_table;
 pub mod router_f;
@@ -96,6 +97,8 @@ impl Protocol for Unidentified {
             v4_bots::decode_a_v4(d)?
         } else if to == v4_bots::ROUTER_E {
             v4_bots::decode_e(sel, d)?
+        } else if to == dag_router::ROUTER_G {
+            dag_router::decode(sel, d)?
         } else if to == router_f::ROUTER_F {
             router_f::decode(sel, d)?
         } else {
@@ -119,6 +122,11 @@ impl Protocol for Unidentified {
             Contract {
                 address: v4_bots::ROUTER_E,
                 name: "unidentified, selectors 755f317c (V3) and 4fd7c9b7 (V4)",
+                decoded: true,
+            },
+            Contract {
+                address: dag_router::ROUTER_G,
+                name: "unidentified aggregator, dagSwapByOrderId (f2c42696) decoded to its tokens",
                 decoded: true,
             },
             Contract {
