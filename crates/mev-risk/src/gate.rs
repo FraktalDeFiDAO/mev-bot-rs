@@ -10,6 +10,11 @@
 //! route that stopped being contested is retried. Pure: callers pass the clock.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
+
+use crate::persist::Store;
 
 #[derive(Debug, Clone)]
 pub struct GateConfig {
@@ -27,6 +32,12 @@ pub struct GateConfig {
     pub backoff_max_secs: u64,
     /// Results older than this are forgotten, seconds.
     pub memory_secs: u64,
+    /// Global stop: after this many sends inside the memory window with no win at all, stop sending (routes
+    /// still get their free tries otherwise, so a market the bot cannot win costs one loss per route, forever).
+    /// 0 turns it off.
+    pub global_min_attempts: u32,
+    /// While stopped, one probe send is allowed this often (seconds), so a market that changed is noticed.
+    pub global_probe_secs: u64,
 }
 
 impl Default for GateConfig {
@@ -40,6 +51,8 @@ impl Default for GateConfig {
             backoff_secs: 600,
             backoff_max_secs: 6 * 3600,
             memory_secs: 24 * 3600,
+            global_min_attempts: 30,
+            global_probe_secs: 3600,
         }
     }
 }
@@ -53,6 +66,11 @@ pub enum Verdict {
     NegativeEv {
         p_win: f64,
         ev_usd: f64,
+    },
+    /// No win in `attempts` sends across all routes: stopped, next probe at `next_probe_secs` (unix).
+    GlobalStop {
+        attempts: u64,
+        next_probe_secs: u64,
     },
     /// Too many losses in a row; retry after `until_secs` (unix).
     BackedOff {
@@ -82,6 +100,19 @@ pub struct RouteGate<K: std::hash::Hash + Eq + Copy> {
     routes: HashMap<K, Stats>,
     global_attempts: u64,
     global_wins: u64,
+    /// When the global window started and when the last probe went out (unix seconds).
+    global_since: u64,
+    last_probe: u64,
+    store: Option<Store>,
+}
+
+/// What survives a restart: the global record (routes are cheap to relearn; the global stop is not).
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct SavedGate {
+    since: u64,
+    attempts: u64,
+    wins: u64,
+    last_probe: u64,
 }
 
 impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
@@ -90,6 +121,40 @@ impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
             routes: HashMap::new(),
             global_attempts: 0,
             global_wins: 0,
+            global_since: 0,
+            last_probe: 0,
+            store: None,
+        }
+    }
+
+    /// Keep the global record in `path` and resume from it (a window older than `memory_secs` is dropped).
+    pub fn with_persistence(mut self, path: PathBuf, cfg: &GateConfig, now: u64) -> Self {
+        let store = Store::new(path);
+        if let Some(s) = store.load::<SavedGate>()
+            && now.saturating_sub(s.since) < cfg.memory_secs
+        {
+            self.global_since = s.since;
+            self.global_attempts = s.attempts;
+            self.global_wins = s.wins;
+            self.last_probe = s.last_probe;
+            tracing::info!(
+                attempts = s.attempts,
+                wins = s.wins,
+                "gate: resumed the global record from disk"
+            );
+        }
+        self.store = Some(store);
+        self
+    }
+
+    fn save(&self) {
+        if let Some(store) = &self.store {
+            store.save(&SavedGate {
+                since: self.global_since,
+                attempts: self.global_attempts,
+                wins: self.global_wins,
+                last_probe: self.last_probe,
+            });
         }
     }
 
@@ -113,6 +178,22 @@ impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
             return Verdict::Explore;
         }
         self.forget(cfg, now);
+        if cfg.global_min_attempts > 0
+            && self.global_attempts >= u64::from(cfg.global_min_attempts)
+            && self.global_wins == 0
+        {
+            let next = self.last_probe + cfg.global_probe_secs;
+            if now < next {
+                return Verdict::GlobalStop {
+                    attempts: self.global_attempts,
+                    next_probe_secs: next,
+                };
+            }
+            // One probe: if it loses too, the stop holds for another period.
+            self.last_probe = now;
+            self.save();
+            return Verdict::Explore;
+        }
         let prior = self.prior(cfg);
         let Some(s) = self.routes.get(&route) else {
             return Verdict::Explore;
@@ -152,6 +233,9 @@ impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
         let s = self.routes.entry(route).or_default();
         s.attempts += 1;
         s.last_result = now;
+        if self.global_attempts == 0 {
+            self.global_since = now;
+        }
         self.global_attempts += 1;
         if won {
             s.wins += 1;
@@ -161,10 +245,17 @@ impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
             s.losses_in_row += 1;
             s.last_loss = now;
         }
+        self.save();
     }
 
     /// Drop routes with no result for `memory_secs`.
     fn forget(&mut self, cfg: &GateConfig, now: u64) {
+        // The global window rolls with the same memory as the routes.
+        if self.global_attempts > 0 && now.saturating_sub(self.global_since) >= cfg.memory_secs {
+            self.global_attempts = 0;
+            self.global_wins = 0;
+            self.save();
+        }
         self.routes
             .retain(|_, s| now.saturating_sub(s.last_result) < cfg.memory_secs);
     }
@@ -242,6 +333,87 @@ mod tests {
     }
 
     #[test]
+    fn no_wins_anywhere_stops_all_sending_but_a_probe_each_period() {
+        let c = GateConfig {
+            global_min_attempts: 5,
+            global_probe_secs: 100,
+            ..cfg()
+        };
+        let mut g: RouteGate<u32> = RouteGate::new();
+        for route in 0..5 {
+            assert!(
+                g.check(&c, route, 1.0, 0.1, 10).allows(),
+                "free tries until the stop"
+            );
+            g.record(route, false, 10);
+        }
+        // A brand-new route is stopped too.
+        assert!(matches!(
+            g.check(&c, 99, 1.0, 0.1, 20),
+            Verdict::GlobalStop { attempts: 5, .. }
+        ));
+        // After the probe period one send goes out, the next candidate is stopped again.
+        assert_eq!(g.check(&c, 99, 1.0, 0.1, 130), Verdict::Explore);
+        assert!(matches!(
+            g.check(&c, 98, 1.0, 0.1, 131),
+            Verdict::GlobalStop { .. }
+        ));
+        // A probe that wins lifts the stop.
+        g.record(99, true, 140);
+        assert!(g.check(&c, 97, 1.0, 0.1, 141).allows());
+    }
+
+    #[test]
+    fn the_global_stop_is_off_at_zero_and_ages_out() {
+        let off = GateConfig {
+            global_min_attempts: 0,
+            ..cfg()
+        };
+        let mut g: RouteGate<u32> = RouteGate::new();
+        for route in 0..50 {
+            g.record(route, false, 10);
+        }
+        assert!(g.check(&off, 1000, 1.0, 0.1, 20).allows());
+        let on = GateConfig {
+            global_min_attempts: 5,
+            memory_secs: 1000,
+            ..cfg()
+        };
+        assert!(matches!(
+            g.check(&on, 1000, 1.0, 0.1, 20),
+            Verdict::GlobalStop { .. }
+        ));
+        assert!(
+            g.check(&on, 1000, 1.0, 0.1, 5000).allows(),
+            "old losses are forgotten"
+        );
+    }
+
+    #[test]
+    fn the_global_record_survives_a_restart() {
+        let c = GateConfig {
+            global_min_attempts: 3,
+            ..cfg()
+        };
+        let path = std::env::temp_dir().join(format!("gate-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut a: RouteGate<u32> = RouteGate::new().with_persistence(path.clone(), &c, 10);
+        for route in 0..3 {
+            a.record(route, false, 10);
+        }
+        let mut b: RouteGate<u32> = RouteGate::new().with_persistence(path.clone(), &c, 20);
+        assert!(matches!(
+            b.check(&c, 7, 1.0, 0.1, 20),
+            Verdict::GlobalStop { .. }
+        ));
+        // A record from a previous window is not resumed.
+        let b2: RouteGate<u32> =
+            RouteGate::new().with_persistence(path.clone(), &c, 10 + c.memory_secs + 1);
+        assert!(b2.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn a_new_route_gets_its_free_tries() {
         let mut g = RouteGate::<u8>::new();
         let c = cfg();
@@ -308,6 +480,7 @@ mod tests {
         let mut g = RouteGate::<u8>::new();
         let c = GateConfig {
             backoff_after: 99,
+            global_min_attempts: 0, // this test is about the per-route judgement, not the global stop
             ..cfg()
         };
         // Everyone else loses a lot: the global prior sinks to its floor.

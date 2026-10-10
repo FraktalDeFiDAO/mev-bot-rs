@@ -317,6 +317,9 @@ pub struct GateConfig {
     pub backoff_max_secs: u64,
     /// Results older than this are forgotten (seconds).
     pub memory_secs: u64,
+    /// Stop all arbitrage sends after this many with no win (0 = off); one probe per `global_probe_secs`.
+    pub global_min_attempts: u32,
+    pub global_probe_secs: u64,
 }
 
 impl Default for GateConfig {
@@ -330,6 +333,8 @@ impl Default for GateConfig {
             backoff_secs: 600,
             backoff_max_secs: 6 * 3600,
             memory_secs: 24 * 3600,
+            global_min_attempts: 30,
+            global_probe_secs: 3600,
         }
     }
 }

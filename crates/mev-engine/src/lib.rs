@@ -77,6 +77,8 @@ fn gate_params(c: &mev_config::GateConfig) -> mev_risk::gate::GateConfig {
         backoff_secs: c.backoff_secs,
         backoff_max_secs: c.backoff_max_secs,
         memory_secs: c.memory_secs,
+        global_min_attempts: c.global_min_attempts,
+        global_probe_secs: c.global_probe_secs,
     }
 }
 
@@ -687,6 +689,11 @@ impl Engine {
             .collect();
 
         let pga_policy = bid_policy(&cfg.pga);
+        let gate = mev_risk::gate::RouteGate::new().with_persistence(
+            data_dir.join("gate-state.json"),
+            &gate_params(&cfg.gate),
+            now_secs(),
+        );
         let pga_budget =
             TipBudget::new(cfg.pga.max_tip_usd_per_minute, cfg.pga.max_tip_usd_per_day)
                 .with_persistence(data_dir.join("tip-state.json"), now_secs());
@@ -712,7 +719,7 @@ impl Engine {
             bid_policy: pga_policy,
             feed_tips,
             atlas,
-            gate: mev_risk::gate::RouteGate::new(),
+            gate,
             sim_bad: mev_risk::gate::Cooldowns::new(),
             healed: HashMap::new(),
             trigger_calls: HashMap::new(),
