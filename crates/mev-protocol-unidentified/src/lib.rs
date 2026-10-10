@@ -4,6 +4,7 @@
 //! identified. Both run one exact-input swap on one Uniswap-V3-style pool with a price limit.
 
 pub mod dag_router;
+pub mod execute_trade;
 pub mod packed;
 pub mod packed_table;
 pub mod router_f;
@@ -101,6 +102,8 @@ impl Protocol for Unidentified {
             v4_bots::decode_e(sel, d)?
         } else if to == dag_router::ROUTER_G {
             dag_router::decode(sel, d)?
+        } else if to == execute_trade::BOT {
+            execute_trade::decode(sel, d)?
         } else if to == v2_aggregator::ROUTER {
             v2_aggregator::decode(sel, d)?
         } else if to == router_h::ROUTER_H {
@@ -133,6 +136,11 @@ impl Protocol for Unidentified {
             Contract {
                 address: dag_router::ROUTER_G,
                 name: "unidentified aggregator, dagSwapByOrderId (f2c42696) decoded to its tokens",
+                decoded: true,
+            },
+            Contract {
+                address: execute_trade::BOT,
+                name: "unidentified arbitrage bot, executeTrade (b4b9c57b): pair, fee, token and amount",
                 decoded: true,
             },
             Contract {
