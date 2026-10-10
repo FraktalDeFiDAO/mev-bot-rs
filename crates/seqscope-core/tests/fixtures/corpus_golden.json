@@ -1,5 +1,6 @@
 {
   "liquidity/uniswap_v3": 12,
+  "liquidity/uniswap_v4": 1,
   "swap/cow": 2,
   "swap/oneinch": 3,
   "swap/unidentified": 108,
@@ -11,7 +12,7 @@
   "undecoded_known/unidentified": 3,
   "undecoded_known/uniswap_router": 3,
   "undecoded_known/uniswap_v3": 1,
-  "unknown/-": 2133,
+  "unknown/-": 2132,
   "wrapped/account_execute": 7,
   "wrapped/entrypoint_v6>account_execute": 44,
   "wrapped/entrypoint_v7": 19,
