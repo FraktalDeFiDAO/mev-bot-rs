@@ -131,7 +131,7 @@ impl Protocol for Unidentified {
             },
             Contract {
                 address: router_f::ROUTER_F,
-                name: "unidentified packed bot (00000002 V3, 00000011 V4 decoded; 00000001 multi-leg not)",
+                name: "unidentified packed bot (00000002 V3, 00000011 V4, 00000001 V2 legs decoded; other 00000001 shapes not)",
                 decoded: true,
             },
             Contract {
