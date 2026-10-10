@@ -7,6 +7,7 @@ pub mod dag_router;
 pub mod packed;
 pub mod packed_table;
 pub mod router_f;
+pub mod router_h;
 pub mod v4_bots;
 
 use alloy::primitives::{Address, address};
@@ -99,6 +100,8 @@ impl Protocol for Unidentified {
             v4_bots::decode_e(sel, d)?
         } else if to == dag_router::ROUTER_G {
             dag_router::decode(sel, d)?
+        } else if to == router_h::ROUTER_H {
+            router_h::decode(sel, d)?
         } else if to == router_f::ROUTER_F {
             router_f::decode(sel, d)?
         } else {
@@ -127,6 +130,11 @@ impl Protocol for Unidentified {
             Contract {
                 address: dag_router::ROUTER_G,
                 name: "unidentified aggregator, dagSwapByOrderId (f2c42696) decoded to its tokens",
+                decoded: true,
+            },
+            Contract {
+                address: router_h::ROUTER_H,
+                name: "unidentified packed bot, selector 00000001 (one pool, token and amount decoded; other legs not)",
                 decoded: true,
             },
             Contract {
