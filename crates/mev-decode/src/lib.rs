@@ -27,7 +27,7 @@ pub use mev_protocol::{
 
 /// Every protocol crate, in a fixed order. Adding a protocol means adding it here.
 pub fn protocols() -> &'static [&'static dyn Protocol] {
-    static P: [&dyn Protocol; 11] = [
+    static P: [&dyn Protocol; 12] = [
         &mev_protocol_uniswap_v2::UniswapV2,
         &mev_protocol_uniswap_v3::UniswapV3,
         &mev_protocol_uniswap_v4::UniswapV4,
@@ -38,6 +38,7 @@ pub fn protocols() -> &'static [&'static dyn Protocol] {
         &mev_protocol_morpho_blue::MorphoBlue,
         &mev_protocol_compound_v3::CompoundV3,
         &mev_protocol_fluid::Fluid,
+        &mev_protocol_oneinch::OneInch,
         &mev_protocol_unidentified::Unidentified,
     ];
     &P
@@ -59,15 +60,10 @@ pub fn decode_calls(to: Address, input: &[u8]) -> Vec<Decoded> {
 }
 
 /// Destinations seen in the feed that are identified but whose calls no protocol crate decodes yet.
-const UNDECODED: [Contract; 3] = [
+const UNDECODED: [Contract; 2] = [
     Contract {
         address: address!("4752ba5DBc23f44D87826276BF6Fd6b1C372aD24"),
         name: "Camelot Router (V2)",
-        decoded: false,
-    },
-    Contract {
-        address: address!("111111125421cA6dc452d289314280a0f8842A65"),
-        name: "1inch AggregationRouter v6",
         decoded: false,
     },
     Contract {

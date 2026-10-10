@@ -120,6 +120,11 @@ pub fn resolve_pools(store: &PoolStore, intent: &SwapIntent) -> Vec<Address> {
                 || matches!(p.info.kind, PoolKind::AlgebraV3))
             .map(|p| p.info.address)
             .collect(),
+        PoolRef::Tokens { token_a, token_b } => store
+            .pools_for(*token_a, *token_b)
+            .into_iter()
+            .map(|p| p.info.address)
+            .collect(),
         PoolRef::PairV2 { token_a, token_b } => store
             .pools_for(*token_a, *token_b)
             .into_iter()

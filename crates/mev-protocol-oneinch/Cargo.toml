@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-oneinch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "1inch AggregationRouter v6: swap intent (tokens and amount; the route is the executor's)"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

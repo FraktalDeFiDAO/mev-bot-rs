@@ -80,6 +80,12 @@ pub enum PoolRef {
         token_a: Address,
         token_b: Address,
     },
+    /// An aggregator swap: the tokens are known, the pools are chosen by its executor, so any pool we hold for
+    /// these two tokens may be on the route.
+    Tokens {
+        token_a: Address,
+        token_b: Address,
+    },
 }
 
 /// One exact-input swap on one pool. For a multi-hop route this is the first hop (`hops` says how many there are).

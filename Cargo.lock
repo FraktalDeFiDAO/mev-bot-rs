@@ -3197,6 +3197,7 @@ dependencies = [
  "mev-protocol-compound-v3",
  "mev-protocol-fluid",
  "mev-protocol-morpho-blue",
+ "mev-protocol-oneinch",
  "mev-protocol-pancake-v3",
  "mev-protocol-unidentified",
  "mev-protocol-uniswap-router",
@@ -3593,6 +3594,14 @@ dependencies = [
 
 [[package]]
 name = "mev-protocol-morpho-blue"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-oneinch"
 version = "0.1.0"
 dependencies = [
  "alloy",

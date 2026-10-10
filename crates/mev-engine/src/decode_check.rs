@@ -112,7 +112,7 @@ fn pool_for(store: &PoolStore, intent: &SwapIntent) -> Option<Address> {
         }
         // V2-style pairs are not compared here (this check predicts concentrated-liquidity prices), and the calldata
         // does not say which factory's pair is meant.
-        PoolRef::PairV2 { .. } => None,
+        PoolRef::PairV2 { .. } | PoolRef::Tokens { .. } => None,
     }
 }
 
