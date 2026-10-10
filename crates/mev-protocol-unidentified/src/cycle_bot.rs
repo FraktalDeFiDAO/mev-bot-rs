@@ -69,6 +69,7 @@ mod tests {
         let mut ok = vec![0u8; 61 + 63 * 2 + 34];
         ok[0] = 2;
         ok[17] = 1;
+        ok[80] = 1; // a non-zero first pool
         assert!(decode(SELECTOR, &ok).is_some());
         assert!(decode(SELECTOR, &ok[..ok.len() - 1]).is_none());
         // A placeholder (all-zero) first record names no pool.
