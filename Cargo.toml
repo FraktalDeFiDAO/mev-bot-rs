@@ -82,6 +82,7 @@ mev-protocol-fluid = { path = "crates/mev-protocol-fluid" }
 mev-protocol-oneinch = { path = "crates/mev-protocol-oneinch" }
 mev-protocol-cow = { path = "crates/mev-protocol-cow" }
 mev-protocol-camelot = { path = "crates/mev-protocol-camelot" }
+mev-protocol-sushi = { path = "crates/mev-protocol-sushi" }
 mev-atlas = { path = "crates/mev-atlas" }
 mev-localsim = { path = "crates/mev-localsim" }
 
