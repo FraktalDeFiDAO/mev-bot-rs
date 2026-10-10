@@ -7,6 +7,7 @@ pub mod dag_router;
 pub mod execute_trade;
 pub mod packed;
 pub mod packed_table;
+pub mod rfq_swap;
 pub mod router_f;
 pub mod router_h;
 pub mod v2_aggregator;
@@ -105,6 +106,8 @@ impl Protocol for Unidentified {
             v4_bots::decode_e(sel, d)?
         } else if to == dag_router::ROUTER_G {
             dag_router::decode(sel, d)?
+        } else if to == rfq_swap::ROUTER {
+            rfq_swap::decode(sel, d)?
         } else if to == execute_trade::BOT {
             execute_trade::decode(sel, d)?
         } else if to == v2_aggregator::ROUTER {
@@ -139,6 +142,11 @@ impl Protocol for Unidentified {
             Contract {
                 address: dag_router::ROUTER_G,
                 name: "unidentified aggregator, dagSwapByOrderId (f2c42696) decoded to its tokens",
+                decoded: true,
+            },
+            Contract {
+                address: rfq_swap::ROUTER,
+                name: "unidentified quote-based swap router (f3efe779): tokens and amount",
                 decoded: true,
             },
             Contract {
