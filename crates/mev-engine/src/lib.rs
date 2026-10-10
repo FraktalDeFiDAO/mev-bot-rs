@@ -532,19 +532,31 @@ impl Engine {
                             tip_book.lock().unwrap().record(t, now_secs());
                         }
                         // Read the swap straight from the calldata, at arrival, before any node round trip.
-                        if let Some(to) = st.to
-                            && let Some(mev_decode::Decoded::Swap(intent)) =
-                                mev_decode::decode_call_with_value(
-                                    to,
-                                    &st.input,
-                                    alloy::consensus::Transaction::value(&st.tx),
-                                )
-                        {
-                            let _ = dec_tx.send(pending::DecodedSwap {
-                                hash: st.hash,
-                                intent,
-                                received: st.received,
-                            });
+                        if let Some(to) = st.to {
+                            // The call itself (ETH-in forms need the value), else every swap inside the wrappers it
+                            // goes through (multicall, smart accounts, the swap forwarders): their pools are pending too.
+                            let intents: Vec<_> = match mev_decode::decode_call_with_value(
+                                to,
+                                &st.input,
+                                alloy::consensus::Transaction::value(&st.tx),
+                            ) {
+                                Some(mev_decode::Decoded::Swap(s)) => vec![s],
+                                _ => mev_decode::calls::decode_all(to, &st.input)
+                                    .into_iter()
+                                    .filter_map(|d| match d {
+                                        mev_decode::Decoded::Swap(s) => Some(s),
+                                        _ => None,
+                                    })
+                                    .take(8)
+                                    .collect(),
+                            };
+                            for intent in intents {
+                                let _ = dec_tx.send(pending::DecodedSwap {
+                                    hash: st.hash,
+                                    intent,
+                                    received: st.received,
+                                });
+                            }
                         }
                         if want_pre {
                             let _ = pre_tx.send(st.clone());

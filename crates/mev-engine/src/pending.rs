@@ -51,6 +51,15 @@ impl PendingSwaps {
         if self.open.len() > 4_096 {
             self.prune(now);
         }
+        // A transaction can carry several swaps (a multicall, a forwarder): its pending effect is the union.
+        if let Some((have, _)) = self.open.get_mut(&hash) {
+            for p in pools {
+                if !have.contains(&p) {
+                    have.push(p);
+                }
+            }
+            return;
+        }
         self.inserted.fetch_add(1, Relaxed);
         self.open.insert(hash, (pools, now));
     }
@@ -152,6 +161,25 @@ mod tests {
         assert_eq!(p.conflict(&[a(2), a(9)], t0), Some(h(1)));
         assert_eq!(p.conflict(&[a(9)], t0), None, "another pool");
         assert_eq!(p.conflict(&[], t0), None);
+    }
+
+    #[test]
+    fn a_transaction_with_several_swaps_blocks_the_union_of_their_pools() {
+        let (mut p, t0) = (PendingSwaps::default(), Instant::now());
+        p.insert(h(1), vec![a(1)], t0);
+        p.insert(h(1), vec![a(2), a(1)], t0);
+        assert_eq!(p.conflict(&[a(1)], t0), Some(h(1)));
+        assert_eq!(
+            p.conflict(&[a(2)], t0),
+            Some(h(1)),
+            "second swap's pool is pending too"
+        );
+        assert_eq!(p.take_counts().0, 1, "still one pending transaction");
+        assert!(p.settle(&h(1), Settled::Block));
+        assert!(
+            p.is_empty(),
+            "one settle clears every pool of the transaction"
+        );
     }
 
     #[test]
