@@ -148,7 +148,7 @@ impl Protocol for Unidentified {
             },
             Contract {
                 address: v2_aggregator::ROUTER,
-                name: "unidentified aggregator, exactInputV2Swap (0dc4bdae): token, amount and first pool",
+                name: "unidentified aggregator, exactInputV2Swap (0dc4bdae) and exactInputV3Swap (b9b5149b): token, amount and first pool",
                 decoded: true,
             },
             Contract {
