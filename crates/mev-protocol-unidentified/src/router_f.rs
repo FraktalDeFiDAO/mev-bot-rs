@@ -6,11 +6,13 @@
 //!   `zeroForOne` is `tokenIn < tokenOut`.
 //! Selector `00000011` (V4 pool), 32-byte words: `(0x20, amountIn, zeroForOne, .., sqrtLimit at 6, .., currency0 at 12,
 //!   currency1 at 13, fee at 14, tickSpacing at 15, hooks at 16)`.
-//! Selector `00000001` (V2 pair legs), arguments after the selector: `[legs][wIn][wOut][amountIn: wIn bytes][minOut:
-//!   wOut bytes]` (wIn + wOut = 16) `[tokenOut: 20][deadline: 8][pool: 20][fee: 3][tokenIn: 20]..`, the first leg's fields.
-//!   Decoded for widths (9,7) with one or two legs and (7,9) with one leg; verified on 56 of 56 successful traced calls
-//!   (first pair swap = pool, first transfer = tokenIn and amountIn, 2026-10-10, `tests/fixtures/f1_rows.csv`). Other
-//!   width pairs lead with a V3 leg or order their legs differently and are not decoded.
+//! Selector `00000001` (swap legs), arguments after the selector: `[legs][wIn][wOut][amountIn: wIn bytes][minOut: wOut
+//!   bytes][tokenOut: 20][deadline: 8][pool: 20][fee: 3][tokenIn: 20]..`, the first leg's fields, so for any width pair
+//!   the pool is at byte `31 + wIn + wOut` and the token in at `54 + wIn + wOut`. Decoded for one or two legs with widths
+//!   3..=10 and length `77 + wIn + wOut + 46 * (legs - 1)`: on 84 of 84 successful traced calls (2026-10-10, fixture
+//!   `tests/fixtures/f1_rows.csv`) the bot pays exactly this token and amount into this pool (the V3 `amountSpecified`
+//!   or the token transfer); the pool is also the first swapped in 82 of 84, the other two run their second leg first.
+//!   Other lengths (one 330-byte call) and more legs are not decoded.
 
 use alloy::primitives::{Address, U256, address};
 use mev_protocol::{PoolRef, SwapIntent, abi, v4};
@@ -52,9 +54,10 @@ pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
             usize::from(*d.get(1)?),
             usize::from(*d.get(2)?),
         );
-        let known = matches!((legs, w_in, w_out), (1 | 2, 9, 7) | (1, 7, 9));
-        // One leg is 93 bytes; a second leg adds 46.
-        if !known || d.len() != 93 + 46 * usize::from(legs - 1) {
+        // One or two legs, field widths 3..=10; the length is the fixed head plus both fields, 46 more per extra leg.
+        let known =
+            (1..=2).contains(&legs) && (3..=10).contains(&w_in) && (3..=10).contains(&w_out);
+        if !known || d.len() != 77 + w_in + w_out + 46 * usize::from(legs - 1) {
             return None;
         }
         let amount = U256::from_be_slice(d.get(3..3 + w_in)?);
@@ -62,8 +65,8 @@ pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
             return None;
         }
         return Some(SwapIntent {
-            pool: PoolRef::Address(address_at(d, 47)?),
-            token_in: address_at(d, 70)?,
+            pool: PoolRef::Address(address_at(d, 31 + w_in + w_out)?),
+            token_in: address_at(d, 54 + w_in + w_out)?,
             amount_in: amount,
             sqrt_limit_x96: None,
             hops: legs,
@@ -151,9 +154,16 @@ mod tests {
     fn v2_legs_of_other_shapes_are_not_decoded() {
         let ok = hex::decode(include_str!("../tests/fixtures/f1_one_leg.hex").trim()).unwrap();
         assert!(decode(SELECTOR_V2, &ok).is_some());
-        let mut v3_first = ok.clone();
-        v3_first[1] = 4; // width pair (4, 7): not a known shape
-        assert!(decode(SELECTOR_V2, &v3_first).is_none());
+        // A width outside 3..=10, a wrong length for the widths, and more than two legs are not read.
+        let mut wide = ok.clone();
+        wide[1] = 11;
+        assert!(decode(SELECTOR_V2, &wide).is_none());
+        let mut narrow = ok.clone();
+        narrow[1] = 4; // widths (4, 7) but the length of (9, 7): not a known shape
+        assert!(decode(SELECTOR_V2, &narrow).is_none());
+        let mut three_legs = ok.clone();
+        three_legs[0] = 3;
+        assert!(decode(SELECTOR_V2, &three_legs).is_none());
         assert!(decode(SELECTOR_V2, &ok[..92]).is_none());
         let mut zero = ok;
         zero[3..12].fill(0);
