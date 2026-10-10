@@ -3,6 +3,7 @@
 //! contracts we do not control, which may change without notice. Kept apart so they can be renamed or dropped once
 //! identified. Both run one exact-input swap on one Uniswap-V3-style pool with a price limit.
 
+pub mod cycle_bot;
 pub mod dag_router;
 pub mod execute_trade;
 pub mod meta_swap;
@@ -107,6 +108,8 @@ impl Protocol for Unidentified {
             v4_bots::decode_e(sel, d)?
         } else if to == dag_router::ROUTER_G {
             dag_router::decode(sel, d)?
+        } else if to == cycle_bot::BOT {
+            cycle_bot::decode(sel, d)?
         } else if to == meta_swap::ROUTER {
             meta_swap::decode(sel, d)?
         } else if to == rfq_swap::ROUTER {
@@ -145,6 +148,11 @@ impl Protocol for Unidentified {
             Contract {
                 address: dag_router::ROUTER_G,
                 name: "unidentified aggregator, dagSwapByOrderId (f2c42696) decoded to its tokens",
+                decoded: true,
+            },
+            Contract {
+                address: cycle_bot::BOT,
+                name: "unidentified cycle-arbitrage bot (c1c0e9c4): first pool, token and amount of the base layout",
                 decoded: true,
             },
             Contract {
