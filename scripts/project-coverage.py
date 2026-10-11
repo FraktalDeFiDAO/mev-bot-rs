@@ -99,7 +99,10 @@ SCAN = {"0x09f94b5fc68e227c323a6fbae3bd98c97fd8c849", "0x111111125421ca6dc452d28
         "0x00000000b4ec312b95e8b1d4fd4eb0d1d2220975", "0xe6b82c6eccdfb2d6bc55bb11a61bae5ab2c3f807",
         "0x69bb29e2bf617bf74098d95054f72aee7999e4e3", "0xaa0000dc97008b87383600006100003b6b3c2020",
         "0xc6dd6c021cfbb284f0c0d788547b51fc90fcf663", "0x0000000071727de22e5e9d8baf0edac6f37da032",
-        "0xdb9b1e94b5b69df7e401ddbede43491141047db3"}
+        "0xdb9b1e94b5b69df7e401ddbede43491141047db3",
+        "0x0b62f5f573d928115e73a5da0957a4b7cb94fee4", "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae",
+        "0x22821c055d2fa0ff79266287fae610e8d81fcb21", "0x877af3fe40bcd805edc64df96b3eaba2448a5ae7",
+        "0x8a1ba3d5b7864621a6214627a85a3f252b2e6180", "0xe32d1dae75dcafa4a0270feafc27f5ac6f01dab8"}
 import itertools
 _by_pair = collections.defaultdict(list)
 for _p in tracked["pools"]:
