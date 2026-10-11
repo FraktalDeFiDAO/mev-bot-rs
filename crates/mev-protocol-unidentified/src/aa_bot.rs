@@ -19,15 +19,22 @@ const VIEW: [[u8; 4]; 3] = [
     [0xe7, 0x6c, 0x01, 0xe4],
 ];
 
-/// The pools the program declares, in order of first declaration.
-pub fn pools(sel: [u8; 4], d: &[u8]) -> Option<Vec<Address>> {
-    if sel != SELECTOR || d.get(..16)? != HEADER || d.get(16..18)? != [0, 0] {
+/// The pools the program declares, in order of first declaration. The program is `7ef88937` followed by the constant
+/// header, either at the start of the call (selector `7ef88937`) or behind a 3-byte salt (`4a01xx` + `7ef88937`, a
+/// second family on the same contract: 502 of 2,078 feed transactions on 2026-10-10); both are read the same way.
+pub fn pools(input: &[u8]) -> Option<Vec<Address>> {
+    let head = input.get(..40)?;
+    let at = (0..=8).find(|&p| {
+        head.get(p..p + 4) == Some(&SELECTOR[..]) && input.get(p + 4..p + 20) == Some(&HEADER[..])
+    })?;
+    let body = input.get(at + 4..)?;
+    if body.get(16..18)? != [0, 0] {
         return None;
     }
     let mut out: Vec<Address> = Vec::new();
-    for i in 18..d.len().saturating_sub(25) {
-        if d[i + 20] == 0x04 && VIEW.iter().any(|v| d[i + 21..i + 25] == *v) {
-            let a = Address::from_slice(&d[i..i + 20]);
+    for i in 18..body.len().saturating_sub(25) {
+        if body[i + 20] == 0x04 && VIEW.iter().any(|v| body[i + 21..i + 25] == *v) {
+            let a = Address::from_slice(&body[i..i + 20]);
             if !a.is_zero() && !out.contains(&a) {
                 out.push(a);
             }
@@ -51,7 +58,7 @@ mod tests {
             let (input, sw) = l.split_once(',').unwrap();
             let input = hex::decode(input.trim_start_matches("0x")).unwrap();
             let want: Vec<Address> = sw.split('|').map(|a| a.parse().unwrap()).collect();
-            let Some(got) = pools(input[..4].try_into().unwrap(), &input[4..]) else {
+            let Some(got) = pools(&input) else {
                 continue; // a program that declares none: not read
             };
             calls += 1;
@@ -59,30 +66,37 @@ mod tests {
             swapped += want.len();
             both += got.iter().filter(|a| want.contains(a)).count();
         }
-        // Recorded in DECISIONS #161: precision 97.2% and recall 95.4% on the 166-call sample.
+        // DECISIONS #165: precision 97.5% and recall 95.6% on 325 landed calls of both families; 248 of them declare
+        // pools (the other 77 are not read).
         assert!(
             both as f64 / named as f64 > 0.93,
             "precision {both}/{named}"
         );
         assert!(
-            both as f64 / swapped as f64 > 0.90,
+            both as f64 / swapped as f64 > 0.92,
             "recall {both}/{swapped}"
         );
-        assert!(calls >= 100, "{calls}");
+        assert!(calls >= 230, "{calls}");
     }
 
     #[test]
     fn wrong_header_selector_and_garbage_name_no_pools() {
-        assert!(pools(SELECTOR, &[0u8; 64]).is_none());
-        assert!(pools([0; 4], &HEADER).is_none());
-        assert!(pools(SELECTOR, &[]).is_none());
-        let mut d = HEADER.to_vec();
+        assert!(pools(&[0u8; 64]).is_none());
+        assert!(pools(&[]).is_none());
+        let mut d = SELECTOR.to_vec();
+        d.extend(HEADER);
         d.extend([0, 0, 0, 0]);
         d.extend([0xab; 20]);
         d.extend([0x04, 0x38, 0x50, 0xc7, 0xbd, 0, 0, 0, 0]);
-        assert_eq!(
-            pools(SELECTOR, &d),
-            Some(vec![Address::from_slice(&[0xab; 20])])
-        );
+        let want = Some(vec![Address::from_slice(&[0xab; 20])]);
+        assert_eq!(pools(&d), want);
+        // The same program behind a 3-byte salt (the second family on this contract).
+        let mut salted = vec![0x4a, 0x01, 0x0d];
+        salted.extend(&d);
+        assert_eq!(pools(&salted), want);
+        // Another selector in front of the header is not this program.
+        let mut other = vec![0xde, 0xad, 0xbe, 0xef];
+        other.extend(HEADER);
+        assert!(pools(&other).is_none());
     }
 }

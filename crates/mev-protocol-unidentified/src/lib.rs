@@ -146,7 +146,7 @@ impl Protocol for Unidentified {
             let set = if to == cycle_bot::BOT {
                 cycle_bot::pools(sel, d)
             } else if to == aa_bot::BOT {
-                aa_bot::pools(sel, d)
+                aa_bot::pools(input)
             } else if to == router_f::ROUTER_F {
                 router_f::pools(sel, d)
             } else if to == router_h::ROUTER_H {
