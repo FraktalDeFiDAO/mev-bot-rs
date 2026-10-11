@@ -111,7 +111,7 @@ pub fn contracts() -> &'static [Contract] {
 /// `0xe6b82c6e` 100/100 and 100/100; `0x69bb29e2` 100/100 and 100/100; `0xaa0000dc` 96/100 and 98/100; `0xc6dd6c02`
 /// 100/100 and 99/79; ERC-4337 EntryPoint v0.7 47/89 and 33/100; `0xdb9b1e94` 50/100 and 66/98. Paraswap v6 (recall 1-27%)
 /// and the pull-and-call router (3%) do not qualify and are not listed. DECISIONS #167-#168.
-pub const POOL_SCAN_DESTINATIONS: [Address; 18] = [
+pub const POOL_SCAN_DESTINATIONS: [Address; 19] = [
     mev_protocol_unidentified::dag_router::ROUTER_G,
     mev_protocol_oneinch::ROUTER_V6,
     address!("20cce25c88506e37d2812961802ce16a66ac5428"),
@@ -133,6 +133,8 @@ pub const POOL_SCAN_DESTINATIONS: [Address; 18] = [
     address!("877af3fe40bcd805edc64df96b3eaba2448a5ae7"),
     address!("8a1ba3d5b7864621a6214627a85a3f252b2e6180"),
     address!("e32d1dae75dcafa4a0270feafc27f5ac6f01dab8"),
+    // DECISIONS #172: 0x3bbcf1b9 100/84 (2026-10-09) and 100/75 (2026-10-10).
+    address!("3bbcf1b92147cbbc116e9b5170e6a3cd66ab8247"),
 ];
 
 /// Destinations whose calldata lists the tokens of its cycle and the fee tiers between them, but derives its pools (no pool
