@@ -101,18 +101,29 @@ pub fn contracts() -> &'static [Contract] {
     })
 }
 
-/// Destinations whose calldata carries the addresses of the pools it trades on literally (an aggregator's route data),
-/// without the calldata giving one exact swap. The pools a pending call to one of them is about to move are the watched
-/// pools that appear in its calldata; only the engine knows which pools are watched, so it does the scan (see
-/// `Engine`'s arrival path). Measured on the chain-truth blind transactions of 2026-10-10 (every watched pool in the
-/// calldata vs the pools that swapped): OKX-style router `0x09f94b5f` recall 100% / precision 81%; 1inch v6 100% / 100%;
-/// `0x20cce25c` 100% / 100%; KyberSwap 100% / 73%; CoW settlement 73% / 86%. DECISIONS #167.
-pub const POOL_SCAN_DESTINATIONS: [Address; 5] = [
+/// Destinations whose calldata carries the addresses of the pools it trades on literally (an aggregator's route data,
+/// a bot's program), without the calldata giving one exact swap. The pools a pending call to one of them is about to
+/// move are the watched pools that appear in its calldata; only the engine knows which pools are watched, so it does the
+/// scan (see `Engine`'s arrival path). Measured as recall / precision of "watched pools in the calldata" against the pools
+/// that swapped, on 2026-10-10 (the blind transactions) and, unchanged, on 2026-10-09 (all landed transactions with a
+/// tracked swap): OKX-style router `0x09f94b5f` 100/81 and 100/77; 1inch v6 100/100 and 100/100; `0x20cce25c` 100/100
+/// and 100/100; KyberSwap 100/73 and 100/84; CoW settlement 73/86 and 82/96; `0x00000000b4ec` 100/100 and 100/100;
+/// `0xe6b82c6e` 100/100 and 100/100; `0x69bb29e2` 100/100 and 100/100; `0xaa0000dc` 96/100 and 98/100; `0xc6dd6c02`
+/// 100/100 and 99/79; ERC-4337 EntryPoint v0.7 47/89 and 33/100; `0xdb9b1e94` 50/100 and 66/98. Paraswap v6 (recall 1-27%)
+/// and the pull-and-call router (3%) do not qualify and are not listed. DECISIONS #167-#168.
+pub const POOL_SCAN_DESTINATIONS: [Address; 12] = [
     mev_protocol_unidentified::dag_router::ROUTER_G,
     mev_protocol_oneinch::ROUTER_V6,
     address!("20cce25c88506e37d2812961802ce16a66ac5428"),
     mev_protocol_kyber::ROUTER,
     mev_protocol_cow::SETTLEMENT,
+    address!("00000000b4ec312b95e8b1d4fd4eb0d1d2220975"),
+    mev_protocol_unidentified::router_f::ROUTER_F,
+    mev_protocol_unidentified::router_h::ROUTER_H,
+    mev_protocol_unidentified::aa_bot::BOT,
+    address!("c6dd6c021cfbb284f0c0d788547b51fc90fcf663"),
+    calls::ENTRYPOINT_V7,
+    address!("db9b1e94b5b69df7e401ddbede43491141047db3"),
 ];
 
 /// Whether the pools a call to `to` moves are found by scanning its calldata for watched pool addresses.

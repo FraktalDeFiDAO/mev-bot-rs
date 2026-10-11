@@ -95,7 +95,11 @@ def matches(dd, p):
 # (mev_decode::POOL_SCAN_DESTINATIONS).
 SCAN = {"0x09f94b5fc68e227c323a6fbae3bd98c97fd8c849", "0x111111125421ca6dc452d289314280a0f8842a65",
         "0x20cce25c88506e37d2812961802ce16a66ac5428", "0x6131b5fae19ea4f9d964eac0408e4408b66337b5",
-        "0x9008d19f58aabd9ed0d60971565aa8510560ab41"}
+        "0x9008d19f58aabd9ed0d60971565aa8510560ab41",
+        "0x00000000b4ec312b95e8b1d4fd4eb0d1d2220975", "0xe6b82c6eccdfb2d6bc55bb11a61bae5ab2c3f807",
+        "0x69bb29e2bf617bf74098d95054f72aee7999e4e3", "0xaa0000dc97008b87383600006100003b6b3c2020",
+        "0xc6dd6c021cfbb284f0c0d788547b51fc90fcf663", "0x0000000071727de22e5e9d8baf0edac6f37da032",
+        "0xdb9b1e94b5b69df7e401ddbede43491141047db3"}
 def literal_hit(t, p):
     if not t or (t.get("to") or "").lower() not in SCAN: return False
     data = bytes.fromhex(t["input"][2:])
