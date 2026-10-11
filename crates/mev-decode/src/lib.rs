@@ -140,8 +140,12 @@ pub const POOL_SCAN_DESTINATIONS: [Address; 18] = [
 /// the listed tokens whose fee tier (for fee-tier pools) appears in the calldata. Measured on 28 landed calls of 2026-10-10:
 /// every swapped pool is in that set (recall 100%) at 12% precision, about 13 pools per call; it is used only because the
 /// calls are rare (about 1,000-2,000 a day, each pending for a 2 s window). DECISIONS #169.
-pub const PAIR_SCAN_DESTINATIONS: [Address; 1] =
-    [address!("feacf3f2a6525b52661161f0d5ea6f62f5be6274")];
+pub const PAIR_SCAN_DESTINATIONS: [Address; 2] = [
+    address!("feacf3f2a6525b52661161f0d5ea6f62f5be6274"),
+    // The pull-and-call router: its swaps are made through a compact nested encoding that lists the tokens but not the
+    // pools (the literal scan finds 3%); the token-pair set has recall 99% at about 91 pools per call (DECISIONS #171).
+    address!("ccc88a9d1b4ed6b0eaba998850414b24f1c315be"),
+];
 
 /// Whether the pools a call to `to` moves are found from the token pairs and fee tiers in its calldata.
 pub fn scans_for_pairs(to: Address) -> bool {

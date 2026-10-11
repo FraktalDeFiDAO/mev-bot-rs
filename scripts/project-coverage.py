@@ -110,7 +110,7 @@ for _p in tracked["pools"]:
 _tokens = {k for pr in _by_pair for k in pr}
 def pair_hit(t, p):
     """feacf3f2: any pair of the listed tokens; fee-tier pools only if their tier appears in the calldata."""
-    if not t or (t.get("to") or "").lower() != "0xfeacf3f2a6525b52661161f0d5ea6f62f5be6274": return False
+    if not t or (t.get("to") or "").lower() not in ("0xfeacf3f2a6525b52661161f0d5ea6f62f5be6274", "0xccc88a9d1b4ed6b0eaba998850414b24f1c315be"): return False
     d = bytes.fromhex(t["input"][2:])
     tiers = {x for x in (100, 500, 2500, 3000, 10000) if x.to_bytes(3, "big") in d}
     toks = []
