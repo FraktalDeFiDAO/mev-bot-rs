@@ -140,6 +140,8 @@ impl Protocol for Unidentified {
                 aa_bot::pools(sel, d)
             } else if to == router_f::ROUTER_F {
                 router_f::pools(sel, d)
+            } else if to == router_h::ROUTER_H {
+                router_h::pools(sel, d)
             } else {
                 None
             };

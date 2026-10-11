@@ -16,6 +16,34 @@ pub const SELECTOR: [u8; 4] = [0, 0, 0, 1];
 /// Lengths of the `bytes` argument seen on landed calls.
 const LENGTHS: [usize; 5] = [258, 276, 308, 340, 363];
 
+/// Every pool record of the program (32-byte slots from 237; a slot whose first four bytes are zero is not an address).
+/// Measured on 74 landed calls (2026-10-10, 107 swapped pools): every swapped pool is named (recall 100%) and 83.6%
+/// of the named pools are swapped, so a conservative set for holding pools back, not an exact list.
+pub fn pools(sel: [u8; 4], d: &[u8]) -> Option<Vec<Address>> {
+    if sel != SELECTOR || abi::uint(d, 0)? != U256::from(0x20u8) {
+        return None;
+    }
+    let len = usize::try_from(abi::uint(d, 1)?).ok()?;
+    let b = d.get(64..64 + len)?;
+    if !LENGTHS.contains(&len)
+        || b[..8] != [0x80, 0, 0, 0, 0, 0, 0, 0]
+        || b[12..16] != [3, 0x10, 1, 0x40]
+    {
+        return None;
+    }
+    let named: Vec<Address> = (0..4)
+        .filter_map(|k| {
+            let off = 237 + 32 * k;
+            let a = b.get(off..off + 20)?;
+            a[..4]
+                .iter()
+                .any(|x| *x != 0)
+                .then(|| Address::from_slice(a))
+        })
+        .collect();
+    (!named.is_empty()).then_some(named)
+}
+
 pub fn decode(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
     if sel != SELECTOR || abi::uint(d, 0)? != U256::from(0x20u8) {
         return None;
@@ -77,6 +105,36 @@ mod tests {
             n += 1;
         }
         assert!(n >= 70, "{n}");
+    }
+
+    #[test]
+    fn the_named_pools_cover_every_swapped_pool() {
+        let (mut named, mut swapped, mut both, mut calls) = (0usize, 0usize, 0usize, 0usize);
+        for l in include_str!("../tests/fixtures/h_pools.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let (input, sw) = l.split_once(',').unwrap();
+            let input = hex::decode(input.trim_start_matches("0x")).unwrap();
+            let want: Vec<Address> = sw.split('|').map(|a| a.parse().unwrap()).collect();
+            let Some(got) = pools(input[..4].try_into().unwrap(), &input[4..]) else {
+                continue;
+            };
+            calls += 1;
+            named += got.len();
+            swapped += want.len();
+            both += got.iter().filter(|a| want.contains(a)).count();
+        }
+        // DECISIONS #163: precision 83.6% and recall 100% on the 74-call sample.
+        assert!(
+            both as f64 / named as f64 > 0.78,
+            "precision {both}/{named}"
+        );
+        assert!(
+            both as f64 / swapped as f64 > 0.97,
+            "recall {both}/{swapped}"
+        );
+        assert!(calls >= 60, "{calls}");
     }
 
     #[test]
