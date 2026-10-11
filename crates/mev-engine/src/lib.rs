@@ -563,6 +563,17 @@ impl Engine {
                                     hash: st.hash,
                                     intent,
                                     named_pools,
+                                    scan: None,
+                                    received: st.received,
+                                });
+                            }
+                            // Aggregators name their route's pools in the calldata, not as one exact swap.
+                            if mev_decode::scans_for_pools(to) {
+                                let _ = dec_tx.send(pending::DecodedSwap {
+                                    hash: st.hash,
+                                    intent: None,
+                                    named_pools: Vec::new(),
+                                    scan: Some(st.input.to_vec()),
                                     received: st.received,
                                 });
                             }
@@ -863,6 +874,9 @@ impl Engine {
                             .unwrap_or_default();
                         // Named pools count only if we watch them.
                         pools.extend(d.named_pools.iter().filter(|a| self.store.get(a).is_some()).copied());
+                        if let Some(input) = &d.scan {
+                            pools.extend(pending::watched_pools_in(&self.store, input));
+                        }
                         if !pools.is_empty() {
                             self.pending.insert(d.hash, pools, d.received);
                         }

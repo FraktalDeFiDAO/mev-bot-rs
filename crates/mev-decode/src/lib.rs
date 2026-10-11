@@ -101,6 +101,25 @@ pub fn contracts() -> &'static [Contract] {
     })
 }
 
+/// Destinations whose calldata carries the addresses of the pools it trades on literally (an aggregator's route data),
+/// without the calldata giving one exact swap. The pools a pending call to one of them is about to move are the watched
+/// pools that appear in its calldata; only the engine knows which pools are watched, so it does the scan (see
+/// `Engine`'s arrival path). Measured on the chain-truth blind transactions of 2026-10-10 (every watched pool in the
+/// calldata vs the pools that swapped): OKX-style router `0x09f94b5f` recall 100% / precision 81%; 1inch v6 100% / 100%;
+/// `0x20cce25c` 100% / 100%; KyberSwap 100% / 73%; CoW settlement 73% / 86%. DECISIONS #167.
+pub const POOL_SCAN_DESTINATIONS: [Address; 5] = [
+    mev_protocol_unidentified::dag_router::ROUTER_G,
+    mev_protocol_oneinch::ROUTER_V6,
+    address!("20cce25c88506e37d2812961802ce16a66ac5428"),
+    mev_protocol_kyber::ROUTER,
+    mev_protocol_cow::SETTLEMENT,
+];
+
+/// Whether the pools a call to `to` moves are found by scanning its calldata for watched pool addresses.
+pub fn scans_for_pools(to: Address) -> bool {
+    POOL_SCAN_DESTINATIONS.contains(&to)
+}
+
 /// The identified contract at `to`, if any.
 pub fn known_contract(to: Address) -> Option<&'static Contract> {
     contracts().iter().find(|c| c.address == to)
@@ -109,6 +128,15 @@ pub fn known_contract(to: Address) -> Option<&'static Contract> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_measured_aggregators_are_scanned_for_pools() {
+        assert!(scans_for_pools(mev_protocol_kyber::ROUTER));
+        assert!(scans_for_pools(mev_protocol_cow::SETTLEMENT));
+        assert!(!scans_for_pools(Address::with_last_byte(1)));
+        let unique: std::collections::HashSet<_> = POOL_SCAN_DESTINATIONS.iter().collect();
+        assert_eq!(unique.len(), POOL_SCAN_DESTINATIONS.len());
+    }
 
     #[test]
     fn protocol_ids_and_contract_addresses_are_unique() {

@@ -91,10 +91,19 @@ def matches(dd, p):
     if "v2_token_a" in pool: return {pool["v2_token_a"].lower(), pool["v2_token_b"].lower()} == toks and p["kind"] in ("uniswap_v2", "camelot_v2")
     if "any_token_a" in pool: return {pool["any_token_a"].lower(), pool["any_token_b"].lower()} == toks
     return False
+# Aggregators whose calldata carries their route's pools literally: the engine holds back the watched ones it finds
+# (mev_decode::POOL_SCAN_DESTINATIONS).
+SCAN = {"0x09f94b5fc68e227c323a6fbae3bd98c97fd8c849", "0x111111125421ca6dc452d289314280a0f8842a65",
+        "0x20cce25c88506e37d2812961802ce16a66ac5428", "0x6131b5fae19ea4f9d964eac0408e4408b66337b5",
+        "0x9008d19f58aabd9ed0d60971565aa8510560ab41"}
+def literal_hit(t, p):
+    if not t or (t.get("to") or "").lower() not in SCAN: return False
+    data = bytes.fromhex(t["input"][2:])
+    return bytes.fromhex(p["address"][2:]) in data
 cache = {h: intents(t) for h, t in tx.items()}
 now_early = early_then; rescued = collections.Counter(); still = collections.Counter()
 for h, p in blind:
-    ok = any(matches(dd, p) for dd in cache.get(h, []))
+    ok = any(matches(dd, p) for dd in cache.get(h, [])) or literal_hit(tx.get(h), p)
     if ok: now_early += 1; rescued[p["dex"]] += 1
     else: still[(tx.get(h, {}).get("to") or "-")[:12]] += 1
 print(f"projected early with the current decoders: {now_early} ({100*now_early/total:.1f}%)")

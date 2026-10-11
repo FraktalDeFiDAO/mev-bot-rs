@@ -31,6 +31,9 @@ pub struct DecodedSwap {
     pub intent: Option<SwapIntent>,
     /// Pools a call names without an exact swap (`Decoded::Pools`): held back like a swap's pools, never used to price.
     pub named_pools: Vec<Address>,
+    /// The calldata of a call to an aggregator listed in `mev_decode::POOL_SCAN_DESTINATIONS`: the receiver scans it for
+    /// the watched pools it contains (only the engine knows which pools are watched).
+    pub scan: Option<Vec<u8>>,
     pub received: Instant,
 }
 
@@ -119,6 +122,20 @@ impl PendingSwaps {
     }
 }
 
+/// Every watched pool whose 20-byte address appears literally in `input` (at any offset), without repeats.
+pub fn watched_pools_in(store: &PoolStore, input: &[u8]) -> Vec<Address> {
+    let mut out: Vec<Address> = Vec::new();
+    for w in input.windows(20) {
+        let a = Address::from_slice(w);
+        if let Some(p) = store.get(&a)
+            && !out.contains(&p.info.address)
+        {
+            out.push(p.info.address);
+        }
+    }
+    out
+}
+
 /// The pools in our store a decoded swap acts on. A pool named by address (including V4 stand-ins) is itself; a V3
 /// pair or V2 pair is every pool we hold for those tokens (and fee), because the calldata does not say which
 /// factory's pool is meant. Empty when none of them is one we watch.
@@ -155,6 +172,38 @@ mod tests {
     }
     fn a(n: u8) -> Address {
         Address::with_last_byte(n)
+    }
+
+    #[test]
+    fn the_scan_finds_exactly_the_watched_pools_in_the_calldata() {
+        use mev_dex::{Pool, PoolState};
+        use mev_types::PoolInfo;
+        let mut store = PoolStore::default();
+        for n in [0x31u8, 0x32] {
+            store.insert(Pool::new(
+                PoolInfo {
+                    address: a(n),
+                    dex: "t".into(),
+                    kind: PoolKind::UniV2 { fee_bps: 30 },
+                    token0: a(100),
+                    token1: a(101),
+                },
+                PoolState::V2 {
+                    reserve0: 1.0,
+                    reserve1: 1.0,
+                },
+            ));
+        }
+        // Calldata: junk, a watched pool (twice, once unaligned), an unwatched address, then the other watched pool.
+        let mut input = vec![0xde, 0xad, 0xbe, 0xef, 7];
+        input.extend_from_slice(a(0x31).as_slice());
+        input.extend_from_slice(&[0u8; 12]);
+        input.extend_from_slice(a(0x31).as_slice());
+        input.extend_from_slice(a(0x77).as_slice());
+        input.extend_from_slice(a(0x32).as_slice());
+        assert_eq!(watched_pools_in(&store, &input), vec![a(0x31), a(0x32)]);
+        assert!(watched_pools_in(&store, &[0u8; 64]).is_empty());
+        assert!(watched_pools_in(&store, &[]).is_empty());
     }
 
     #[test]
