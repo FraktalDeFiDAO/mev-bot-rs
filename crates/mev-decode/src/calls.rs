@@ -55,6 +55,13 @@ sol! {
         function permit2TransferAndMulticall(address owner, PermitBatch permit, BatchCall[] calls, address refundTo, address receiver, bytes data, bytes signature) external payable;
         function multicall(BatchCall[] calls, address refundTo, address receiver, bytes data) external payable;
     }
+    struct TargetCall { address target; bytes data; uint256 value; }
+    interface ExecVectors {
+        function execute(address[] targets, bytes[] data, uint256[] values) external payable;
+    }
+    interface ExecOps {
+        function execute(TargetCall[] ops) external payable;
+    }
     interface UniversalRouterExec {
         function execute(bytes commands, bytes[] inputs, uint256 deadline) external payable;
     }
@@ -302,6 +309,30 @@ fn unwrap(to: Address, input: &[u8]) -> Option<(&'static str, Vec<Sub>)> {
     if let Some(p) = pull {
         return Some(("pull_and_call", p));
     }
+    // Executors that take a list of calls as parallel arrays, or as `(target, data, value)` tuples.
+    let list: Option<Vec<Sub>> = match sel {
+        ExecVectors::executeCall::SELECTOR => {
+            let c = dec!(ExecVectors::executeCall);
+            (c.targets.len() == c.data.len()).then(|| {
+                c.targets
+                    .into_iter()
+                    .zip(c.data)
+                    .map(|(t, d)| pair(t, d))
+                    .collect()
+            })
+        }
+        ExecOps::executeCall::SELECTOR => Some(
+            dec!(ExecOps::executeCall)
+                .ops
+                .into_iter()
+                .map(|o| pair(o.target, o.data))
+                .collect(),
+        ),
+        _ => None,
+    };
+    if let Some(l) = list {
+        return Some(("execute_list", l));
+    }
     // Self-multicalls: the router or position manager calls itself with each element.
     let batch = match sel {
         SelfMulticall::multicallCall::SELECTOR => Some(dec!(SelfMulticall::multicallCall).data),
@@ -401,6 +432,45 @@ mod tests {
         );
         assert_eq!(l[1].input.as_ref(), &[2, 2, 2, 2, 9]);
         assert!(l.iter().all(|x| x.via == vec!["multicall3"]));
+    }
+
+    #[test]
+    fn execute_list_wrappers_yield_their_inner_calls() {
+        // The selectors are the ones seen on chain (`947fe812` and `760f2a0b`), not just whatever the ABI gives.
+        assert_eq!(ExecVectors::executeCall::SELECTOR, [0x94, 0x7f, 0xe8, 0x12]);
+        assert_eq!(ExecOps::executeCall::SELECTOR, [0x76, 0x0f, 0x2a, 0x0b]);
+        let a = ExecVectors::executeCall {
+            targets: vec![target(1), target(2)],
+            data: vec![
+                Bytes::from(vec![0xde, 0xad, 0xbe, 1]),
+                Bytes::from(vec![0xde, 0xad, 0xbe, 2]),
+            ],
+            values: vec![U256::ZERO, U256::ZERO],
+        }
+        .abi_encode();
+        let leaves = calls_in(target(7), &a);
+        assert_eq!(
+            leaves.iter().map(|l| l.to).collect::<Vec<_>>(),
+            [target(1), target(2)]
+        );
+        assert!(leaves.iter().all(|l| l.via == ["execute_list"]));
+        let b = ExecOps::executeCall {
+            ops: vec![TargetCall {
+                target: target(3),
+                data: Bytes::from(vec![0xde, 0xad, 0xbe, 3]),
+                value: U256::ZERO,
+            }],
+        }
+        .abi_encode();
+        assert_eq!(calls_in(target(7), &b)[0].to, target(3));
+        // Mismatched array lengths are a malformed wrapper: a leaf, nothing invented.
+        let bad = ExecVectors::executeCall {
+            targets: vec![target(1)],
+            data: vec![],
+            values: vec![],
+        }
+        .abi_encode();
+        assert_eq!(calls_in(target(7), &bad).len(), 1);
     }
 
     #[test]
