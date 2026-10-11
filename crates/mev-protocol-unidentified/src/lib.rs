@@ -4,6 +4,7 @@
 //! identified. Both run one exact-input swap on one Uniswap-V3-style pool with a price limit.
 
 pub mod aa_bot;
+pub mod b04_bot;
 pub mod cycle_bot;
 pub mod dag_router;
 pub mod execute_trade;
@@ -133,6 +134,14 @@ impl Protocol for Unidentified {
         let mut out: Vec<Decoded> = self.decode_call(to, input).into_iter().collect();
         // Bots that name every pool of a cycle: the exact first hop (where known) plus the set, which a rival's pending
         // transaction would move. The sets are not exact (see each module for the measured precision and recall).
+        if to == b04_bot::BOT
+            && let Some(pools) = b04_bot::pools(input)
+        {
+            out.push(Decoded::Pools(PoolSet {
+                protocol: "unidentified",
+                pools,
+            }));
+        }
         if let Some((sel, d)) = abi::split(input) {
             let set = if to == cycle_bot::BOT {
                 cycle_bot::pools(sel, d)
@@ -175,6 +184,11 @@ impl Protocol for Unidentified {
             Contract {
                 address: dag_router::ROUTER_G,
                 name: "unidentified aggregator, dagSwapByOrderId (f2c42696) decoded to its tokens",
+                decoded: true,
+            },
+            Contract {
+                address: b04_bot::BOT,
+                name: "unidentified packed MEV bot (salted selector): the pools it names; no exact swap",
                 decoded: true,
             },
             Contract {
