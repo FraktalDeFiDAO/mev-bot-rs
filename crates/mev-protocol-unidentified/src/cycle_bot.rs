@@ -14,15 +14,16 @@ use mev_protocol::{PoolRef, SwapIntent};
 pub const BOT: Address = address!("5dbcbd2669e44285547aa9428d16ebe26963d6c6");
 pub const SELECTOR: [u8; 4] = [0xc1, 0xc0, 0xe9, 0xc4];
 
-/// Every pool the base layout names (one per hop, in execution order, placeholders skipped). Measured on 110 landed
-/// calls (2026-10-09): 91.2% of the named pools were swapped and 99.6% of the swapped pools were named, so this is a
-/// conservative set for holding pools back, not an exact list.
+/// Every pool the program names (one 63-byte record per hop from byte 61, placeholders skipped), for two to four hops
+/// and any tail length. Measured on 123 landed calls of 2026-10-09 and 100 of 2026-10-10 (a different day): 95.9% of the
+/// named pools were swapped and 98.6% of the swapped pools were named, so this is a conservative set for holding pools
+/// back, not an exact list. (The exact first hop below still needs the base layout.)
 pub fn pools(sel: [u8; 4], d: &[u8]) -> Option<Vec<Address>> {
     if sel != SELECTOR {
         return None;
     }
     let hops = usize::from(*d.first()?);
-    if !(2..=3).contains(&hops) || d.len() != 61 + 63 * hops + 34 {
+    if !(2..=4).contains(&hops) || d.len() < 61 + 63 * hops + 20 {
         return None;
     }
     let named: Vec<Address> = (0..hops)
