@@ -564,6 +564,7 @@ impl Engine {
                                     intent,
                                     named_pools,
                                     scan: None,
+                                    pair_scan: false,
                                     received: st.received,
                                 });
                             }
@@ -574,6 +575,18 @@ impl Engine {
                                     intent: None,
                                     named_pools: Vec::new(),
                                     scan: Some(st.input.to_vec()),
+                                    pair_scan: false,
+                                    received: st.received,
+                                });
+                            }
+                            // A program that lists its tokens and fee tiers but derives its pools.
+                            if mev_decode::scans_for_pairs(to) {
+                                let _ = dec_tx.send(pending::DecodedSwap {
+                                    hash: st.hash,
+                                    intent: None,
+                                    named_pools: Vec::new(),
+                                    scan: Some(st.input.to_vec()),
+                                    pair_scan: true,
                                     received: st.received,
                                 });
                             }
@@ -876,6 +889,9 @@ impl Engine {
                         pools.extend(d.named_pools.iter().filter(|a| self.store.get(a).is_some()).copied());
                         if let Some(input) = &d.scan {
                             pools.extend(pending::watched_pools_in(&self.store, input));
+                            if d.pair_scan {
+                                pools.extend(pending::pools_by_token_pairs(&self.store, input));
+                            }
                         }
                         if !pools.is_empty() {
                             self.pending.insert(d.hash, pools, d.received);

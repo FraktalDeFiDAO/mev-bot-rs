@@ -100,7 +100,26 @@ SCAN = {"0x09f94b5fc68e227c323a6fbae3bd98c97fd8c849", "0x111111125421ca6dc452d28
         "0x69bb29e2bf617bf74098d95054f72aee7999e4e3", "0xaa0000dc97008b87383600006100003b6b3c2020",
         "0xc6dd6c021cfbb284f0c0d788547b51fc90fcf663", "0x0000000071727de22e5e9d8baf0edac6f37da032",
         "0xdb9b1e94b5b69df7e401ddbede43491141047db3"}
+import itertools
+_by_pair = collections.defaultdict(list)
+for _p in tracked["pools"]:
+    _by_pair[frozenset((_p["token0"].lower()[2:], _p["token1"].lower()[2:]))].append(_p)
+_tokens = {k for pr in _by_pair for k in pr}
+def pair_hit(t, p):
+    """feacf3f2: any pair of the listed tokens; fee-tier pools only if their tier appears in the calldata."""
+    if not t or (t.get("to") or "").lower() != "0xfeacf3f2a6525b52661161f0d5ea6f62f5be6274": return False
+    d = bytes.fromhex(t["input"][2:])
+    tiers = {x for x in (100, 500, 2500, 3000, 10000) if x.to_bytes(3, "big") in d}
+    toks = []
+    for i in range(len(d) - 19):
+        a = d[i:i+20].hex()
+        if a in _tokens and a not in toks and len(toks) < 6: toks.append(a)
+    for a, b in itertools.combinations(toks, 2):
+        for q in _by_pair.get(frozenset((a, b)), []):
+            if q["address"].lower() == p["address"].lower() and (q["kind"] not in ("uniswap_v3", "pancake_v3", "uniswap_v4") or q.get("fee") in tiers): return True
+    return False
 def literal_hit(t, p):
+    if pair_hit(t, p): return True
     if not t or (t.get("to") or "").lower() not in SCAN: return False
     data = bytes.fromhex(t["input"][2:])
     return bytes.fromhex(p["address"][2:]) in data

@@ -126,6 +126,19 @@ pub const POOL_SCAN_DESTINATIONS: [Address; 12] = [
     address!("db9b1e94b5b69df7e401ddbede43491141047db3"),
 ];
 
+/// Destinations whose calldata lists the tokens of its cycle and the fee tiers between them, but derives its pools (no pool
+/// address appears): `0xfeacf3f2`. The pools a pending call to one of them can move are the watched pools of any pair of
+/// the listed tokens whose fee tier (for fee-tier pools) appears in the calldata. Measured on 28 landed calls of 2026-10-10:
+/// every swapped pool is in that set (recall 100%) at 12% precision, about 13 pools per call; it is used only because the
+/// calls are rare (about 1,000-2,000 a day, each pending for a 2 s window). DECISIONS #169.
+pub const PAIR_SCAN_DESTINATIONS: [Address; 1] =
+    [address!("feacf3f2a6525b52661161f0d5ea6f62f5be6274")];
+
+/// Whether the pools a call to `to` moves are found from the token pairs and fee tiers in its calldata.
+pub fn scans_for_pairs(to: Address) -> bool {
+    PAIR_SCAN_DESTINATIONS.contains(&to)
+}
+
 /// Whether the pools a call to `to` moves are found by scanning its calldata for watched pool addresses.
 pub fn scans_for_pools(to: Address) -> bool {
     POOL_SCAN_DESTINATIONS.contains(&to)

@@ -43,6 +43,8 @@ pub struct PoolStore {
     /// versions it was computed from and is dropped if any moved (invariant 3).
     versions: HashMap<Address, u64>,
     by_pair: HashMap<(Address, Address), Vec<Address>>,
+    /// Every token of a stored pool (so calldata can be scanned for the tokens we watch).
+    tokens: std::collections::HashSet<Address>,
     /// Uniswap V4 pool id -> the stand-in address it is stored under (their events come from the
     /// shared PoolManager and name the pool only by id).
     v4: HashMap<B256, Address>,
@@ -105,6 +107,8 @@ impl PoolStore {
         if let PoolKind::UniV4 { id, .. } = pool.info.kind {
             self.v4.insert(id, addr);
         }
+        self.tokens.insert(pool.info.token0);
+        self.tokens.insert(pool.info.token1);
         if self.pools.insert(addr, pool).is_none() {
             self.by_pair.entry(key).or_default().push(addr);
         }
@@ -199,6 +203,11 @@ impl PoolStore {
             return vec![];
         };
         self.pools_for(p.info.token0, p.info.token1)
+    }
+
+    /// Whether `a` is a token of some stored pool.
+    pub fn has_token(&self, a: &Address) -> bool {
+        self.tokens.contains(a)
     }
 
     pub fn pools_for(&self, a: Address, b: Address) -> Vec<&Pool> {

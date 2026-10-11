@@ -34,6 +34,8 @@ pub struct DecodedSwap {
     /// The calldata of a call to an aggregator listed in `mev_decode::POOL_SCAN_DESTINATIONS`: the receiver scans it for
     /// the watched pools it contains (only the engine knows which pools are watched).
     pub scan: Option<Vec<u8>>,
+    /// Also resolve the token pairs and fee tiers in `scan` (see `mev_decode::PAIR_SCAN_DESTINATIONS`).
+    pub pair_scan: bool,
     pub received: Instant,
 }
 
@@ -136,6 +138,41 @@ pub fn watched_pools_in(store: &PoolStore, input: &[u8]) -> Vec<Address> {
     out
 }
 
+/// For a program that lists its cycle's tokens and the fee tiers between them but derives its pools: every watched pool
+/// of a pair of the listed tokens, keeping a fee-tier pool (V3, Pancake, V4) only if its tier appears in the calldata as
+/// a 3-byte value. At most six tokens are considered. Over-approximates (a pair has pools on several venues).
+pub fn pools_by_token_pairs(store: &PoolStore, input: &[u8]) -> Vec<Address> {
+    const TIERS: [u32; 5] = [100, 500, 2_500, 3_000, 10_000];
+    let tiers: Vec<u32> = TIERS
+        .into_iter()
+        .filter(|t| input.windows(3).any(|w| w == &t.to_be_bytes()[1..]))
+        .collect();
+    let mut tokens: Vec<Address> = Vec::new();
+    for w in input.windows(20) {
+        let a = Address::from_slice(w);
+        if tokens.len() < 6 && store.has_token(&a) && !tokens.contains(&a) {
+            tokens.push(a);
+        }
+    }
+    let mut out: Vec<Address> = Vec::new();
+    for (i, a) in tokens.iter().enumerate() {
+        for b in &tokens[i + 1..] {
+            for p in store.pools_for(*a, *b) {
+                let fee_ok = match p.info.kind {
+                    PoolKind::UniV3 { fee }
+                    | PoolKind::PancakeV3 { fee }
+                    | PoolKind::UniV4 { fee, .. } => tiers.contains(&fee),
+                    _ => true,
+                };
+                if fee_ok && !out.contains(&p.info.address) {
+                    out.push(p.info.address);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The pools in our store a decoded swap acts on. A pool named by address (including V4 stand-ins) is itself; a V3
 /// pair or V2 pair is every pool we hold for those tokens (and fee), because the calldata does not say which
 /// factory's pool is meant. Empty when none of them is one we watch.
@@ -172,6 +209,43 @@ mod tests {
     }
     fn a(n: u8) -> Address {
         Address::with_last_byte(n)
+    }
+
+    #[test]
+    fn token_pairs_and_fee_tiers_select_the_pools_of_a_derived_program() {
+        use mev_dex::{Pool, PoolState};
+        use mev_types::PoolInfo;
+        let (t1, t2, t3) = (a(0xa1), a(0xa2), a(0xa3));
+        let mut store = PoolStore::default();
+        let mut add = |n: u8, kind: PoolKind, x: Address, y: Address| {
+            store.insert(Pool::new(
+                PoolInfo {
+                    address: a(n),
+                    dex: "t".into(),
+                    kind,
+                    token0: x,
+                    token1: y,
+                },
+                PoolState::V2 {
+                    reserve0: 1.0,
+                    reserve1: 1.0,
+                },
+            ));
+        };
+        add(0x01, PoolKind::UniV3 { fee: 500 }, t1, t2);
+        add(0x02, PoolKind::UniV3 { fee: 3000 }, t1, t2);
+        add(0x03, PoolKind::UniV2 { fee_bps: 30 }, t1, t2);
+        add(0x04, PoolKind::UniV2 { fee_bps: 30 }, t2, t3);
+        // Calldata lists t1 and t2 and the 500 tier (0x0001f4); t3 and the 3000 tier are absent.
+        let mut input = vec![0u8, 3, 1];
+        input.extend_from_slice(t1.as_slice());
+        input.push(0x80);
+        input.extend_from_slice(t2.as_slice());
+        input.extend_from_slice(&[0x00, 0x01, 0xf4, 9, 9]);
+        let got = pools_by_token_pairs(&store, &input);
+        assert_eq!(got.len(), 2);
+        assert!(got.contains(&a(0x01)) && got.contains(&a(0x03)));
+        assert!(pools_by_token_pairs(&store, &[0u8; 80]).is_empty());
     }
 
     #[test]
