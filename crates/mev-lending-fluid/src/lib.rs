@@ -49,13 +49,90 @@ sol! {
     }
 
     #[sol(rpc)]
+    interface IFluidDexFactory {
+        function totalDexes() external view returns (uint256);
+        function getDexAddress(uint256 dexId) external view returns (address);
+    }
+
+    #[sol(rpc)]
     interface IFluidVaultResolver {
         function getVaultLiquidation(address vault, uint256 tokenInAmt) external returns (LiquidationStruct memory);
+        function getAllVaultsAddresses() external view returns (address[] memory);
+        function getVaultType(address vault) external view returns (uint256);
     }
 
     interface IFluidVaultT1 {
         function liquidate(uint256 debtAmt, uint256 colPerUnitDebt, address to, bool absorb) external payable returns (uint256, uint256);
     }
+}
+
+/// Every vault the resolver knows (all types), so their `LogLiquidate` / `LogAbsorb` events can be recorded even
+/// where no liquidation is attempted.
+pub async fn all_vaults(
+    provider: &alloy::providers::DynProvider,
+    resolver: Address,
+) -> Result<Vec<Address>> {
+    Ok(IFluidVaultResolver::new(resolver, provider)
+        .getAllVaultsAddresses()
+        .call()
+        .await?)
+}
+
+/// Every Fluid DEX pool the factory lists (ids are 1-based and dense).
+pub async fn all_dexes(
+    provider: &alloy::providers::DynProvider,
+    factory: Address,
+) -> Result<Vec<Address>> {
+    let f = IFluidDexFactory::new(factory, provider);
+    let n = u64::try_from(f.totalDexes().call().await?)
+        .unwrap_or(0)
+        .min(1_000);
+    let calls: Vec<_> = (1..=n)
+        .map(|i| {
+            call(
+                factory,
+                IFluidDexFactory::getDexAddressCall {
+                    dexId: U256::from(i),
+                },
+            )
+        })
+        .collect();
+    let out = multicall(provider, &calls, 200).await?;
+    Ok(out
+        .iter()
+        .filter_map(decode::<IFluidDexFactory::getDexAddressCall>)
+        .filter(|a| !a.is_zero())
+        .collect())
+}
+
+/// Fluid vault type for a plain collateral / plain debt vault (smart-collateral and smart-debt vaults are 2-4).
+const VAULT_TYPE_T1: u64 = 10_000;
+
+/// Every T1 vault the resolver lists (the only type `liquidate(debtAmt, colPerUnitDebt, to, absorb)` fits).
+pub async fn t1_vaults(
+    provider: &alloy::providers::DynProvider,
+    resolver: Address,
+) -> Result<Vec<Address>> {
+    let all = all_vaults(provider, resolver).await?;
+    let calls: Vec<_> = all
+        .iter()
+        .map(|v| {
+            call(
+                resolver,
+                IFluidVaultResolver::getVaultTypeCall { vault: *v },
+            )
+        })
+        .collect();
+    let types = multicall(provider, &calls, 200).await?;
+    Ok(all
+        .into_iter()
+        .zip(types.iter())
+        .filter(|(_, t)| {
+            decode::<IFluidVaultResolver::getVaultTypeCall>(t)
+                .is_some_and(|t| t == U256::from(VAULT_TYPE_T1))
+        })
+        .map(|(v, _)| v)
+        .collect())
 }
 
 /// ERC20 used for routing/accounting for a Fluid token (native ETH -> WETH).
@@ -103,7 +180,21 @@ pub struct FluidAdapter {
 }
 
 impl FluidAdapter {
-    pub async fn new(cfg: FluidConfig, rpc: AdapterRpc) -> Result<Self> {
+    pub async fn new(mut cfg: FluidConfig, rpc: AdapterRpc) -> Result<Self> {
+        if cfg.auto_vaults {
+            match t1_vaults(&rpc.fast, cfg.vault_resolver).await {
+                Ok(found) => {
+                    for v in found {
+                        if !cfg.vaults.contains(&v) {
+                            cfg.vaults.push(v);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %format!("{e:#}"), "fluid: could not list vaults; using the configured ones")
+                }
+            }
+        }
         let mut me = Self {
             cfg,
             rpc,

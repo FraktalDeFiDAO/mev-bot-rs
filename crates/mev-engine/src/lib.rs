@@ -226,6 +226,8 @@ pub struct Engine {
     created_waiting: HashMap<(Address, Address), Vec<mev_types::PoolInfo>>,
     /// Tracked pool set grew: re-subscribe so their logs arrive.
     resubscribe_pending: bool,
+    /// Lending contracts whose liquidation events are recorded in full (every adapter target, every Fluid vault).
+    liq_watch: Vec<Address>,
     /// An endpoint that serves `eth_simulateV1` (the presim provider).
     sim_v1: Option<alloy::providers::DynProvider>,
     /// Tokens we trade routinely (configured pairs and loan tokens). A route touching any other
@@ -821,8 +823,10 @@ impl Engine {
         let (hint_tx, hint_rx) = mpsc::unbounded_channel::<OracleHint>();
         let mut hint_rx = cfg.atlas.enabled.then_some(hint_rx);
         let mut watched_feeds: Vec<Address> = Vec::new();
+        let mut liq_watch: Vec<Address> = Vec::new();
         let liq = match liq_setup {
             Some((runner, via)) => {
+                liq_watch = runner.targets().into_iter().map(|(_, a)| a).collect();
                 if let Some(exec) = secrets.executor {
                     check_allowlist(&rpc, exec, &runner.targets()).await;
                 }
@@ -837,6 +841,17 @@ impl Engine {
             }
             None => None,
         };
+        // Fluid liquidates per vault and has ~100 of them; record the events of all, not only the configured few.
+        if let Some(f) = cfg.fluid.as_ref().filter(|f| f.enabled) {
+            match mev_lending_fluid::all_vaults(&rpc.http, f.vault_resolver).await {
+                Ok(v) => liq_watch.extend(v),
+                Err(e) => {
+                    warn!(error = %format!("{e:#}"), "could not list every Fluid vault; recording the configured ones")
+                }
+            }
+        }
+        liq_watch.sort();
+        liq_watch.dedup();
         let atlas = atlas::setup(&cfg, &secrets, &rpc, hint_tx, watched_feeds).await;
         let trusted: std::collections::HashSet<Address> = cfg
             .pair_addresses()?
@@ -880,6 +895,7 @@ impl Engine {
             created_seen: Default::default(),
             created_waiting: HashMap::new(),
             resubscribe_pending: false,
+            liq_watch: liq_watch.clone(),
             sim_v1,
             trusted,
             sim_ok: HashMap::new(),
@@ -964,14 +980,59 @@ impl Engine {
         self.rebuild_cycles();
         info!(cycles = self.cycles.len(), "triangular cycles indexed");
         let mut liq_rx = self.liq.as_mut().and_then(|l| l.rx.take());
-        // New pools and pairs: poll the exchange factories' creation events (cursor-based, no gaps).
+        // One cursor-based poll (no gaps) for two kinds of rare, important events: exchange factories announcing new
+        // pools and pairs, and lending contracts reporting liquidations (every adapter target, every Fluid vault).
         let (created_tx, mut created_rx) = mpsc::unbounded_channel::<alloy::rpc::types::Log>();
-        tokio::spawn(mev_ingest::poll_factory_logs(
+        let mut watch_addrs = mev_discovery::created::factories(&self.cfg.dexes);
+        watch_addrs.extend(self.liq_watch.iter().copied());
+        let fluid_dex_factory = self
+            .cfg
+            .fluid
+            .as_ref()
+            .filter(|f| f.enabled)
+            .and_then(|f| f.dex_factory);
+        let fixed_len = watch_addrs.len();
+        if let Some(factory) = fluid_dex_factory {
+            match mev_lending_fluid::all_dexes(&self.rpc.http, factory).await {
+                Ok(d) => watch_addrs.extend(d),
+                Err(e) => warn!(error = %format!("{e:#}"), "could not list Fluid DEX pools"),
+            }
+        }
+        let watch_addrs = std::sync::Arc::new(std::sync::RwLock::new(watch_addrs));
+        if let Some(factory) = fluid_dex_factory {
+            // New Fluid DEX pools appear over time: re-list hourly and let the poll pick them up.
+            let (http, shared) = (self.rpc.http.clone(), watch_addrs.clone());
+            tokio::spawn(async move {
+                let mut every = tokio::time::interval(Duration::from_secs(3_600));
+                every.tick().await;
+                loop {
+                    every.tick().await;
+                    if let Ok(d) = mev_lending_fluid::all_dexes(&http, factory).await
+                        && let Ok(mut list) = shared.write()
+                    {
+                        list.truncate(fixed_len);
+                        list.extend(d);
+                    }
+                }
+            });
+        }
+        let mut watch_topics = mev_discovery::created::creation_topics();
+        watch_topics.extend(
+            mev_decode::events::kinds()
+                .iter()
+                .filter(|k| {
+                    k.class == mev_decode::events::Class::Liquidation || k.name == "swap_fluid_dex"
+                })
+                .map(|k| k.topic0),
+        );
+        watch_topics.sort();
+        watch_topics.dedup();
+        tokio::spawn(mev_ingest::poll_logs(
             self.rpc.http.clone(),
-            mev_discovery::created::factories(&self.cfg.dexes),
-            mev_discovery::created::creation_topics(),
+            watch_addrs,
+            watch_topics,
             created_tx,
-            Duration::from_secs(4),
+            Duration::from_secs(3),
         ));
         let mut presim_rx = self.presim_rx.take();
         let mut dec_rx = self.dec_rx.take();
@@ -1133,7 +1194,7 @@ impl Engine {
                     _ = tick_reload.tick(), if self.cfg.ticks.enabled => {
                         self.spawn_tick_reload(&maint_tx, &busy);
                     }
-                    Some(log) = created_rx.recv() => self.on_pool_created(&log, &maint_tx),
+                    Some(log) = created_rx.recv() => self.on_watched_log(&log, &maint_tx),
                     Some(m) = maint_rx.recv() => {
                         self.apply_maint(m);
                         if self.resubscribe_pending {
@@ -1898,6 +1959,29 @@ impl Engine {
 
     /// Re-enumerate triangular cycles over the current pool set (startup only; resyncs run in the
     /// background).
+    /// A log from the cursor-based watch: a factory creation or a lending liquidation.
+    fn on_watched_log(
+        &mut self,
+        log: &alloy::rpc::types::Log,
+        maint_tx: &mpsc::UnboundedSender<Maint>,
+    ) {
+        if mev_discovery::created::parse(log, &self.cfg.dexes).is_some() {
+            return self.on_pool_created(log, maint_tx);
+        }
+        // Everything else on this path is a liquidation or Fluid DEX swap: record it whole.
+        let t_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
+        if let Some(line) = journal::event_line(log, &self.store, &self.watch, t_ms) {
+            let kind = if line["class"] == "swap" {
+                "dex_swap_event"
+            } else {
+                "liquidation_event"
+            };
+            self.metrics.event(kind, line);
+        }
+    }
+
     /// A factory announced a new pool. Always recorded; tracked when a trade through it could exist: both tokens are
     /// ones we already hold pools for, or another venue already trades the pair. Pools that qualify are loaded in
     /// the background and the log subscription is renewed so their events arrive.

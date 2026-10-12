@@ -268,6 +268,12 @@ pub fn describe(
             ("to", a(3)),
         ],
         "absorb_fluid" => vec![("collateral_amount", u(0)), ("debt_amount", u(1))],
+        "swap_fluid_dex" => vec![
+            ("swap0to1", u(0)),
+            ("amount_in", u(1)),
+            ("amount_out", u(2)),
+            ("to", a(3)),
+        ],
         _ => Vec::new(),
     };
     rows.into_iter()

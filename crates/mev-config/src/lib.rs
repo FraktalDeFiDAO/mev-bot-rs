@@ -461,6 +461,15 @@ pub struct FluidConfig {
     pub usd_oracle: Address,
     /// T1 (ERC20/ETH collateral, ERC20 debt) vaults to watch. Each must be allowlisted on the executor.
     pub vaults: Vec<Address>,
+    /// Also watch every T1 vault the resolver lists, not only `vaults`. Liquidations move between vaults (in the
+    /// 9 days to 2026-10-12 none of the 69 happened on the two vaults first configured), so a fixed list goes stale.
+    /// A vault that is not allowlisted on the executor is quoted and simulated but its liquidation reverts there
+    /// (`TargetNotAllowed`); allowlist it with `scripts/allow-targets.sh`.
+    #[serde(default)]
+    pub auto_vaults: bool,
+    /// Fluid's `DexFactory`: every DEX pool it lists has its `Swap` events recorded (re-listed hourly).
+    #[serde(default)]
+    pub dex_factory: Option<Address>,
 }
 
 /// Journals of what happens on the watched exchanges, written to `data/<chain>/` as one JSON line per record.
