@@ -1,0 +1,772 @@
+No files changed, compilation skipped
+
+╭---------------------+------------------+-------------------+--------------------+---------------------╮
+| Contract            | Runtime Size (B) | Initcode Size (B) | Runtime Margin (B) | Initcode Margin (B) |
++=======================================================================================================+
+| ArbExecutor         | 20,369           | 20,710            | 4,207              | 28,442              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| AtlasSolver         | 22,548           | 22,964            | 2,028              | 26,188              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| FastFeedTicketVault | 6,521            | 7,034             | 18,055             | 42,118              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| HijackProtocol      | 1,414            | 1,442             | 23,162             | 47,710              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockAtlas           | 1,026            | 1,058             | 23,550             | 48,094              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockERC20           | 1,073            | 1,101             | 23,503             | 48,051              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockEnv             | 68               | 94                | 24,508             | 49,058              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockPriceSource     | 200              | 226               | 24,376             | 48,926              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockProtocol        | 521              | 549               | 24,055             | 48,603              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockVault           | 1,892            | 1,920             | 22,684             | 47,232              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockWETH            | 87               | 113               | 24,489             | 49,039              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockWETH9           | 354              | 382               | 24,222             | 48,770              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| V4Harness           | 20,592           | 20,940            | 3,984              | 28,212              |
+╰---------------------+------------------+-------------------+--------------------+---------------------╯
+
+warning[missing-events-access-control]: `owner` is changed without an event but is used for access control
+    ╭▸ src/FastFeedTicketVault.sol:165:9
+    │
+165 │         owner = msg.sender;
+    │         ━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[missing-events-access-control]: `pendingOwner` is changed without an event but is used for access control
+    ╭▸ src/FastFeedTicketVault.sol:166:9
+    │
+166 │         pendingOwner = address(0);
+    │         ━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+   ╭▸ src/FastFeedTicketVault.sol:89:36
+   │
+89 │     constructor(ITickets tickets_, address owner_) {
+   │                                    ━━━━━━━━━━━━━━
+   │
+   ╰ help: [redacted URL]
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:116:9
+    │
+116 │         tickets.purchaseTickets(round, price, wanted, apiKeyHash);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/FastFeedTicketVault.sol:117:9
+    │
+117 │         emit Renewed(round, price, tickets.thisRoundTicketCount(address(this)) - held, renewalsLeft);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+   ╭▸ src/AtlasSolver.sol:46:73
+   │
+46 │     constructor(address vault_, address weth_, address profitReceiver_, address atlas_)
+   │                                                                         ━━━━━━━━━━━━━━
+   │
+   ╰ help: [redacted URL]
+
+warning[missing-events-access-control]: `flashPool` is changed without an event but is used for access control
+    ╭▸ src/ArbExecutor.sol:231:9
+    │
+231 │         flashPool = first.pool;
+    │         ━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[missing-events-access-control]: `aaveFlashPool` is changed without an event but is used for access control
+    ╭▸ src/ArbExecutor.sol:298:9
+    │
+298 │         aaveFlashPool = aavePool;
+    │         ━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[missing-events-access-control]: `aaveFlashPool` is changed without an event but is used for access control
+    ╭▸ src/ArbExecutor.sol:348:9
+    │
+348 │         aaveFlashPool = address(0);
+    │         ━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[missing-events-access-control]: `expectedPool` is changed without an event but is used for access control
+    ╭▸ src/ArbExecutor.sol:559:13
+    │
+559 │             expectedPool = hop.pool;
+    │             ━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[missing-events-access-control]: `flashActive` is changed without an event but is used for access control
+    ╭▸ src/ArbExecutor.sol:367:9
+    │
+367 │         flashActive = false; // single use per execute()
+    │         ━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+    ╭▸ src/ArbExecutor.sol:164:48
+    │
+164 │     constructor(address vault_, address weth_, address profitReceiver_) {
+    │                                                ━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:198:14
+    │
+198 │         if (!usdg.approve(address(tickets), amount)) revert TransferFailed();
+    │              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:199:9
+    │
+199 │         tickets.depositToken(amount);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:205:13
+    │
+205 │             address(usdg).call(abi.encodeWithSelector(IERC20Min.transferFrom.selector, from, address(this), amount));
+    │             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[non-reentrant-not-first]: `nonReentrant` is not the first modifier
+    ╭▸ src/FastFeedTicketVault.sol:134:54
+    │
+134 │     function fund(uint256 amount) external onlyOwner nonReentrant {
+    │                                                      ━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/FastFeedTicketVault.sol:200:9
+    │
+200 │         emit Funded(amount);
+    │         ━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[non-reentrant-not-first]: `nonReentrant` is not the first modifier
+    ╭▸ src/FastFeedTicketVault.sol:140:47
+    │
+140 │     function depositHeld() external onlyOwner nonReentrant {
+    │                                               ━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:146:9
+    │
+146 │         tickets.withdrawToken(amount);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:210:39
+    │
+210 │         (bool ok, bytes memory ret) = token.call(abi.encodeWithSelector(IERC20Min.transfer.selector, to, amount));
+    │                                       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[non-reentrant-not-first]: `nonReentrant` is not the first modifier
+    ╭▸ src/FastFeedTicketVault.sol:145:58
+    │
+145 │     function withdraw(uint256 amount) external onlyOwner nonReentrant {
+    │                                                          ━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/FastFeedTicketVault.sol:148:9
+    │
+148 │         emit Withdrawn(amount);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[non-reentrant-not-first]: `nonReentrant` is not the first modifier
+    ╭▸ src/FastFeedTicketVault.sol:152:54
+    │
+152 │     function sweep(address token) external onlyOwner nonReentrant {
+    │                                                      ━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+    ╭▸ src/FastFeedTicketVault.sol:157:32
+    │
+157 │     function transferOwnership(address to) external onlyOwner {
+    │                                ━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+    ╭▸ src/ArbExecutor.sol:184:29
+    │
+184 │     function setPoolManager(address pm) external {
+    │                             ━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[arbitrary-send-eth]: ETH is sent to a user-controlled destination; restrict the destination or the caller
+    ╭▸ src/AtlasSolver.sol:113:26
+    │
+113 │             (bool ok,) = to.call{value: amount}("");
+    │                          ━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[unused-return]: return value of an external call is not used
+    ╭▸ src/ArbExecutor.sol:232:9
+    │
+232 │ ┏         IUniV3Pool(first.pool)
+233 │ ┃             .swap(
+234 │ ┃                 address(this),
+235 │ ┃                 first.zeroForOne,
+    ‡ ┃
+238 │ ┃                 abi.encode(minProfit, hops)
+239 │ ┃             );
+    │ ┗━━━━━━━━━━━━━┛
+    │
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:236:17
+    │
+236 │                 int256(amount),
+    │                 ━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'int256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+    ╭▸ src/ArbExecutor.sol:283:9
+    │
+283 │         address aavePool,
+    │         ━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[uninitialized-local]: local variable is read before being initialized
+    ╭▸ src/ArbExecutor.sol:332:19
+    │
+332 │             any = any || success;
+    │                   ━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:330:31
+    │
+330 │             (bool success,) = address(this).call(calls[i]);
+    │                               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/ArbExecutor.sol:333:13
+    │
+333 │             emit BatchItem(i, sel, success);
+    │             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:324:38
+    │
+324 │             if (calls[i].length < 4) revert BadRoute();
+    │                                      ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:329:15
+    │
+329 │             ) revert BadRoute();
+    │               ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:592:40
+    │
+592 │         (bool ok, bytes memory data) = token.call(abi.encodeWithSelector(0x095ea7b3, spender, amount));
+    │                                        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:403:43
+    │
+403 │             (bool ok, bytes memory ret) = c.target.call(c.data);
+    │                                           ━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:398:43
+    │
+398 │             if (!allowedTarget[c.target]) revert TargetNotAllowed(c.target);
+    │                                           ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:400:55
+    │
+400 │                 if (!allowedTarget[c.approveSpender]) revert TargetNotAllowed(c.approveSpender);
+    │                                                       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:593:69
+    │
+593 │         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+    │                                                                     ━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:406:21
+    │
+406 │                     revert(add(ret, 32), mload(ret))
+    │                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:562:38
+    │
+562 │               (int256 a0, int256 a1) = IUniV3Pool(hop.pool)
+    │ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+563 │ ┃                 .swap(
+564 │ ┃                     address(this),
+565 │ ┃                     hop.zeroForOne,
+    ‡ ┃
+568 │ ┃                     ""
+569 │ ┃                 );
+    │ ┗━━━━━━━━━━━━━━━━━┛
+    │
+    ╰ help: [redacted URL]
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:498:28
+    │
+498 │           bytes memory ret = IPoolManager(pm)
+    │ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+499 │ ┃             .unlock(
+500 │ ┃                 abi.encode(V4Swap(hop.kind, hop.tokenIn, hop.tokenOut, hop.feeBps, int24(uint24(spacing)), amountIn))
+501 │ ┃             );
+    │ ┗━━━━━━━━━━━━━┛
+    │
+    ╰ help: [redacted URL]
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:576:29
+    │
+576 │                 amountOut = ICamelotPair(hop.pool).getAmountOut(amountIn, hop.tokenIn);
+    │                             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:578:45
+    │
+578 │                 (uint112 r0, uint112 r1,) = IUniV2Pair(hop.pool).getReserves();
+    │                                             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:597:40
+    │
+597 │         (bool ok, bytes memory data) = token.call(abi.encodeWithSelector(0xa9059cbb, to, amount));
+    │                                        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:587:13
+    │
+587 │             IUniV2Pair(hop.pool).swap(out0, out1, address(this), "");
+    │             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:420:67
+    │
+420 │             if (i > 0 && hops[i].tokenIn != hops[i - 1].tokenOut) revert BadRoute();
+    │                                                                   ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:570:45
+    │
+570 │             if (expectedPool != address(0)) revert Unauthorized(); // callback must have run
+    │                                             ━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:496:66
+    │
+496 │         if (pm == address(0) || spacing == 0 || spacing > 32767) revert BadRoute();
+    │                                                                  ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:583:17
+    │
+583 │                 revert BadRoute();
+    │                 ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:598:69
+    │
+598 │         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+    │                                                                     ━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:454:88
+    │
+454 │             if (hops[i].tokenIn != hops[i - 1].tokenOut || hops[i].pool == first.pool) revert BadRoute();
+    │                                                                                        ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:450:24
+    │
+450 │         uint256 owed = uint256(first.zeroForOne ? amount0Delta : amount1Delta);
+    │                        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:451:28
+    │
+451 │         uint256 received = uint256(-(first.zeroForOne ? amount1Delta : amount0Delta));
+    │                            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:469:24
+    │
+469 │         uint256 owed = uint256(amount0Delta > 0 ? amount0Delta : amount1Delta);
+    │                        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:500:84
+    │
+500 │                 abi.encode(V4Swap(hop.kind, hop.tokenIn, hop.tokenOut, hop.feeBps, int24(uint24(spacing)), amountIn))
+    │                                                                                    ━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'int24' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:500:90
+    │
+500 │                 abi.encode(V4Swap(hop.kind, hop.tokenIn, hop.tokenOut, hop.feeBps, int24(uint24(spacing)), amountIn))
+    │                                                                                          ━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'uint24' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:530:30
+    │
+530 │                 zeroForOne, -int256(a.amountIn), zeroForOne ? MIN_SQRT_RATIO_PLUS_ONE : MAX_SQRT_RATIO_MINUS_ONE
+    │                              ━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'int256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:535:27
+    │
+535 │             zeroForOne ? (int128(delta >> 128), int128(delta)) : (int128(delta), int128(delta >> 128));
+    │                           ━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'int128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:535:49
+    │
+535 │             zeroForOne ? (int128(delta >> 128), int128(delta)) : (int128(delta), int128(delta >> 128));
+    │                                                 ━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'int128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:535:67
+    │
+535 │             zeroForOne ? (int128(delta >> 128), int128(delta)) : (int128(delta), int128(delta >> 128));
+    │                                                                   ━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'int128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:535:82
+    │
+535 │             zeroForOne ? (int128(delta >> 128), int128(delta)) : (int128(delta), int128(delta >> 128));
+    │                                                                                  ━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'int128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:537:16
+    │
+537 │         owed = uint256(uint128(-inDelta));
+    │                ━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:537:24
+    │
+537 │         owed = uint256(uint128(-inDelta));
+    │                        ━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'uint128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:538:15
+    │
+538 │         got = uint256(uint128(outDelta));
+    │               ━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:538:23
+    │
+538 │         got = uint256(uint128(outDelta));
+    │                       ━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'uint128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[arbitrary-send-eth]: ETH is sent to a user-controlled destination; restrict the destination or the caller
+    ╭▸ src/ArbExecutor.sol:547:13
+    │
+547 │             pm.settle{value: owed}();
+    │             ━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[unused-return]: return value of an external call is not used
+    ╭▸ src/ArbExecutor.sol:551:13
+    │
+551 │             pm.settle();
+    │             ━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:566:21
+    │
+566 │                     int256(amountIn),
+    │                     ━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'int256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:571:25
+    │
+571 │             amountOut = uint256(-(hop.zeroForOne ? a1 : a0));
+    │                         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: [redacted URL]
+
+warning[unused-return]: return value of an external call is not used
+    ╭▸ src/ArbExecutor.sol:578:45
+    │
+578 │                 (uint112 r0, uint112 r1,) = IUniV2Pair(hop.pool).getReserves();
+    │                                             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: [redacted URL]
+
+No files changed, compilation skipped
+
+Ran 10 tests for test/AtlasSolver.t.sol:AtlasSolverTest
+[PASS] test_bidCapDefaultsToZeroAndIsEnforced() (gas: 86802)
+[PASS] test_borrowRepaidFromCallValue() (gas: 304721)
+[PASS] test_ethOnlyAcceptedDuringSolverCall() (gas: 36274)
+[PASS] test_liquidatesAndPaysBidFromEth() (gas: 228282)
+[PASS] test_onlyLiquidationSelectorsAllowed() (gas: 76773)
+[PASS] test_onlyOwnerStillOwnsTheExecutorSurface() (gas: 56826)
+[PASS] test_rejectsEveryoneButAtlas() (gas: 46359)
+[PASS] test_rejectsOtherSolverOpSigners() (gas: 51742)
+[PASS] test_unprofitableLiquidationRevertsTheWholeSolverCall() (gas: 192412)
+[PASS] test_unwrapsWethWhenEthIsShort() (gas: 211992)
+Suite result: ok. 10 passed; 0 failed; 0 skipped; finished in 5.62ms (2.35ms CPU time)
+
+Ran 7 tests for test/Batch.t.sol:BatchTest
+[PASS] test_aProtocolCannotStartATradeDuringTheBatch() (gas: 608674)
+[PASS] test_allItemsFailingRevertsTheBatch() (gas: 314423)
+[PASS] test_batchingFlagDoesNotLeakAfterTheBatch() (gas: 187530)
+[PASS] test_oneFailingItemDoesNotUndoTheOthers() (gas: 329709)
+[PASS] test_onlyOwnerCanBatch() (gas: 42832)
+[PASS] test_rejectsEmptyOversizedAndForeignCalls() (gas: 181929)
+[PASS] test_runsEveryItemAndPaysEachProfit() (gas: 331650)
+Suite result: ok. 7 passed; 0 failed; 0 skipped; finished in 8.91ms (5.76ms CPU time)
+
+Ran 7 tests for test/ArbExecutorUnit.t.sol:ArbExecutorUnitTest
+[PASS] testFuzz_callbacksRejectAnyone(address,int256,int256,bytes) (runs: 256, μ: 81312, ~: 81230)
+[PASS] testFuzz_disallowedSpenderReverts(address) (runs: 256, μ: 92932, ~: 93028)
+[PASS] testFuzz_disallowedTargetsAlwaysRevert(address) (runs: 256, μ: 88879, ~: 88975)
+[PASS] testFuzz_flashCallbackRejectsAnyoneOutsideATrade(address,bytes) (runs: 256, μ: 34227, ~: 33906)
+[PASS] testFuzz_liquidationProfitAccounting(uint96,uint96,uint96) (runs: 256, μ: 188365, ~: 198732)
+[PASS] testFuzz_mismatchedRoutesRevert(address,address,address) (runs: 256, μ: 36283, ~: 36516)
+[PASS] testFuzz_onlyOwnerCanTrade(address) (runs: 256, μ: 114534, ~: 114630)
+Suite result: ok. 7 passed; 0 failed; 0 skipped; finished in 136.23ms (379.45ms CPU time)
+
+Ran 1 test for test/ArbExecutorUnit.t.sol:ArbExecutorInvariantTest
+[PASS] invariant_executorNeverHoldsFunds() (runs: 256, calls: 128000, reverts: 0)
+
+╭----------+-----------------------+-------+---------+----------╮
+| Contract | Selector              | Calls | Reverts | Discards |
++===============================================================+
+| Handler  | attackerCallsCallback | 32110 | 0       | 0        |
+|----------+-----------------------+-------+---------+----------|
+| Handler  | attackerSendsEth      | 32255 | 0       | 0        |
+|----------+-----------------------+-------+---------+----------|
+| Handler  | attackerToggles       | 31844 | 0       | 0        |
+|----------+-----------------------+-------+---------+----------|
+| Handler  | liquidate             | 31791 | 0       | 0        |
+╰----------+-----------------------+-------+---------+----------╯
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 20.55s (20.55s CPU time)
+
+Ran 4 test suites in 20.56s (20.70s CPU time): 25 tests passed, 0 failed, 0 skipped (25 total tests)

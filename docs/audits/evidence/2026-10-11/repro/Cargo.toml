@@ -1,0 +1,13 @@
+[package]
+name = "mev-audit-repro"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+mev-risk = { path = "../../../../../crates/mev-risk" }
+mev-config = { path = "../../../../../crates/mev-config" }
+mev-types = { path = "../../../../../crates/mev-types" }
+seqscope-core = { path = "../../../../../crates/seqscope-core" }

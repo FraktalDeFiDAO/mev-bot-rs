@@ -1,0 +1,26 @@
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+
+running 3 tests
+adapter_reads_real_reserves_feeds_and_a_real_borrower --- FAILED
+test every_price_dependency_of_every_reserve_is_watched has been running for over 60 seconds
+test predicts_liquidations_from_a_price_report_on_real_positions has been running for over 60 seconds
+..
+failures:
+
+---- adapter_reads_real_reserves_feeds_and_a_real_borrower stdout ----
+
+thread 'adapter_reads_real_reserves_feeds_and_a_real_borrower' (6) panicked at crates/mev-lending-aave-v3/tests/live.rs:53:42:
+called `Result::unwrap()` on an `Err` value: ErrorResp(ErrorPayload { code: -32602, message: "Block range limit exceeded. See more details at [redacted URL]", data: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    adapter_reads_real_reserves_feeds_and_a_real_borrower
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 104.82s
+
+error: test failed, to rerun pass `-p mev-lending-aave-v3 --test live`

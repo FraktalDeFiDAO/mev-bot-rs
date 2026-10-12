@@ -1,0 +1,71 @@
+{
+  "local_head": "08d80455b8e1a16cc6fb4d7416ac24a4c4d0fa56",
+  "production_checkout": "cb248f5936679cbfbbb51a3ca3cc7b64e83f5c0a",
+  "production_image_source_independently_verified": false,
+  "production_checkout_commits_behind": 65,
+  "production_snapshot_utc": "2026-10-11T13:17:33Z",
+  "results": {
+    "rust_fmt": 0,
+    "rust_clippy": 0,
+    "rust_default_tests": {
+      "exit": 0,
+      "passed": 493,
+      "failed": 0,
+      "ignored": 16
+    },
+    "forge_fmt_build_sizes": 0,
+    "forge_offline": {
+      "exit": 0,
+      "passed": 25
+    },
+    "forge_full_including_forks": 0,
+    "browser_ui": {
+      "exit": 0,
+      "logic_passed": 23,
+      "browser_passed": 17
+    },
+    "atlas_balance_reproduction": {
+      "exit": 0,
+      "passed": 3
+    },
+    "parser_overflow_child_exit": 134,
+    "cargo_audit": {
+      "exit": 0,
+      "known_vulnerabilities": 0,
+      "unmaintained_notices": 2
+    },
+    "rust_rpc_tests": {
+      "passed": 14,
+      "failed": 2,
+      "failure_cause": "selected provider block-range limit",
+      "packages": {
+        "mev-discovery": {
+          "exit": 0,
+          "passed": 6
+        },
+        "mev-lending-aave-v3": {
+          "exit": 101,
+          "passed": 2,
+          "failed": 1
+        },
+        "mev-lending-compound-v3": {
+          "exit": 0,
+          "passed": 2
+        },
+        "mev-lending-morpho": {
+          "exit": 101,
+          "passed": 1,
+          "failed": 1
+        },
+        "mev-lending-fluid": {
+          "exit": 0,
+          "passed": 1
+        },
+        "mev-presim": {
+          "exit": 0,
+          "passed": 2
+        }
+      }
+    }
+  }
+}

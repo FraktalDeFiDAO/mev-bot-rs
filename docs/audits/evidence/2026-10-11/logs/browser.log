@@ -1,0 +1,30 @@
+== interface logic (node)
+ℹ tests 23
+ℹ pass 23
+ℹ fail 0
+== build
+== server (replaying the corpus) on :7899
+== interface in a real browser
+✔ Live: calls are sentences a person can read, with a switch for the technical columns (2113.228149ms)
+✔ Live: a row opens an inspector that explains itself and offers to watch for more like it (133.768619ms)
+✔ Live: the search box narrows what is shown (28.559755ms)
+✔ Live: an idea can be tried in one click, is explained in words, and nothing is saved (3254.115898ms)
+✔ Live: a tried idea becomes a rule in one click (375.243229ms)
+✔ Rules: the page starts from what you want to watch, not from syntax (101.479713ms)
+✔ Rules: "Big swaps" asks in real units, says what it will catch, shows examples, and saves (630.270694ms)
+✔ Rules: a rule can be switched off and on, copied, and deleted after a confirmation (453.185178ms)
+✔ Rules: an existing rule can be changed, with the same explanation and examples (433.880282ms)
+✔ Rules: mistakes are explained in words and block saving (659.898709ms)
+✔ Rules: a starter set is described in words and added once (398.433546ms)
+✔ Rules: the rules file is still there for people who want the text (798.032875ms)
+✔ Explore: SQL runs, results can be downloaded, writes are refused, filters show rows (492.642357ms)
+✔ Gaps: unread calls are listed with names where we have them, and one click starts a rule (474.946987ms)
+✔ Stats: the cards, the breakdowns and a clean drop counter (171.881617ms)
+✔ the layout holds on a phone and in dark mode (911.183298ms)
+✔ nothing in the browser console or the page raised an error (24.354933ms)
+ℹ tests 17
+ℹ pass 17
+ℹ fail 0
+== stop (SIGTERM): the server must flush and exit cleanly
+stored 2861 rows (0 dropped, 0 failed)
+INTERFACE SUITE: OK (screenshots in /tmp/seqscope-ui/shots)

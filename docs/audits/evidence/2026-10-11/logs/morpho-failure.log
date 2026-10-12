@@ -1,0 +1,16 @@
+
+running 1 test
+
+thread 'reads_a_real_wbtc_usdc_borrower' (6) panicked at crates/mev-lending-morpho/tests/live.rs:47:42:
+called `Result::unwrap()` on an `Err` value: ErrorResp(ErrorPayload { code: -32602, message: "Block range limit exceeded. See more details at [redacted URL]", data: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+reads_a_real_wbtc_usdc_borrower --- FAILED
+
+failures:
+
+failures:
+    reads_a_real_wbtc_usdc_borrower
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.04s
+
+error: test failed, to rerun pass `-p mev-lending-morpho --test live`

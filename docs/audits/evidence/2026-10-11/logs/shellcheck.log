@@ -1,0 +1,40 @@
+
+In scripts/atlas-solver.sh line 56:
+    for t in "$AAVE_POOL"; do   # extend with the other protocol targets the executor allows
+             ^----------^ SC2066 (error): Since you double quoted this, it will not word split, and the loop will only run once.
+
+
+In scripts/mutation-check-seqscope.sh line 7:
+cd "$(dirname "$0")/.."
+^---------------------^ SC2164 (warning): Use 'cd ... || exit' or 'cd ... || return' in case cd fails.
+
+Did you mean: 
+cd "$(dirname "$0")/.." || exit
+
+
+In scripts/run.sh line 13:
+export UID GID="$(id -g)"
+           ^-^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In scripts/test-e2e-crash.sh line 41:
+  for try in 1 2 3; do
+  ^-^ SC2034 (warning): try appears unused. Verify use (or export if used externally).
+
+
+In scripts/test-e2e-liquidation.sh line 39:
+  for try in 1 2 3; do
+  ^-^ SC2034 (warning): try appears unused. Verify use (or export if used externally).
+
+
+In scripts/watchdog.sh line 8:
+cd "$(dirname "$0")/.."
+^---------------------^ SC2164 (warning): Use 'cd ... || exit' or 'cd ... || return' in case cd fails.
+
+Did you mean: 
+cd "$(dirname "$0")/.." || exit
+
+For more information:
+  [redacted URL] -- Since you double quoted this, it ...
+  [redacted URL] -- try appears unused. Verify use (o...
+  [redacted URL] -- Declare and assign separately to ...

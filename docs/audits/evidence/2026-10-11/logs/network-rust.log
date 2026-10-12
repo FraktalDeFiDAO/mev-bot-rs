@@ -1,0 +1,29 @@
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.50s
+
+
+running 1 test
+tick_model_agrees_with_the_quoter_on_every_pool_it_calls_exact --- FAILED
+
+failures:
+
+---- tick_model_agrees_with_the_quoter_on_every_pool_it_calls_exact stdout ----
+
+thread 'tick_model_agrees_with_the_quoter_on_every_pool_it_calls_exact' (4356) panicked at crates/mev-discovery/tests/ticks_sweep_live.rs:41:70:
+called `Result::unwrap()` on an `Err` value: NotPresent
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tick_model_agrees_with_the_quoter_on_every_pool_it_calls_exact
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+error: test failed, to rerun pass `-p mev-discovery --test ticks_sweep_live`
