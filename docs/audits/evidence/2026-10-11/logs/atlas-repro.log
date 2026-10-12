@@ -1,0 +1,11 @@
+Compiling 24 files with Solc 0.8.28
+Solc 0.8.28 finished in 4.27s
+Compiler run successful!
+
+Ran 3 tests for test/AtlasBalanceAudit.t.sol:AtlasBalanceAuditTest
+[PASS] test_documentedFloatSweptAndBidFails() (gas: 210930)
+[PASS] test_prefundedFloatLetsLosingTradePassProfitFloor() (gas: 188826)
+[PASS] test_zeroBidReportsInitialFloatAsProfit() (gas: 188828)
+Suite result: ok. 3 passed; 0 failed; 0 skipped; finished in 4.37ms (1.78ms CPU time)
+
+Ran 1 test suite in 18.93ms (4.37ms CPU time): 3 tests passed, 0 failed, 0 skipped (3 total tests)

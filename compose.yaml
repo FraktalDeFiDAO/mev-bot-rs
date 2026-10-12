@@ -15,8 +15,8 @@ services:
     userns_mode: keep-id
     user: "${UID:-1000}:${GID:-1000}"
     command: ["--mode", "${EXECUTION_MODE:-shadow}", "--config", "/app/config/arbitrum.toml"]
-    # Secrets and endpoints come from the git-ignored .env; never baked into the image.
-    env_file: .env
+    # Shadow receives endpoint credentials only. run.sh selects .env explicitly for live.
+    env_file: "${MEV_ENV_FILE:-.env.shadow}"
     environment:
       RUST_LOG: "${RUST_LOG:-info}"
       NO_COLOR: "1"

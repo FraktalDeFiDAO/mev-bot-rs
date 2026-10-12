@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for completed Nitro import and ready Ethereum parent endpoints
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+Unit=arbitrum-activate.service
+
+[Install]
+WantedBy=timers.target

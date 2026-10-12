@@ -27,6 +27,16 @@ sol! {
     interface MulticallDeadline {
         function multicall(uint256 deadline, bytes[] data) external payable returns (bytes[] results);
     }
+    interface SwapRouterV1Out {
+        struct ExactOutputSingleParams { address tokenIn; address tokenOut; uint24 fee; address recipient; uint256 deadline; uint256 amountOut; uint256 amountInMaximum; uint160 sqrtPriceLimitX96; }
+        function exactOutputSingle(ExactOutputSingleParams params) external payable returns (uint256 amountIn);
+    }
+    interface SwapRouter02Out {
+        struct ExactOutputParams { bytes path; address recipient; uint256 amountOut; uint256 amountInMaximum; }
+        function exactOutput(ExactOutputParams params) external payable returns (uint256 amountIn);
+        struct ExactOutputSingleParams { address tokenIn; address tokenOut; uint24 fee; address recipient; uint256 amountOut; uint256 amountInMaximum; uint160 sqrtPriceLimitX96; }
+        function exactOutputSingle(ExactOutputSingleParams params) external payable returns (uint256 amountIn);
+    }
     interface SwapRouterV1 {
         struct ExactInputParams { bytes path; address recipient; uint256 deadline; uint256 amountIn; uint256 amountOutMinimum; }
         struct ExactInputSingleParams { address tokenIn; address tokenOut; uint24 fee; address recipient; uint256 deadline; uint256 amountIn; uint256 amountOutMinimum; uint160 sqrtPriceLimitX96; }
@@ -49,6 +59,12 @@ sol! {
 
 pub const SWAP_ROUTER_02: Address = address!("68b3465833fb72A70ecDF485E0e4C7bD8665Fc45");
 pub const SWAP_ROUTER_V1: Address = address!("E592427A0AEce92De3Edee1F18E0157C05861564");
+/// PancakeSwap V3 `SmartRouter`-era `SwapRouter` on Arbitrum: the Uniswap V3 SwapRouter v1 ABI (with a deadline), so the
+/// same decoder reads it. Measured 2026-10-09: `exactInputSingle` exact on 40 of 40 landed calls, `exactInput` on 6 of 6.
+pub const PANCAKE_V3_ROUTER: Address = address!("1b81D678ffb9C0263b24A97847620C99d213eB14");
+/// A second router that speaks the SwapRouter02 ABI (`exactInput`, `multicall`): 107 feed transactions on 2026-10-09,
+/// `exactInput` exact on 30 of 30 landed calls.
+pub const SWAP_ROUTER_02_ALT: Address = address!("32226588378236fd0c7c4053999f88ac0e5cac77");
 pub const UNIVERSAL_ROUTER: Address = address!("A51afAFe0263b40EdaEf0Df8781eA9aa03E381a3");
 /// A second contract that answers to the Universal Router's `execute` selector (98 successful transactions in a few
 /// hours on 2026-10-08, mostly V3 swaps). Treated as a Universal Router; `scripts/verify-decoder.py` checks that.
@@ -103,6 +119,7 @@ fn v3_path_swap(path: &[u8], amount_in: U256) -> Option<SwapIntent> {
         amount_in: real_amount(amount_in)?,
         sqrt_limit_x96: None,
         hops,
+        amount_out_exact: None,
     })
 }
 
@@ -123,6 +140,53 @@ fn v3_single(
         amount_in: real_amount(amount_in)?,
         sqrt_limit_x96: limit(sqrt_limit),
         hops: 1,
+        amount_out_exact: None,
+    })
+}
+
+/// An exact-output single-pool swap: the call fixes `amount_out`; `amount_in_max` is only the most it may spend.
+fn v3_single_out(
+    (token_in, token_out, fee): (Address, Address, u32),
+    amount_out: U256,
+    amount_in_max: U256,
+    sqrt_limit: U256,
+) -> Option<SwapIntent> {
+    Some(SwapIntent {
+        pool: PoolRef::Pair {
+            token_a: token_in,
+            token_b: token_out,
+            fee,
+        },
+        token_in,
+        amount_in: real_amount(amount_in_max)?,
+        sqrt_limit_x96: limit(sqrt_limit),
+        hops: 1,
+        amount_out_exact: Some(real_amount(amount_out)?).filter(|a| !a.is_zero()),
+    })
+}
+
+/// An exact-output multi-hop swap. The path is reversed (output token first), so the pool that runs first is the last
+/// pair in it; `amount_out_exact` is the final amount received (of the first token in the path).
+fn v3_path_out(path: &[u8], amount_out: U256, amount_in_max: U256) -> Option<SwapIntent> {
+    if path.len() < 43 || !(path.len() - 20).is_multiple_of(23) {
+        return None;
+    }
+    let hops = u8::try_from((path.len() - 20) / 23).ok()?;
+    let n = path.len();
+    let token_in = Address::from_slice(&path[n - 20..]);
+    let other = Address::from_slice(&path[n - 43..n - 23]);
+    let fee = u32::from_be_bytes([0, path[n - 23], path[n - 22], path[n - 21]]);
+    Some(SwapIntent {
+        pool: PoolRef::Pair {
+            token_a: token_in,
+            token_b: other,
+            fee,
+        },
+        token_in,
+        amount_in: real_amount(amount_in_max)?,
+        sqrt_limit_x96: None,
+        hops,
+        amount_out_exact: Some(real_amount(amount_out)?).filter(|a| !a.is_zero()),
     })
 }
 
@@ -137,6 +201,7 @@ fn v2_path_swap(path: &[Address], amount_in: U256) -> Option<SwapIntent> {
         amount_in: real_amount(amount_in)?,
         sqrt_limit_x96: None,
         hops: u8::try_from(path.len() - 1).ok()?,
+        amount_out_exact: None,
     })
 }
 
@@ -155,6 +220,23 @@ fn swap_router_02(input: &[u8], depth: usize) -> Option<SwapIntent> {
             p.tokenOut,
             p.fee.to::<u32>(),
             p.amountIn,
+            U256::from(p.sqrtPriceLimitX96),
+        );
+    }
+    if sel == SwapRouter02Out::exactOutputCall::SELECTOR {
+        let p = SwapRouter02Out::exactOutputCall::abi_decode_raw(args)
+            .ok()?
+            .params;
+        return v3_path_out(&p.path, p.amountOut, p.amountInMaximum);
+    }
+    if sel == SwapRouter02Out::exactOutputSingleCall::SELECTOR {
+        let p = SwapRouter02Out::exactOutputSingleCall::abi_decode_raw(args)
+            .ok()?
+            .params;
+        return v3_single_out(
+            (p.tokenIn, p.tokenOut, p.fee.to::<u32>()),
+            p.amountOut,
+            p.amountInMaximum,
             U256::from(p.sqrtPriceLimitX96),
         );
     }
@@ -192,6 +274,17 @@ fn swap_router_v1(input: &[u8]) -> Option<SwapIntent> {
             p.tokenOut,
             p.fee.to::<u32>(),
             p.amountIn,
+            U256::from(p.sqrtPriceLimitX96),
+        );
+    }
+    if sel == SwapRouterV1Out::exactOutputSingleCall::SELECTOR {
+        let p = SwapRouterV1Out::exactOutputSingleCall::abi_decode_raw(args)
+            .ok()?
+            .params;
+        return v3_single_out(
+            (p.tokenIn, p.tokenOut, p.fee.to::<u32>()),
+            p.amountOut,
+            p.amountInMaximum,
             U256::from(p.sqrtPriceLimitX96),
         );
     }
@@ -288,6 +381,7 @@ fn v4_hop(
         amount_in: real_amount(amount_in)?,
         sqrt_limit_x96: None,
         hops,
+        amount_out_exact: None,
     })
 }
 
@@ -395,9 +489,9 @@ impl Protocol for UniswapRouter {
     }
 
     fn decode_call(&self, to: Address, input: &[u8]) -> Option<Decoded> {
-        let swap = if to == SWAP_ROUTER_02 {
+        let swap = if to == SWAP_ROUTER_02 || to == SWAP_ROUTER_02_ALT {
             swap_router_02(input, 0)
-        } else if to == SWAP_ROUTER_V1 {
+        } else if to == SWAP_ROUTER_V1 || to == PANCAKE_V3_ROUTER {
             swap_router_v1(input)
         } else if to == UNIVERSAL_ROUTER || to == UNIVERSAL_ROUTER_2 {
             universal_router(input).into_iter().next()
@@ -431,6 +525,16 @@ impl Protocol for UniswapRouter {
                 decoded: true,
             },
             Contract {
+                address: SWAP_ROUTER_02_ALT,
+                name: "Uniswap-V3-ABI router (SwapRouter02 exactInput / multicall decoded)",
+                decoded: true,
+            },
+            Contract {
+                address: PANCAKE_V3_ROUTER,
+                name: "PancakeSwap V3 SwapRouter (Uniswap v1 ABI: exact-in decoded)",
+                decoded: true,
+            },
+            Contract {
                 address: UNIVERSAL_ROUTER,
                 name: "Uniswap Universal Router (V2/V3/V4 exact-in commands decoded)",
                 decoded: true,
@@ -448,6 +552,159 @@ impl Protocol for UniswapRouter {
 mod tests {
     use super::*;
     use alloy::primitives::{Bytes, aliases::U24};
+
+    #[test]
+    fn landed_exact_output_calls_fix_the_output_and_bound_the_input() {
+        let mut n = 0;
+        for l in include_str!("../tests/fixtures/exact_output_single_v1.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let f: Vec<&str> = l.split(',').collect();
+            let input = alloy::hex::decode(f[0].trim_start_matches("0x")).unwrap();
+            let s = swap(UniswapRouter.decode_call(SWAP_ROUTER_V1, &input));
+            let (tin, tout): (Address, Address) = (f[1].parse().unwrap(), f[2].parse().unwrap());
+            assert_eq!(s.token_in, tin, "{l}");
+            assert_eq!(
+                s.pool,
+                PoolRef::Pair {
+                    token_a: tin,
+                    token_b: tout,
+                    fee: f[3].parse().unwrap()
+                },
+                "{l}"
+            );
+            assert_eq!(
+                s.amount_out_exact,
+                Some(f[4].parse::<U256>().unwrap()),
+                "{l}"
+            );
+            assert_eq!(s.amount_in, f[5].parse::<U256>().unwrap(), "{l}");
+            n += 1;
+        }
+        assert!(n >= 35, "{n}");
+    }
+
+    #[test]
+    fn swap_router_02_exact_output_single_decodes_and_exact_input_stays_exact() {
+        let c = SwapRouter02Out::exactOutputSingleCall {
+            params: SwapRouter02Out::ExactOutputSingleParams {
+                tokenIn: A,
+                tokenOut: B,
+                fee: U24::from(500u32),
+                recipient: C,
+                amountOut: U256::from(1_000u32),
+                amountInMaximum: U256::from(1_200u32),
+                sqrtPriceLimitX96: Default::default(),
+            },
+        };
+        let s = swap(UniswapRouter.decode_call(SWAP_ROUTER_02, &c.abi_encode()));
+        assert_eq!(s.amount_out_exact, Some(U256::from(1_000u32)));
+        assert_eq!(s.amount_in, U256::from(1_200u32));
+        assert_eq!(s.token_in, A);
+        // Exact-input calls carry no fixed output.
+        let one = SwapRouter02::exactInputSingleCall {
+            params: SwapRouter02::ExactInputSingleParams {
+                tokenIn: A,
+                tokenOut: B,
+                fee: U24::from(500u32),
+                recipient: C,
+                amountIn: U256::from(7u32),
+                amountOutMinimum: U256::ZERO,
+                sqrtPriceLimitX96: Default::default(),
+            },
+        };
+        let s = swap(UniswapRouter.decode_call(SWAP_ROUTER_02, &one.abi_encode()));
+        assert_eq!(s.amount_out_exact, None);
+    }
+
+    #[test]
+    fn landed_pancake_router_calls_decode_to_pair_fee_hops_and_amount() {
+        let mut n = 0;
+        for l in include_str!("../tests/fixtures/pancake_v3_router.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let f: Vec<&str> = l.split(',').collect();
+            let input = alloy::hex::decode(f[1].trim_start_matches("0x")).unwrap();
+            let s = swap(UniswapRouter.decode_call(PANCAKE_V3_ROUTER, &input));
+            let (tin, tout): (Address, Address) = (f[2].parse().unwrap(), f[3].parse().unwrap());
+            assert_eq!(
+                s.pool,
+                PoolRef::Pair {
+                    token_a: tin,
+                    token_b: tout,
+                    fee: f[4].parse().unwrap()
+                },
+                "{l}"
+            );
+            assert_eq!((s.token_in, s.hops), (tin, f[5].parse().unwrap()), "{l}");
+            assert_eq!(s.amount_in, f[6].parse::<U256>().unwrap(), "{l}");
+            assert_eq!(s.amount_out_exact, None);
+            n += 1;
+        }
+        assert!(n >= 40, "{n}");
+    }
+
+    #[test]
+    fn landed_alt_router_exact_input_and_router02_exact_output_decode() {
+        let mut n = 0;
+        for l in include_str!("../tests/fixtures/router02_alt_exact_input.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let f: Vec<&str> = l.split(',').collect();
+            let input = alloy::hex::decode(f[0].trim_start_matches("0x")).unwrap();
+            let s = swap(UniswapRouter.decode_call(SWAP_ROUTER_02_ALT, &input));
+            let (a, b): (Address, Address) = (f[1].parse().unwrap(), f[2].parse().unwrap());
+            assert_eq!(
+                s.pool,
+                PoolRef::Pair {
+                    token_a: a,
+                    token_b: b,
+                    fee: f[3].parse().unwrap()
+                },
+                "{l}"
+            );
+            assert_eq!(
+                (s.hops, s.amount_out_exact),
+                (f[4].parse().unwrap(), None),
+                "{l}"
+            );
+            assert_eq!(s.amount_in, f[5].parse::<U256>().unwrap(), "{l}");
+            n += 1;
+        }
+        assert!(n >= 25, "{n}");
+        let mut m = 0;
+        for l in include_str!("../tests/fixtures/router02_exact_output.csv")
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.is_empty())
+        {
+            let f: Vec<&str> = l.split(',').collect();
+            let input = alloy::hex::decode(f[0].trim_start_matches("0x")).unwrap();
+            let s = swap(UniswapRouter.decode_call(SWAP_ROUTER_02, &input));
+            let (a, b): (Address, Address) = (f[1].parse().unwrap(), f[2].parse().unwrap());
+            assert_eq!(s.token_in, a, "{l}");
+            assert_eq!(
+                s.pool,
+                PoolRef::Pair {
+                    token_a: a,
+                    token_b: b,
+                    fee: f[3].parse().unwrap()
+                },
+                "{l}"
+            );
+            assert_eq!(s.hops, f[4].parse::<u8>().unwrap(), "{l}");
+            assert_eq!(
+                s.amount_out_exact,
+                Some(f[5].parse::<U256>().unwrap()),
+                "{l}"
+            );
+            assert_eq!(s.amount_in, f[6].parse::<U256>().unwrap(), "{l}");
+            m += 1;
+        }
+        assert!(m >= 25, "{m}");
+    }
 
     const A: Address = Address::with_last_byte(0xa1);
     const B: Address = Address::with_last_byte(0xb2);
@@ -845,6 +1102,7 @@ mod tests {
                 amount_in: U256::from(amount),
                 sqrt_limit_x96: None,
                 hops: 1,
+                amount_out_exact: None,
             })
         };
         assert_eq!(swaps, vec![want(c0, 1_000), want(c1, 2_000)]);

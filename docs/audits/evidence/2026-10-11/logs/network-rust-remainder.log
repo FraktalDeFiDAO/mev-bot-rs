@@ -1,0 +1,89 @@
+AUDIT_PACKAGE=mev-lending-compound-v3
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+
+running 2 tests
+.test predicts_absorbs_from_a_price_report_on_real_positions has been running for over 60 seconds
+.
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 152.89s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+AUDIT_EXIT=0
+AUDIT_PACKAGE=mev-lending-morpho
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+
+running 2 tests
+reads_a_real_wbtc_usdc_borrower --- FAILED
+test predicts_liquidations_from_a_price_report_on_real_positions has been running for over 60 seconds
+.
+failures:
+
+---- reads_a_real_wbtc_usdc_borrower stdout ----
+
+thread 'reads_a_real_wbtc_usdc_borrower' (1045) panicked at crates/mev-lending-morpho/tests/live.rs:47:42:
+called `Result::unwrap()` on an `Err` value: ErrorResp(ErrorPayload { code: -32602, message: "Block range limit exceeded. See more details at [redacted URL]", data: None })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    reads_a_real_wbtc_usdc_borrower
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 114.84s
+
+error: test failed, to rerun pass `-p mev-lending-morpho --test live`
+AUDIT_EXIT=101
+AUDIT_PACKAGE=mev-lending-fluid
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+AUDIT_EXIT=0
+AUDIT_PACKAGE=mev-presim
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+AUDIT_EXIT=0

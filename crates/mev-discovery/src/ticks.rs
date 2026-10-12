@@ -34,10 +34,14 @@ pub fn window(tick: i32, spacing: i32, half: i32) -> (Vec<i32>, i32, i32) {
 /// `liquidityNet` (the second return word, an int128) from a `ticks(int24)` result. The tuple's
 /// length differs between Uniswap and Pancake, so the word is read directly.
 pub fn liquidity_net(ret: &[u8]) -> Option<f64> {
+    liquidity_net_exact(ret).map(|n| n as f64)
+}
+
+/// The same word as an exact `i128`.
+pub fn liquidity_net_exact(ret: &[u8]) -> Option<i128> {
     let word = ret.get(32..64)?;
     // int128 sign-extended to 256 bits: reinterpret the low 16 bytes.
-    let raw = i128::from_be_bytes(word[16..32].try_into().ok()?);
-    Some(raw as f64)
+    Some(i128::from_be_bytes(word[16..32].try_into().ok()?))
 }
 
 /// `(sqrt price, tick)` from a `slot0()` result.
@@ -65,14 +69,19 @@ pub fn mapping_slot(key: i32, slot: B256) -> B256 {
 /// `liquidityNet` of a V4 `TickInfo` first word: `liquidityGross` in the low 128 bits, the signed
 /// `liquidityNet` in the high 128.
 pub fn v4_liquidity_net(word: &[u8]) -> Option<f64> {
-    let raw = i128::from_be_bytes(word.get(..16)?.try_into().ok()?);
-    Some(raw as f64)
+    v4_liquidity_net_exact(word).map(|n| n as f64)
+}
+
+pub fn v4_liquidity_net_exact(word: &[u8]) -> Option<i128> {
+    Some(i128::from_be_bytes(word.get(..16)?.try_into().ok()?))
 }
 
 /// How a pool's ticks are read: its own contract (V3-style) or the V4 PoolManager's storage.
 #[derive(Clone, Copy)]
 enum Style {
     V3,
+    /// Camelot's Algebra pool: `globalState`/`tickTable`/`ticks`; the table is indexed by raw tick (spacing 1).
+    Algebra,
     V4 {
         manager: Address,
         base: B256,
@@ -93,6 +102,7 @@ impl Plan {
     fn slot0_call(&self) -> (Address, Bytes) {
         match self.style {
             Style::V3 => call(self.pool, IUniswapV3Pool::slot0Call {}),
+            Style::Algebra => call(self.pool, mev_bindings::IAlgebraPool::globalStateCall {}),
             Style::V4 { manager, base, .. } => {
                 call(manager, IPoolManager::extsloadCall { slot: base })
             }
@@ -106,6 +116,10 @@ impl Plan {
                 IUniswapV3Pool::tickBitmapCall {
                     wordPosition: word as i16,
                 },
+            ),
+            Style::Algebra => call(
+                self.pool,
+                mev_bindings::IAlgebraPool::tickTableCall { row: word as i16 },
             ),
             Style::V4 { manager, base, .. } => call(
                 manager,
@@ -124,6 +138,12 @@ impl Plan {
                     tick: tick.try_into().expect("tick fits int24"),
                 },
             ),
+            Style::Algebra => call(
+                self.pool,
+                mev_bindings::IAlgebraPool::ticksCall {
+                    tick: tick.try_into().expect("tick fits int24"),
+                },
+            ),
             Style::V4 { manager, base, .. } => call(
                 manager,
                 IPoolManager::extsloadCall {
@@ -136,7 +156,7 @@ impl Plan {
     /// `(sqrt price, tick)` as the pool reports them, in the pool's own orientation.
     fn parse_slot0(&self, ret: &[u8]) -> Option<(f64, i32)> {
         match self.style {
-            Style::V3 => slot0_hint(ret),
+            Style::V3 | Style::Algebra => slot0_hint(ret),
             Style::V4 { .. } => {
                 let (sqrt, tick, _, _) = decode_v4_slot0(B256::try_from(ret.get(..32)?).ok()?);
                 Some((mev_dex::sqrt_price_from_x96(f64::from(sqrt)), tick))
@@ -144,30 +164,36 @@ impl Plan {
         }
     }
 
-    fn parse_net(&self, ret: &[u8]) -> Option<f64> {
+    fn parse_net(&self, ret: &[u8]) -> Option<i128> {
         match self.style {
-            Style::V3 => liquidity_net(ret),
-            Style::V4 { .. } => v4_liquidity_net(ret),
+            Style::V3 | Style::Algebra => liquidity_net_exact(ret),
+            Style::V4 { .. } => v4_liquidity_net_exact(ret),
         }
     }
 
     /// Our model's view of what the pool reported: V4 pools whose token order we flipped are mirrored
     /// (price inverted, `tick -> -tick`, `liquidityNet -> -liquidityNet`; the price sits in
     /// `(b^-(t+1), b^-t]` so the tick containing it is `-t - 1`).
-    fn finish(&self, ticks: Vec<(i32, f64)>, hint: (f64, i32)) -> TickMap {
+    fn finish(&self, exact: Vec<(i32, i128)>, hint: (f64, i32)) -> TickMap {
         let flipped = matches!(self.style, Style::V4 { flipped: true, .. });
+        let float = |v: &[(i32, i128)]| v.iter().map(|&(t, n)| (t, n as f64)).collect();
         if !flipped {
             return TickMap {
-                ticks,
+                ticks: float(&exact),
+                exact,
                 lo: self.lo,
                 hi: self.hi,
                 hint: Some(hint),
             };
         }
-        let mut ticks: Vec<(i32, f64)> = ticks.into_iter().map(|(t, n)| (-t, -n)).collect();
-        ticks.sort_by_key(|(t, _)| *t);
+        let mut exact: Vec<(i32, i128)> = exact
+            .into_iter()
+            .map(|(t, n)| (-t, n.saturating_neg()))
+            .collect();
+        exact.sort_by_key(|(t, _)| *t);
         TickMap {
-            ticks,
+            ticks: float(&exact),
+            exact,
             lo: -self.hi,
             hi: -self.lo,
             hint: Some((1.0 / hint.0, -hint.1 - 1)),
@@ -182,11 +208,25 @@ pub async fn load_ticks(
     pools: &[Pool],
     half_window: i32,
 ) -> Result<HashMap<Address, TickMap>> {
+    let (block, _) = mev_rpc::snapshot_block(&rpc.http).await?;
+    load_ticks_at(rpc, pools, half_window, block).await
+}
+
+pub async fn load_ticks_at(
+    rpc: &Rpc,
+    pools: &[Pool],
+    half_window: i32,
+    block: alloy::eips::BlockId,
+) -> Result<HashMap<Address, TickMap>> {
     let mut plans = Vec::new();
     for p in pools {
         let (style, tick) = match p.info.kind {
             PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. } => match current_tick(p) {
                 Some(t) => (Style::V3, t),
+                None => continue,
+            },
+            PoolKind::AlgebraV3 => match current_tick(p) {
+                Some(t) => (Style::Algebra, t),
                 None => continue,
             },
             // The V4 tick comes from its own slot0 below; this one only places the window, in the
@@ -209,7 +249,12 @@ pub async fn load_ticks(
             },
             _ => continue,
         };
-        let spacing = tick_spacing(&p.info.kind) as i32;
+        // Algebra's table has no spacing compression: a row is 256 consecutive ticks.
+        let spacing = if matches!(style, Style::Algebra) {
+            1
+        } else {
+            tick_spacing(&p.info.kind) as i32
+        };
         let (words, lo, hi) = window(tick, spacing, half_window);
         plans.push(Plan {
             pool: p.info.address,
@@ -220,6 +265,7 @@ pub async fn load_ticks(
             words,
         });
     }
+    // All rounds use the same chain snapshot.
     // Round 1: slot0 and every bitmap word.
     let calls: Vec<_> = plans
         .iter()
@@ -227,7 +273,7 @@ pub async fn load_ticks(
             std::iter::once(pl.slot0_call()).chain(pl.words.iter().map(|w| pl.bitmap_call(*w)))
         })
         .collect();
-    let res = rpc.multicall(&calls).await?;
+    let res = rpc.multicall_at(&calls, block).await?;
     // Round 2: the tick info of every set bit; a pool with any failed read is dropped.
     let mut i = 0;
     let mut wanted: Vec<(usize, i32)> = Vec::new();
@@ -256,8 +302,8 @@ pub async fn load_ticks(
         .iter()
         .map(|(pi, t)| plans[*pi].tick_call(*t))
         .collect();
-    let res = rpc.multicall(&calls).await?;
-    let mut maps: HashMap<usize, Vec<(i32, f64)>> = HashMap::new();
+    let res = rpc.multicall_at(&calls, block).await?;
+    let mut maps: HashMap<usize, Vec<(i32, i128)>> = HashMap::new();
     for ((pi, t), r) in wanted.iter().zip(&res) {
         match r.as_ref().and_then(|b| plans[*pi].parse_net(b)) {
             Some(net) => maps.entry(*pi).or_default().push((*t, net)),
@@ -347,8 +393,9 @@ mod tests {
             words: vec![],
         };
         // Position [-20, 60) with L = 5 (+5 at -20, -5 at 60); the pool's price is 2.0 at tick 40.
-        let m = pl.finish(vec![(-20, 5.0), (60, -5.0)], (2.0, 40));
+        let m = pl.finish(vec![(-20, 5), (60, -5)], (2.0, 40));
         assert_eq!(m.ticks, vec![(-60, 5.0), (20, -5.0)]);
+        assert_eq!(m.exact, vec![(-60, 5), (20, -5)]);
         assert_eq!((m.lo, m.hi), (-300, 100));
         assert_eq!(m.hint, Some((0.5, -41)));
     }

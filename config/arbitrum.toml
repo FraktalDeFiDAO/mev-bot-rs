@@ -146,6 +146,8 @@ backoff_after = 3        # consecutive losses
 backoff_secs = 600       # first back-off, doubled per further loss
 backoff_max_secs = 21600
 memory_secs = 86400      # results older than this are forgotten
+global_min_attempts = 30 # no win in this many sends across ALL routes: stop arbitrage sends (DECISIONS #132); 0 = off
+global_probe_secs = 3600 # while stopped, one probe send per hour so a market that changed is noticed
 [ticks]
 enabled = true          # price V3/Pancake swaps across tick boundaries (optional; false = one-bucket model)
 window_ticks = 800      # ticks loaded each side of the price (~8 %)

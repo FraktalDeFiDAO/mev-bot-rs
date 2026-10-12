@@ -1,0 +1,9 @@
+[Unit]
+Description=Activate Nitro after verified import and genuine parent-chain readiness
+After=network-online.target
+RequiresMountsFor=/data/arbitrum
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/arbitrum-activate
+TimeoutStartSec=15min

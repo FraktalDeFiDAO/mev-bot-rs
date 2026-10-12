@@ -80,6 +80,12 @@ pub enum PoolRef {
         token_a: Address,
         token_b: Address,
     },
+    /// An aggregator swap: the tokens are known, the pools are chosen by its executor, so any pool we hold for
+    /// these two tokens may be on the route.
+    Tokens {
+        token_a: Address,
+        token_b: Address,
+    },
 }
 
 /// One exact-input swap on one pool. For a multi-hop route this is the first hop (`hops` says how many there are).
@@ -91,6 +97,9 @@ pub struct SwapIntent {
     /// `sqrtPriceLimitX96`: the swap stops here with input left over. `None` when the call has none (or it is zero).
     pub sqrt_limit_x96: Option<U256>,
     pub hops: u8,
+    /// `Some(out)` for an exact-output call: it fixes the amount received (`out`, of the other token) and
+    /// `amount_in` is only the most it may spend. `None` for the usual exact-input call.
+    pub amount_out_exact: Option<U256>,
 }
 
 /// A liquidation the call asks for.
@@ -132,9 +141,21 @@ pub struct LiquidityIntent {
     pub liquidity: Option<U256>,
 }
 
+/// Pools a call's program names as the ones it trades on, where the calldata does not give one exact swap (no single
+/// token or amount can be stated). Not an exact intent: measured against traces, the named pools are the ones swapped
+/// with `precision` and `recall` stated at each decoder (for example 91-97% and 95-100%). It is meant for holding
+/// back pools a pending rival transaction is about to move, where an extra pool costs a skipped trade and a missing
+/// one costs a stale price; never for sizing or pricing a trade.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolSet {
+    pub protocol: &'static str,
+    pub pools: Vec<Address>,
+}
+
 /// What a call's calldata means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decoded {
+    Pools(PoolSet),
     Swap(SwapIntent),
     Liquidity(LiquidityIntent),
     Liquidation(LiquidationIntent),
@@ -161,6 +182,11 @@ pub trait Protocol: Sync {
     }
     /// The intent of a call to `to`, if it is one of this protocol's contracts and a function it decodes.
     fn decode_call(&self, _to: Address, _input: &[u8]) -> Option<Decoded> {
+        None
+    }
+    /// The intent of a call that pays native ETH (`value`), for functions whose amount is the transaction value
+    /// (`swapExactETHForTokens`): not readable from the calldata alone. Defaults to none.
+    fn decode_payable(&self, _to: Address, _input: &[u8], _value: U256) -> Option<Decoded> {
         None
     }
     /// Every intent in a call to `to`, for calls that carry several (a Universal Router `execute` with a swap per

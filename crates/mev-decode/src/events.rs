@@ -21,7 +21,14 @@ pub fn pool_event_topics() -> Vec<alloy::primitives::B256> {
     const POOL_PROTOCOLS: [&str; 4] = ["uniswap_v2", "uniswap_v3", "pancake_v3", "uniswap_v4"];
     kinds()
         .iter()
-        .filter(|k| POOL_PROTOCOLS.contains(&k.protocol) && !k.name.ends_with("_nft"))
+        .filter(|k| {
+            POOL_PROTOCOLS.contains(&k.protocol)
+                && !k.name.ends_with("_nft")
+                // Token accounting (LP-token and ERC-6909 claim-token movements) is recognised for classification
+                // but not subscribed: it carries no price or liquidity change and would only grow the journal.
+                && !k.name.starts_with("lp_")
+                && !k.name.starts_with("erc6909_")
+        })
         .map(|k| k.topic0)
         .collect()
 }
@@ -197,6 +204,22 @@ pub fn describe(
             ("sender", ta(2)),
             ("amount0", u(0)),
             ("amount1", u(1)),
+        ],
+        "lp_transfer" => vec![("from", ta(1)), ("to", ta(2)), ("value", u(0))],
+        "lp_approval" => vec![("owner", ta(1)), ("spender", ta(2)), ("value", u(0))],
+        "erc6909_transfer_v4" => vec![
+            ("caller", a(0)),
+            ("from", ta(1)),
+            ("to", ta(2)),
+            ("id", th(3)),
+            ("amount", u(1)),
+        ],
+        "erc6909_operator_v4" => vec![("owner", ta(1)), ("spender", ta(2)), ("approved", u(0))],
+        "erc6909_approval_v4" => vec![
+            ("owner", ta(1)),
+            ("spender", ta(2)),
+            ("id", th(3)),
+            ("amount", u(0)),
         ],
         // Camelot V3 notification before each swap: two values (250 and 250 seen), most likely the fee in effect. Kept unlabelled.
         "fee_algebra_observed" => vec![("value0", u(0)), ("value1", u(1))],
@@ -449,13 +472,18 @@ mod tests {
             assert!(has(n), "{n} must be subscribed");
         }
         for n in [
+            "lp_transfer",
+            "lp_approval",
+            "erc6909_transfer_v4",
+            "erc6909_operator_v4",
+            "erc6909_approval_v4",
             "increase_liquidity_nft",
             "decrease_liquidity_nft",
             "swap_balancer",
             "liquidation_aave",
             "liquidation_fluid",
         ] {
-            assert!(!has(n), "{n} is not emitted by a pool");
+            assert!(!has(n), "{n} is recognised but not subscribed");
         }
         let unique: std::collections::HashSet<_> = topics.iter().collect();
         assert_eq!(unique.len(), topics.len());

@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-kyber"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "KyberSwap MetaAggregationRouterV2: swap token-pair intent"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

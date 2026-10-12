@@ -27,7 +27,15 @@ pub const PENDING_TTL: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone)]
 pub struct DecodedSwap {
     pub hash: B256,
-    pub intent: SwapIntent,
+    /// The exact swap, when the calldata gives one.
+    pub intent: Option<SwapIntent>,
+    /// Pools a call names without an exact swap (`Decoded::Pools`): held back like a swap's pools, never used to price.
+    pub named_pools: Vec<Address>,
+    /// The calldata of a call to an aggregator listed in `mev_decode::POOL_SCAN_DESTINATIONS`: the receiver scans it for
+    /// the watched pools it contains (only the engine knows which pools are watched).
+    pub scan: Option<Vec<u8>>,
+    /// Also resolve the token pairs and fee tiers in `scan` (see `mev_decode::PAIR_SCAN_DESTINATIONS`).
+    pub pair_scan: bool,
     pub received: Instant,
 }
 
@@ -50,6 +58,15 @@ impl PendingSwaps {
     pub fn insert(&mut self, hash: B256, pools: Vec<Address>, now: Instant) {
         if self.open.len() > 4_096 {
             self.prune(now);
+        }
+        // A transaction can carry several swaps (a multicall, a forwarder): its pending effect is the union.
+        if let Some((have, _)) = self.open.get_mut(&hash) {
+            for p in pools {
+                if !have.contains(&p) {
+                    have.push(p);
+                }
+            }
+            return;
         }
         self.inserted.fetch_add(1, Relaxed);
         self.open.insert(hash, (pools, now));
@@ -107,6 +124,55 @@ impl PendingSwaps {
     }
 }
 
+/// Every watched pool whose 20-byte address appears literally in `input` (at any offset), without repeats.
+pub fn watched_pools_in(store: &PoolStore, input: &[u8]) -> Vec<Address> {
+    let mut out: Vec<Address> = Vec::new();
+    for w in input.windows(20) {
+        let a = Address::from_slice(w);
+        if let Some(p) = store.get(&a)
+            && !out.contains(&p.info.address)
+        {
+            out.push(p.info.address);
+        }
+    }
+    out
+}
+
+/// For a program that lists its cycle's tokens and the fee tiers between them but derives its pools: every watched pool
+/// of a pair of the listed tokens, keeping a fee-tier pool (V3, Pancake, V4) only if its tier appears in the calldata as
+/// a 3-byte value. At most six tokens are considered. Over-approximates (a pair has pools on several venues).
+pub fn pools_by_token_pairs(store: &PoolStore, input: &[u8]) -> Vec<Address> {
+    const TIERS: [u32; 5] = [100, 500, 2_500, 3_000, 10_000];
+    let tiers: Vec<u32> = TIERS
+        .into_iter()
+        .filter(|t| input.windows(3).any(|w| w == &t.to_be_bytes()[1..]))
+        .collect();
+    let mut tokens: Vec<Address> = Vec::new();
+    for w in input.windows(20) {
+        let a = Address::from_slice(w);
+        if tokens.len() < 6 && store.has_token(&a) && !tokens.contains(&a) {
+            tokens.push(a);
+        }
+    }
+    let mut out: Vec<Address> = Vec::new();
+    for (i, a) in tokens.iter().enumerate() {
+        for b in &tokens[i + 1..] {
+            for p in store.pools_for(*a, *b) {
+                let fee_ok = match p.info.kind {
+                    PoolKind::UniV3 { fee }
+                    | PoolKind::PancakeV3 { fee }
+                    | PoolKind::UniV4 { fee, .. } => tiers.contains(&fee),
+                    _ => true,
+                };
+                if fee_ok && !out.contains(&p.info.address) {
+                    out.push(p.info.address);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The pools in our store a decoded swap acts on. A pool named by address (including V4 stand-ins) is itself; a V3
 /// pair or V2 pair is every pool we hold for those tokens (and fee), because the calldata does not say which
 /// factory's pool is meant. Empty when none of them is one we watch.
@@ -118,6 +184,11 @@ pub fn resolve_pools(store: &PoolStore, intent: &SwapIntent) -> Vec<Address> {
             .into_iter()
             .filter(|p| matches!(p.info.kind, PoolKind::UniV3 { fee: f } | PoolKind::PancakeV3 { fee: f } if f == *fee)
                 || matches!(p.info.kind, PoolKind::AlgebraV3))
+            .map(|p| p.info.address)
+            .collect(),
+        PoolRef::Tokens { token_a, token_b } => store
+            .pools_for(*token_a, *token_b)
+            .into_iter()
             .map(|p| p.info.address)
             .collect(),
         PoolRef::PairV2 { token_a, token_b } => store
@@ -141,12 +212,100 @@ mod tests {
     }
 
     #[test]
+    fn token_pairs_and_fee_tiers_select_the_pools_of_a_derived_program() {
+        use mev_dex::{Pool, PoolState};
+        use mev_types::PoolInfo;
+        let (t1, t2, t3) = (a(0xa1), a(0xa2), a(0xa3));
+        let mut store = PoolStore::default();
+        let mut add = |n: u8, kind: PoolKind, x: Address, y: Address| {
+            store.insert(Pool::new(
+                PoolInfo {
+                    address: a(n),
+                    dex: "t".into(),
+                    kind,
+                    token0: x,
+                    token1: y,
+                },
+                PoolState::V2 {
+                    reserve0: 1.0,
+                    reserve1: 1.0,
+                },
+            ));
+        };
+        add(0x01, PoolKind::UniV3 { fee: 500 }, t1, t2);
+        add(0x02, PoolKind::UniV3 { fee: 3000 }, t1, t2);
+        add(0x03, PoolKind::UniV2 { fee_bps: 30 }, t1, t2);
+        add(0x04, PoolKind::UniV2 { fee_bps: 30 }, t2, t3);
+        // Calldata lists t1 and t2 and the 500 tier (0x0001f4); t3 and the 3000 tier are absent.
+        let mut input = vec![0u8, 3, 1];
+        input.extend_from_slice(t1.as_slice());
+        input.push(0x80);
+        input.extend_from_slice(t2.as_slice());
+        input.extend_from_slice(&[0x00, 0x01, 0xf4, 9, 9]);
+        let got = pools_by_token_pairs(&store, &input);
+        assert_eq!(got.len(), 2);
+        assert!(got.contains(&a(0x01)) && got.contains(&a(0x03)));
+        assert!(pools_by_token_pairs(&store, &[0u8; 80]).is_empty());
+    }
+
+    #[test]
+    fn the_scan_finds_exactly_the_watched_pools_in_the_calldata() {
+        use mev_dex::{Pool, PoolState};
+        use mev_types::PoolInfo;
+        let mut store = PoolStore::default();
+        for n in [0x31u8, 0x32] {
+            store.insert(Pool::new(
+                PoolInfo {
+                    address: a(n),
+                    dex: "t".into(),
+                    kind: PoolKind::UniV2 { fee_bps: 30 },
+                    token0: a(100),
+                    token1: a(101),
+                },
+                PoolState::V2 {
+                    reserve0: 1.0,
+                    reserve1: 1.0,
+                },
+            ));
+        }
+        // Calldata: junk, a watched pool (twice, once unaligned), an unwatched address, then the other watched pool.
+        let mut input = vec![0xde, 0xad, 0xbe, 0xef, 7];
+        input.extend_from_slice(a(0x31).as_slice());
+        input.extend_from_slice(&[0u8; 12]);
+        input.extend_from_slice(a(0x31).as_slice());
+        input.extend_from_slice(a(0x77).as_slice());
+        input.extend_from_slice(a(0x32).as_slice());
+        assert_eq!(watched_pools_in(&store, &input), vec![a(0x31), a(0x32)]);
+        assert!(watched_pools_in(&store, &[0u8; 64]).is_empty());
+        assert!(watched_pools_in(&store, &[]).is_empty());
+    }
+
+    #[test]
     fn an_open_entry_blocks_trades_on_its_pools_only() {
         let (mut p, t0) = (PendingSwaps::default(), Instant::now());
         p.insert(h(1), vec![a(1), a(2)], t0);
         assert_eq!(p.conflict(&[a(2), a(9)], t0), Some(h(1)));
         assert_eq!(p.conflict(&[a(9)], t0), None, "another pool");
         assert_eq!(p.conflict(&[], t0), None);
+    }
+
+    #[test]
+    fn a_transaction_with_several_swaps_blocks_the_union_of_their_pools() {
+        let (mut p, t0) = (PendingSwaps::default(), Instant::now());
+        p.insert(h(1), vec![a(1)], t0);
+        p.insert(h(1), vec![a(2), a(1)], t0);
+        assert_eq!(p.conflict(&[a(1)], t0), Some(h(1)));
+        assert_eq!(
+            p.conflict(&[a(2)], t0),
+            Some(h(1)),
+            "second swap's pool is pending too"
+        );
+        assert_eq!(p.take_counts().0, 1, "still one pending transaction");
+        assert!(p.settle(&h(1), Settled::Block));
+        assert!(
+            p.is_empty(),
+            "one settle clears every pool of the transaction"
+        );
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Transaction building, signing, broadcast (to several endpoints at once), and receipt tracking.
 
-use std::time::Duration;
+use futures::StreamExt;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy::{
     eips::eip2718::Encodable2718,
@@ -17,6 +18,7 @@ use tracing::warn;
 
 mod nonce;
 
+#[derive(Clone)]
 pub struct Sender {
     wallet: EthereumWallet,
     pub address: Address,
@@ -25,13 +27,19 @@ pub struct Sender {
     broadcast: Vec<(String, DynProvider)>,
     executor: Address,
     chain_id: u64,
-    nonce: nonce::NonceManager,
+    nonce: Arc<nonce::NonceManager>,
+    startup_nonce: u64,
+    reservation: Option<mev_risk::ledger::Reservation>,
+    submission_guard: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    broadcast_enabled: bool,
+    signed_nonces: Arc<std::sync::Mutex<HashMap<TxHash, u64>>>,
     /// The deployed executor has `executeFlashSwap` (V3-first routes then need no lender).
     pub flash_swaps: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Landed {
+    pub profits: Vec<(Address, U256)>,
     pub success: bool,
     pub gas_used: u64,
     pub effective_gas_price: u128,
@@ -79,9 +87,84 @@ impl Sender {
             broadcast,
             executor,
             chain_id,
-            nonce: nonce::NonceManager::new(nonce),
+            nonce: Arc::new(nonce::NonceManager::new(nonce)),
+            startup_nonce: nonce,
+            reservation: None,
+            submission_guard: None,
+            broadcast_enabled: true,
+            signed_nonces: Default::default(),
             flash_swaps: false,
         })
+    }
+
+    /// A disposable signer with no broadcast endpoints and no production nonce reads.
+    pub fn shadow(reader: DynProvider, executor: Address, chain_id: u64) -> Self {
+        let signer = PrivateKeySigner::random();
+        Self {
+            address: signer.address(),
+            wallet: EthereumWallet::from(signer),
+            reader,
+            broadcast: vec![],
+            executor,
+            chain_id,
+            nonce: Arc::new(nonce::NonceManager::new(0)),
+            startup_nonce: 0,
+            reservation: None,
+            submission_guard: None,
+            broadcast_enabled: false,
+            signed_nonces: Default::default(),
+            flash_swaps: false,
+        }
+    }
+
+    /// Build and sign exactly the candidate transaction; signed bytes never enter a transport.
+    pub async fn sign_shadow(&self, calldata: &[u8], gas_limit: u64, fees: Fees) -> Result<TxHash> {
+        anyhow::ensure!(
+            !self.broadcast_enabled,
+            "shadow signing requires a disposable signer"
+        );
+        let tx = tx_request(
+            self.address,
+            self.executor,
+            calldata,
+            0,
+            self.chain_id,
+            gas_limit,
+            fees,
+        );
+        let envelope = tx.build(&self.wallet).await?;
+        Ok(*envelope.tx_hash())
+    }
+
+    /// Bind an already-admitted liability to this one signed transaction.
+    pub fn reserved(&self, reservation: mev_risk::ledger::Reservation) -> Self {
+        let mut sender = self.clone();
+        sender.reservation = Some(reservation);
+        sender
+    }
+
+    pub fn guarded(mut self, guard: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
+        self.submission_guard = Some(guard);
+        self
+    }
+
+    fn submission_allowed(&self) -> bool {
+        self.reservation.as_ref().is_some_and(|r| r.active())
+            && self.submission_guard.as_ref().is_none_or(|guard| guard())
+    }
+
+    pub fn restore_pending(&self, hash: TxHash, nonce: u64) {
+        self.nonce.hold(nonce);
+        self.signed_nonces.lock().unwrap().insert(hash, nonce);
+    }
+
+    pub fn reconcile_nonce(&self, settled_floor: u64, known_upper: u64) -> Result<()> {
+        anyhow::ensure!(
+            self.startup_nonce <= known_upper,
+            "wallet nonce exceeds reconciled ledger; prepare fresh receipt accounting"
+        );
+        self.nonce.reset(settled_floor);
+        Ok(())
     }
 
     pub async fn eth_balance(&self) -> Result<U256> {
@@ -171,25 +254,17 @@ impl Sender {
         gas_limit: u64,
         fees: Option<Fees>,
     ) -> Result<Sent> {
+        anyhow::ensure!(self.broadcast_enabled, "shadow signer cannot broadcast");
+        anyhow::ensure!(
+            self.reservation.is_some() && self.submission_guard.is_some(),
+            "live signing requires admission and a final state guard"
+        );
         let fees = match fees {
             Some(f) => f,
             None => Fees::no_bid(self.reader.get_gas_price().await?),
         };
-        match self.sign_and_broadcast(&calldata, gas_limit, fees).await {
-            // The wallet was used outside the bot (or a tx was dropped): the cached nonce is stale.
-            // Resync from the chain and re-sign once.
-            Err(e) if is_nonce_error(&e) => {
-                let n = self
-                    .reader
-                    .get_transaction_count(self.address)
-                    .pending()
-                    .await?;
-                warn!(resynced_nonce = n, error = %e, "stale nonce; resyncing and retrying once");
-                self.nonce.reset(n);
-                self.sign_and_broadcast(&calldata, gas_limit, fees).await
-            }
-            other => other,
-        }
+        // Acceptance is ambiguous after a transport error. Never construct a second execution.
+        self.sign_and_broadcast(&calldata, gas_limit, fees).await
     }
 
     async fn sign_and_broadcast(
@@ -198,6 +273,22 @@ impl Sender {
         gas_limit: u64,
         fees: Fees,
     ) -> Result<Sent> {
+        anyhow::ensure!(
+            fees.max_priority_fee_per_gas <= fees.max_fee_per_gas,
+            "priority fee exceeds max fee"
+        );
+        self.reservation
+            .as_ref()
+            .context("transaction admission missing")?
+            .verify_terms(
+                gas_limit,
+                fees.max_fee_per_gas,
+                fees.max_priority_fee_per_gas,
+            )?;
+        anyhow::ensure!(
+            self.submission_allowed(),
+            "submission invalidated before signing"
+        );
         let nonce = self.nonce.take();
         let tx = tx_request(
             self.address,
@@ -208,58 +299,75 @@ impl Sender {
             gas_limit,
             fees,
         );
-        let envelope = tx.build(&self.wallet).await.context("signing failed")?;
+        let envelope = match tx.build(&self.wallet).await {
+            Ok(e) => e,
+            Err(e) => {
+                self.nonce.release(nonce);
+                return Err(anyhow::anyhow!("signing failed: {e}"));
+            }
+        };
         let raw = envelope.encoded_2718();
         let hash = *envelope.tx_hash();
         let signed = std::time::Instant::now();
 
-        let sends = self.broadcast.iter().map(|(_, p)| {
-            let raw = raw.clone();
-            async move {
-                let r = p.send_raw_transaction(&raw).await.map(|_| ());
-                (r, std::time::Instant::now())
-            }
-        });
-        // All endpoints at once: the sequencer endpoint must not wait behind the RPC.
-        let timed = futures::future::join_all(sends).await;
-        let first_accept = timed
-            .iter()
-            .filter(|(r, _)| r.is_ok())
-            .map(|(_, t)| *t)
-            .min();
-        let endpoints: Vec<(String, u64, bool)> = self
-            .broadcast
-            .iter()
-            .zip(&timed)
-            .map(|((label, _), (r, t))| {
-                // "already known"/"nonce too low" from a later endpoint means an earlier one won.
-                let ok = r.is_ok() || r.as_ref().is_err_and(|e| is_already_known(&e.to_string()));
-                (
-                    label.clone(),
-                    t.duration_since(signed).as_millis() as u64,
-                    ok,
-                )
-            })
-            .collect();
-        let results: Vec<_> = timed.into_iter().map(|(r, _)| r).collect();
-        if results.iter().all(|r| r.is_err()) {
-            // Nothing accepted it: release the nonce (refilled before any new one, so a concurrent
-            // send's nonce is never reused and no gap stalls the ones queued behind it).
+        if !self.submission_allowed() {
             self.nonce.release(nonce);
-            bail!(
-                "all broadcasts failed: {:?}",
-                results.into_iter().filter_map(|r| r.err()).next()
-            );
+            bail!("submission invalidated before broadcast");
         }
-        for e in results.into_iter().filter_map(|r| r.err()) {
-            let msg = e.to_string().to_lowercase();
-            if msg.contains("nonce too low") || msg.contains("already known") {
-                // Another endpoint got it there first (seen live with the sequencer): benign.
-                tracing::debug!(error = %e, "broadcast endpoint already had the tx");
-            } else {
-                warn!(error = %e, "a broadcast endpoint rejected the tx (others accepted)");
+
+        if let Some(reservation) = &self.reservation
+            && let Err(e) = reservation.attach(hash.to_string(), nonce, self.address)
+        {
+            self.nonce.release(nonce);
+            return Err(e);
+        }
+        if !self.submission_allowed() {
+            if let Some(reservation) = &self.reservation {
+                reservation.cancel_before_broadcast(&hash.to_string())?;
+            }
+            self.nonce.release(nonce);
+            bail!("submission invalidated after persistence; no broadcast attempted");
+        }
+        self.signed_nonces.lock().unwrap().insert(hash, nonce);
+        let mut sends = futures::stream::FuturesUnordered::new();
+        for (label, provider) in &self.broadcast {
+            let (label, p, raw) = (label.clone(), provider.clone(), raw.clone());
+            sends.push(async move {
+                let result =
+                    tokio::time::timeout(Duration::from_secs(3), p.send_raw_transaction(&raw))
+                        .await;
+                let accepted = match result {
+                    Ok(Ok(_)) => true,
+                    Ok(Err(e)) => is_already_known(&e.to_string()),
+                    Err(_) => false,
+                };
+                (label, accepted, std::time::Instant::now())
+            });
+        }
+        let mut endpoints = Vec::new();
+        let mut first_accept = None;
+        while let Some((label, accepted, at)) = sends.next().await {
+            endpoints.push((
+                label,
+                at.duration_since(signed).as_millis() as u64,
+                accepted,
+            ));
+            if accepted {
+                first_accept = Some(at);
+                break;
             }
         }
+        if first_accept.is_some() {
+            // Tail telemetry must not delay receipt tracking or another admitted send.
+            tokio::spawn(async move {
+                while let Some((label, accepted, _)) = sends.next().await {
+                    tracing::debug!(endpoint = label, accepted, "remaining broadcast reply");
+                }
+            });
+        } else {
+            warn!(%hash, nonce, "broadcast outcome unknown; retaining nonce and reserved liability");
+        }
+
         Ok(Sent {
             hash,
             signed,
@@ -271,8 +379,24 @@ impl Sender {
     pub async fn wait(&self, hash: TxHash, timeout: Duration) -> Result<Landed> {
         let start = std::time::Instant::now();
         loop {
-            if let Some(r) = self.reader.get_transaction_receipt(hash).await? {
+            if let Ok(Ok(Some(r))) = tokio::time::timeout(
+                Duration::from_secs(3),
+                self.reader.get_transaction_receipt(hash),
+            )
+            .await
+            {
+                anyhow::ensure!(
+                    r.transaction_hash == hash
+                        && r.from == self.address
+                        && r.block_hash.is_some()
+                        && r.block_number.is_some(),
+                    "receipt identity or block missing; liability retained"
+                );
+                if let Some(nonce) = self.signed_nonces.lock().unwrap().remove(&hash) {
+                    self.nonce.reset(nonce.saturating_add(1));
+                }
                 return Ok(Landed {
+                    profits: mev_bindings::profits(r.inner.logs(), self.executor),
                     success: r.status(),
                     gas_used: r.gas_used,
                     effective_gas_price: r.effective_gas_price,
@@ -282,23 +406,26 @@ impl Sender {
                 });
             }
             if start.elapsed() > timeout {
-                // Resync nonce in case the tx was dropped.
-                let n = self
-                    .reader
-                    .get_transaction_count(self.address)
-                    .pending()
-                    .await?;
-                self.nonce.reset(n);
+                // A missing receipt is still an unresolved transaction, never a free nonce.
                 bail!("receipt timeout for {hash}");
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+    /// Reconciliation continues through transient provider outages. Liability remains reserved.
+    pub async fn wait_final(&self, hash: TxHash) -> Landed {
+        loop {
+            match self.wait(hash, Duration::from_secs(30)).await {
+                Ok(receipt) => return receipt,
+                Err(_) => tokio::time::sleep(Duration::from_secs(5)).await,
+            }
         }
     }
 }
 
 fn is_already_known(msg: &str) -> bool {
     let m = msg.to_lowercase();
-    m.contains("already known") || m.contains("nonce too low")
+    m.contains("already known")
 }
 
 /// Node rejections meaning our nonce is out of sync with the chain.
@@ -375,6 +502,128 @@ mod tests {
     use alloy::sol_types::SolCall;
     use mev_bindings::ArbExecutor;
     use mev_lending::{AccountRef, ProtocolCall};
+
+    fn mock_risk() -> mev_risk::RiskGuard {
+        mev_risk::RiskGuard::new(
+            mev_risk::RiskLimits {
+                min_profit_usd: 0.1,
+                max_gas_usd_per_day: 1.0,
+                max_arb_gas_usd_per_day: 1.0,
+                max_consecutive_failures: 10,
+            },
+            std::env::temp_dir().join("unused-exec-test-stop"),
+        )
+    }
+
+    async fn mocked_sender() -> (Sender, alloy::transports::mock::Asserter) {
+        let mock = alloy::transports::mock::Asserter::new();
+        mock.push_success(&"0x7");
+        let provider = ProviderBuilder::new()
+            .connect_mocked_client(mock.clone())
+            .erased();
+        let key = PrivateKeySigner::random().to_bytes().to_string();
+        let sender = Sender::new(&key, provider, &[], Address::with_last_byte(1), 42161)
+            .await
+            .unwrap();
+        let mut risk = mock_risk();
+        let reservation = risk.reserve(1.0, 0.00001, true, 100).unwrap();
+        reservation.set_native_price(1_000_000).unwrap();
+        let sender = sender.reserved(reservation).guarded(Arc::new(|| true));
+        (sender, mock)
+    }
+
+    #[tokio::test]
+    async fn shadow_builds_and_signs_without_any_nonce_or_broadcast_rpc() {
+        let mock = alloy::transports::mock::Asserter::new();
+        mock.push_failure_msg("shadow must never call RPC");
+        let provider = ProviderBuilder::new()
+            .connect_mocked_client(mock.clone())
+            .erased();
+        let sender = Sender::shadow(provider, Address::with_last_byte(1), 42161);
+        let hash = sender
+            .sign_shadow(&[1, 2, 3], 100_000, Fees::no_bid(10))
+            .await
+            .unwrap();
+        assert_ne!(hash, TxHash::ZERO);
+        assert!(
+            sender
+                .send_prebuilt(vec![], 100_000, Fees::no_bid(10))
+                .await
+                .is_err()
+        );
+        assert_eq!(mock.read_q().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn already_known_is_one_accepted_execution_with_the_original_nonce() {
+        let (sender, mock) = mocked_sender().await;
+        mock.push_failure_msg("already known");
+        mock.push_success(&"must not consume another RPC response");
+        let sent = sender
+            .send_prebuilt(vec![], 100_000, Fees::no_bid(10))
+            .await
+            .unwrap();
+        assert!(sent.first_accept.is_some());
+        assert_eq!(mock.read_q().len(), 1, "no nonce refresh or re-sign");
+        assert_eq!(sender.nonce.take(), 8);
+    }
+
+    #[tokio::test]
+    async fn ambiguous_broadcast_and_receipt_errors_keep_the_nonce_owned() {
+        let (sender, mock) = mocked_sender().await;
+        mock.push_failure_msg("transport timeout");
+        let sent = sender
+            .send_prebuilt(vec![], 100_000, Fees::no_bid(10))
+            .await
+            .unwrap();
+        assert!(sent.first_accept.is_none());
+        mock.push_failure_msg("temporary receipt service unavailable");
+        assert!(sender.wait(sent.hash, Duration::ZERO).await.is_err());
+        assert_eq!(sender.nonce.take(), 8, "nonce 7 remains owned");
+        assert_eq!(
+            sender.signed_nonces.lock().unwrap().get(&sent.hash),
+            Some(&7)
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_rejects_unaccounted_wallet_nonces_and_keeps_a_settled_floor() {
+        let (sender, _) = mocked_sender().await;
+        assert!(
+            sender.reconcile_nonce(6, 6).is_err(),
+            "startup nonce 7 is absent from the ledger"
+        );
+        assert!(
+            sender.reconcile_nonce(9, 9).is_ok(),
+            "lagging RPC cannot lower a proven settled nonce"
+        );
+        assert_eq!(sender.nonce.take(), 9);
+    }
+
+    #[tokio::test]
+    async fn invalidation_after_durable_attach_cancels_without_broadcasting() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (sender, mock) = mocked_sender().await;
+        mock.push_failure_msg("must never broadcast");
+        let mut risk = mock_risk();
+        let reservation = risk.reserve(1.0, 0.00001, true, 100).unwrap();
+        reservation.set_native_price(1_000_000).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let check = calls.clone();
+        let sender = sender
+            .reserved(reservation)
+            .guarded(Arc::new(move || check.fetch_add(1, Ordering::Relaxed) < 2));
+        assert!(
+            sender
+                .send_prebuilt(vec![], 100_000, Fees::no_bid(10))
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+        assert_eq!(mock.read_q().len(), 1);
+        assert!(risk.unresolved().is_empty());
+        assert_eq!(sender.nonce.take(), 7);
+    }
 
     fn hop() -> Hop {
         Hop {
@@ -494,6 +743,7 @@ mod tests {
             debt_asset: Address::with_last_byte(5),
             collateral_asset: Address::with_last_byte(6),
             flash_amount: U256::from(1_000),
+            dependencies: vec![],
             expected_collateral: 1.0,
             bonus_usd: 1.0,
             calls: vec![ProtocolCall {

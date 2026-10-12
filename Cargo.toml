@@ -28,7 +28,7 @@ tower = "0.5"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 base64 = "0.23"
 axum = { version = "0.8", features = ["ws"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled", "hooks", "limits"] }
 redb = "4.3"
 
 seqscope-core = { path = "crates/seqscope-core" }
@@ -79,6 +79,12 @@ mev-protocol-morpho-blue = { path = "crates/mev-protocol-morpho-blue" }
 mev-protocol-compound-v3 = { path = "crates/mev-protocol-compound-v3" }
 mev-protocol-unidentified = { path = "crates/mev-protocol-unidentified" }
 mev-protocol-fluid = { path = "crates/mev-protocol-fluid" }
+mev-protocol-oneinch = { path = "crates/mev-protocol-oneinch" }
+mev-protocol-cow = { path = "crates/mev-protocol-cow" }
+mev-protocol-camelot = { path = "crates/mev-protocol-camelot" }
+mev-protocol-sushi = { path = "crates/mev-protocol-sushi" }
+mev-protocol-paraswap = { path = "crates/mev-protocol-paraswap" }
+mev-protocol-kyber = { path = "crates/mev-protocol-kyber" }
 mev-atlas = { path = "crates/mev-atlas" }
 mev-localsim = { path = "crates/mev-localsim" }
 

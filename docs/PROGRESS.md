@@ -59,3 +59,7 @@ decision on dedupe/two-connection budget; a place to run shadow (separate port/h
 - Docs fetched 2026-10-07; quotes in `docs/arbitrum-facts.md` come from those fetches, not from memory.
 - Repo evidence: production event files on `mev-ohio` (Oct 4-7), live `rpc usage` and `presim` log lines, `rg` over the tree at `a399a9e`.
 - Nothing was built, signed or sent in this phase; no keys touched; `EXECUTION_MODE` untouched.
+
+## Audit remediation (2026-10-11, in progress)
+
+The full audit and its evidence are in `docs/audits/2026-10-11-complete-audit.md`. The user authorized fixing all findings. Local implementation and verified limitations are tracked in `docs/audits/2026-10-11-remediation.md`; this work does not mark a sequencer-first phase complete. Integer strategy math, Atlas escrow settlement and hot-path purity remain open. No production deployment, funding, production signing or key access has been performed.

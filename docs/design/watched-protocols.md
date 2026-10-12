@@ -142,3 +142,14 @@ a pool-state model, and its events added to `mev-decode::events` before it can b
   topics and data of every classified event.
 - **Charts:** build from `chaintx-DATE.jsonl` (sampled blocks only, 1 in 4) or, for a continuous series, from the bot's
   existing log subscription; a dedicated price-history writer is not built yet.
+
+
+## Decoder coverage, 2026-10-10 (DECISIONS #118-#131)
+
+Measured by replay: 1,500 random pool-moving feed transactions, calldata fetched from the node, decoded by the registry
+(`mev-decode calldata <to> <input> [value]`). **66.5% decoded when recorded, 86.1% after #118-#130** (sample margin about
++/-2 points). Added since the table above: router A `95435ac9` (V2 pairs), router F `00000001` (V2 legs), router H
+`0x69bb29e2`, executeTrade bot, V2-style aggregator `0x07964f13`, router G (`dagSwapByOrderId`, `dagSwapTo`), 1inch v6 `swap`,
+CoW `settle`, Camelot V3 router, Sushi V2 and Camelot V2 routers (token-to-ETH and ETH-in variants), Sushi `snwapMultiple`,
+Paraswap `simpleSwap` and `directUniV3Swap`, V4 PositionManager `modifyLiquidities`. Aggregator swaps that do not name a pool
+use `PoolRef::Tokens` (every pool we hold for the two tokens). What is still not decoded, and why: DECISIONS #131.

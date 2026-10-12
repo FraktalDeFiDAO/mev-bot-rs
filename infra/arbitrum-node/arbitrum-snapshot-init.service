@@ -1,0 +1,21 @@
+[Unit]
+Description=Verify and stream-import the official Arbitrum One pruned snapshot
+Wants=network-online.target
+After=network-online.target
+Before=arbitrum-nitro.service
+RequiresMountsFor=/data/arbitrum
+
+[Service]
+Type=oneshot
+User=1000
+Group=1000
+EnvironmentFile=-/etc/arbitrum/snapshot.env
+ExecStart=/usr/local/sbin/arbitrum-snapshot-init
+RemainAfterExit=yes
+TimeoutStartSec=infinity
+TimeoutStopSec=60
+UMask=0027
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

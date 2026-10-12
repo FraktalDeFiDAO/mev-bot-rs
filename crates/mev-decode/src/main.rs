@@ -18,9 +18,11 @@ fn swap_json(s: &SwapIntent) -> Value {
             PoolRef::Address(a) => json!({ "address": format!("{a:#x}") }),
             PoolRef::Pair { token_a, token_b, fee } => json!({ "token_a": format!("{token_a:#x}"), "token_b": format!("{token_b:#x}"), "fee": fee }),
             PoolRef::PairV2 { token_a, token_b } => json!({ "v2_token_a": format!("{token_a:#x}"), "v2_token_b": format!("{token_b:#x}") }),
+            PoolRef::Tokens { token_a, token_b } => json!({ "any_token_a": format!("{token_a:#x}"), "any_token_b": format!("{token_b:#x}") }),
         },
         "token_in": format!("{:#x}", s.token_in),
         "amount_in": s.amount_in.to_string(),
+        "amount_out_exact": s.amount_out_exact.map(|a: U256| a.to_string()),
         "sqrt_price_limit_x96": s.sqrt_limit_x96.map(|l: U256| l.to_string()),
         "hops": s.hops,
     })
@@ -35,6 +37,7 @@ fn liquidity_json(l: &LiquidityIntent) -> Value {
             PoolRef::Address(a) => json!({ "address": format!("{a:#x}") }),
             PoolRef::Pair { token_a, token_b, fee } => json!({ "token_a": format!("{token_a:#x}"), "token_b": format!("{token_b:#x}"), "fee": fee }),
             PoolRef::PairV2 { token_a, token_b } => json!({ "v2_token_a": format!("{token_a:#x}"), "v2_token_b": format!("{token_b:#x}") }),
+            PoolRef::Tokens { token_a, token_b } => json!({ "any_token_a": format!("{token_a:#x}"), "any_token_b": format!("{token_b:#x}") }),
         }),
         "token_id": l.token_id.map(|t| t.to_string()),
         "tick_lower": l.tick_lower,
@@ -62,13 +65,18 @@ fn decoded_json(d: Decoded) -> Value {
         Decoded::Swap(s) => swap_json(&s),
         Decoded::Liquidity(l) => liquidity_json(&l),
         Decoded::Liquidation(l) => liquidation_json(&l),
+        Decoded::Pools(p) => json!({
+            "kind": "pools",
+            "protocol": p.protocol,
+            "pools": p.pools.iter().map(|a| format!("{a:#x}")).collect::<Vec<_>>(),
+        }),
     }
 }
 
 /// The transaction's own decoding, and every action in it (through multicall, Multicall3, smart-account and
 /// ERC-4337 wrappers), each with the wrappers it was found through and whether its destination is identified.
-fn describe(to: Option<Address>, input: &[u8]) -> Value {
-    let decoded = to.and_then(|t| mev_decode::decode_call(t, input));
+fn describe(to: Option<Address>, input: &[u8], value: U256) -> Value {
+    let decoded = to.and_then(|t| mev_decode::decode_call_with_value(t, input, value));
     let actions: Vec<Value> = to
         .map(|t| mev_decode::calls::actions_in(t, input))
         .unwrap_or_default()
@@ -94,7 +102,7 @@ fn describe(to: Option<Address>, input: &[u8]) -> Value {
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  mev-decode calldata <to> <0x-input>\n  mev-decode events\n  mev-decode feed [--url URL] [--limit N] [--decoded-only]"
+        "usage:\n  mev-decode calldata <to> <0x-input> [value-wei]\n  mev-decode events\n  mev-decode feed [--url URL] [--limit N] [--decoded-only]"
     );
     std::process::exit(2)
 }
@@ -103,7 +111,7 @@ fn usage() -> ! {
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("calldata") if args.len() == 3 => {
+        Some("calldata") if args.len() == 3 || args.len() == 4 => {
             let to: Address = args[1].parse().unwrap_or_else(|e| {
                 eprintln!("bad address: {e}");
                 std::process::exit(2)
@@ -112,7 +120,13 @@ async fn main() {
                 eprintln!("bad hex: {e}");
                 std::process::exit(2)
             });
-            println!("{}", describe(Some(to), &input));
+            let value: U256 = args.get(3).map_or(U256::ZERO, |v| {
+                v.parse().unwrap_or_else(|e| {
+                    eprintln!("bad value (decimal wei): {e}");
+                    std::process::exit(2)
+                })
+            });
+            println!("{}", describe(Some(to), &input, value));
         }
         Some("events") => {
             for k in events::kinds() {
@@ -143,7 +157,11 @@ async fn main() {
             tokio::spawn(mev_sequencer::run(url, tx));
             let mut shown = 0u64;
             while let Some(st) = rx.recv().await {
-                let mut line = describe(st.to, &st.input);
+                let mut line = describe(
+                    st.to,
+                    &st.input,
+                    alloy::consensus::Transaction::value(&st.tx),
+                );
                 if decoded_only && line["decoded"].is_null() {
                     continue;
                 }

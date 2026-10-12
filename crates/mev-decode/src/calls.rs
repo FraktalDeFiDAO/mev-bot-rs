@@ -11,6 +11,9 @@
 //! `execute(address,uint256,bytes)` and `executeBatch` (both shapes); ERC-4337 EntryPoint v0.6 and v0.7 `handleOps`, whose
 //! operations' `callData` is unwrapped the same way. Anything else is a leaf.
 //!
+//! Also two swap forwarders seen on 2026-10-09 (see `SWAP_FORWARDER`, `SWAP_PROXY`), each a call to a named router with
+//! that router's calldata inside.
+//!
 //! Not read: the ETH `value` of a call (so ETH-in swaps through a wrapper keep the router's own accounting), EntryPoint
 //! v0.6 `handleOps`, and wrappers that use delegatecall to a chosen implementation.
 
@@ -44,6 +47,27 @@ sol! {
         function executeBatch(address[] dest, bytes[] func) external;
         function executeBatchValue(address[] dest, uint256[] value, bytes[] func) external;
     }
+    struct BatchCall { address target; bool allowFailure; uint256 value; bytes callData; }
+    struct TokenPermissions { address token; uint256 amount; }
+    struct PermitBatch { TokenPermissions[] permitted; uint256 nonce; uint256 deadline; }
+    interface PullAndCall {
+        function transferAndMulticall(address[] tokens, uint256[] amounts, BatchCall[] calls, address refundTo, address receiver, bytes data) external payable;
+        function permit2TransferAndMulticall(address owner, PermitBatch permit, BatchCall[] calls, address refundTo, address receiver, bytes data, bytes signature) external payable;
+        function multicall(BatchCall[] calls, address refundTo, address receiver, bytes data) external payable;
+    }
+    struct TargetCall { address target; bytes data; uint256 value; }
+    interface ExecVectors {
+        function execute(address[] targets, bytes[] data, uint256[] values) external payable;
+    }
+    interface ExecOps {
+        function execute(TargetCall[] ops) external payable;
+    }
+    interface UniversalRouterExec {
+        function execute(bytes commands, bytes[] inputs, uint256 deadline) external payable;
+    }
+    interface SwapForwarder {
+        function execute(address router, address token, uint256 amount, bytes commands, bytes[] inputs, uint256 deadline) external;
+    }
     interface EntryPointV6 {
         struct UserOperation {
             address sender; uint256 nonce; bytes initCode; bytes callData; uint256 callGasLimit;
@@ -71,6 +95,15 @@ pub const MULTICALL3: Address = address!("cA11bde05977b3631167028862bE2a173976CA
 pub const ENTRYPOINT_V7: Address = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
 /// ERC-4337 EntryPoint v0.6 (still widely used; its operations have a different layout).
 pub const ENTRYPOINT_V6: Address = address!("5FF137D4b0FDCD49DcA30c7CF57E578a026d2789");
+
+/// A forwarder that pulls `token` and calls the Universal Router named in the call (`execute(address router, address
+/// token, uint256 amount, bytes commands, bytes[] inputs, uint256 deadline)`, selector `0x2894adf9`): 514 feed
+/// transactions on 2026-10-09. The inner call is the router's own `execute(commands, inputs, deadline)`.
+pub const SWAP_FORWARDER: Address = address!("02e5be68d46dac0b524905bff209cf47ee6db2a9");
+/// A swap proxy (selector `0x708909ad`) whose struct names a router and carries that router's calldata in a `bytes`
+/// (element 4 = router, element 6 = offset of the bytes): 1,365 feed transactions on 2026-10-09.
+pub const SWAP_PROXY: Address = address!("09fc9b7545020f6a51d113e495e0a451597969d3");
+const SWAP_PROXY_SELECTOR: [u8; 4] = [0x70, 0x89, 0x09, 0xad];
 
 /// One call found in a transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,6 +261,78 @@ fn unwrap(to: Address, input: &[u8]) -> Option<(&'static str, Vec<Sub>)> {
                 .collect(),
         ));
     }
+    if to == SWAP_FORWARDER && sel == SwapForwarder::executeCall::SELECTOR {
+        let c = dec!(SwapForwarder::executeCall);
+        let inner = UniversalRouterExec::executeCall {
+            commands: c.commands,
+            inputs: c.inputs,
+            deadline: c.deadline,
+        }
+        .abi_encode();
+        return Some(("swap_forwarder", vec![(c.router, inner)]));
+    }
+    if to == SWAP_PROXY && sel == SWAP_PROXY_SELECTOR {
+        use mev_protocol::abi;
+        let t = usize::try_from(abi::uint(args, 0)?).ok()? / 32;
+        let router = abi::addr(args, t + 4)?;
+        let off = t + usize::try_from(abi::uint(args, t + 6)?).ok()? / 32;
+        let len = usize::try_from(abi::uint(args, off)?).ok()?;
+        let data = args.get(32 * (off + 1)..32 * (off + 1) + len)?;
+        return Some(("swap_proxy", vec![(router, data.to_vec())]));
+    }
+    // Executors that pull tokens (or take a Permit2 signature) and then run a list of `(target, allowFailure, value, data)`
+    // calls: 119 blind swap events on one day came from `transferAndMulticall` and `permit2TransferAndMulticall`.
+    let pull: Option<Vec<Sub>> = match sel {
+        PullAndCall::transferAndMulticallCall::SELECTOR => Some(
+            dec!(PullAndCall::transferAndMulticallCall)
+                .calls
+                .into_iter()
+                .map(|c| pair(c.target, c.callData))
+                .collect(),
+        ),
+        PullAndCall::permit2TransferAndMulticallCall::SELECTOR => Some(
+            dec!(PullAndCall::permit2TransferAndMulticallCall)
+                .calls
+                .into_iter()
+                .map(|c| pair(c.target, c.callData))
+                .collect(),
+        ),
+        PullAndCall::multicallCall::SELECTOR => Some(
+            dec!(PullAndCall::multicallCall)
+                .calls
+                .into_iter()
+                .map(|c| pair(c.target, c.callData))
+                .collect(),
+        ),
+        _ => None,
+    };
+    if let Some(p) = pull {
+        return Some(("pull_and_call", p));
+    }
+    // Executors that take a list of calls as parallel arrays, or as `(target, data, value)` tuples.
+    let list: Option<Vec<Sub>> = match sel {
+        ExecVectors::executeCall::SELECTOR => {
+            let c = dec!(ExecVectors::executeCall);
+            (c.targets.len() == c.data.len()).then(|| {
+                c.targets
+                    .into_iter()
+                    .zip(c.data)
+                    .map(|(t, d)| pair(t, d))
+                    .collect()
+            })
+        }
+        ExecOps::executeCall::SELECTOR => Some(
+            dec!(ExecOps::executeCall)
+                .ops
+                .into_iter()
+                .map(|o| pair(o.target, o.data))
+                .collect(),
+        ),
+        _ => None,
+    };
+    if let Some(l) = list {
+        return Some(("execute_list", l));
+    }
     // Self-multicalls: the router or position manager calls itself with each element.
     let batch = match sel {
         SelfMulticall::multicallCall::SELECTOR => Some(dec!(SelfMulticall::multicallCall).data),
@@ -327,6 +432,80 @@ mod tests {
         );
         assert_eq!(l[1].input.as_ref(), &[2, 2, 2, 2, 9]);
         assert!(l.iter().all(|x| x.via == vec!["multicall3"]));
+    }
+
+    #[test]
+    fn execute_list_wrappers_yield_their_inner_calls() {
+        // The selectors are the ones seen on chain (`947fe812` and `760f2a0b`), not just whatever the ABI gives.
+        assert_eq!(ExecVectors::executeCall::SELECTOR, [0x94, 0x7f, 0xe8, 0x12]);
+        assert_eq!(ExecOps::executeCall::SELECTOR, [0x76, 0x0f, 0x2a, 0x0b]);
+        let a = ExecVectors::executeCall {
+            targets: vec![target(1), target(2)],
+            data: vec![
+                Bytes::from(vec![0xde, 0xad, 0xbe, 1]),
+                Bytes::from(vec![0xde, 0xad, 0xbe, 2]),
+            ],
+            values: vec![U256::ZERO, U256::ZERO],
+        }
+        .abi_encode();
+        let leaves = calls_in(target(7), &a);
+        assert_eq!(
+            leaves.iter().map(|l| l.to).collect::<Vec<_>>(),
+            [target(1), target(2)]
+        );
+        assert!(leaves.iter().all(|l| l.via == ["execute_list"]));
+        let b = ExecOps::executeCall {
+            ops: vec![TargetCall {
+                target: target(3),
+                data: Bytes::from(vec![0xde, 0xad, 0xbe, 3]),
+                value: U256::ZERO,
+            }],
+        }
+        .abi_encode();
+        assert_eq!(calls_in(target(7), &b)[0].to, target(3));
+        // Mismatched array lengths are a malformed wrapper: a leaf, nothing invented.
+        let bad = ExecVectors::executeCall {
+            targets: vec![target(1)],
+            data: vec![],
+            values: vec![],
+        }
+        .abi_encode();
+        assert_eq!(calls_in(target(7), &bad).len(), 1);
+    }
+
+    #[test]
+    fn pull_and_call_wrappers_yield_their_inner_calls() {
+        let inner = |n: u8| BatchCall {
+            target: target(n),
+            allowFailure: false,
+            value: U256::ZERO,
+            callData: Bytes::from(vec![0xde, 0xad, 0xbe, n]),
+        };
+        let a = PullAndCall::transferAndMulticallCall {
+            tokens: vec![target(9)],
+            amounts: vec![U256::from(5u8)],
+            calls: vec![inner(1), inner(2)],
+            refundTo: target(3),
+            receiver: target(4),
+            data: Bytes::new(),
+        }
+        .abi_encode();
+        let leaves = calls_in(target(7), &a);
+        assert_eq!(leaves.len(), 2);
+        assert_eq!(leaves[0].to, target(1));
+        assert_eq!(leaves[1].to, target(2));
+        assert!(leaves.iter().all(|l| l.via == ["pull_and_call"]));
+        // The same list inside the Permit2 variant and the plain `multicall`.
+        let b = PullAndCall::multicallCall {
+            calls: vec![inner(5)],
+            refundTo: target(3),
+            receiver: target(4),
+            data: Bytes::new(),
+        }
+        .abi_encode();
+        assert_eq!(calls_in(target(7), &b)[0].to, target(5));
+        // Truncated input stays a leaf: nothing is invented.
+        assert_eq!(calls_in(target(7), &a[..a.len() - 40]).len(), 1);
     }
 
     #[test]

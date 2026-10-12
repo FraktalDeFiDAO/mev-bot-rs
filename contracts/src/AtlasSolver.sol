@@ -94,7 +94,7 @@ contract AtlasSolver is ArbExecutor {
         // call repays any borrow, the bonded balance approves the gas.
         (uint256 gasLiability, uint256 borrowLiability) = IAtlasEscrow(atlas).shortfall();
         uint256 repay = borrowLiability < msg.value ? borrowLiability : msg.value;
-        _ensureEth(repay); // the liquidation wrapped our whole ETH balance into WETH
+        _ensureEth(repay);
         IAtlasEscrow(atlas).reconcile{value: repay}(gasLiability);
 
         _payBid(executionEnvironment, bidToken, bidAmount);

@@ -23,12 +23,13 @@ pub struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    /// `swap`, `liquidity`, `liquidation`, `undecoded_known` (an identified contract nothing reads yet) or `unknown`.
+    /// `swap`, `liquidity`, `liquidation`, `pools` (the call names the pools it trades on, no exact swap), `undecoded_known` (an identified contract nothing reads yet) or `unknown`.
     pub fn kind(&self) -> &'static str {
         match self.decoded {
             Some(Decoded::Swap(_)) => "swap",
             Some(Decoded::Liquidity(_)) => "liquidity",
             Some(Decoded::Liquidation(_)) => "liquidation",
+            Some(Decoded::Pools(_)) => "pools",
             None if self.known.is_some() => "undecoded_known",
             None => "unknown",
         }
@@ -77,7 +78,8 @@ fields! {
     // A decoded swap.
     SwapPool, "swap.pool", Addr, "swap", "Pool the first hop targets (when the calldata names it by address or V4 id).";
     SwapTokenIn, "swap.token_in", Addr, "swap", "Token sold (zero address = native ETH on V4).";
-    SwapAmountIn, "swap.amount_in", Num, "swap", "Exact input amount, in the token's smallest unit.";
+    SwapAmountIn, "swap.amount_in", Num, "swap", "Input amount, in the token's smallest unit (exact for exact-input calls; only the maximum when swap.amount_out is set).";
+    SwapAmountOut, "swap.amount_out", Num, "swap", "Fixed output amount, set only for exact-output calls (then swap.amount_in is just the most it may spend).";
     SwapHops, "swap.hops", Num, "swap", "Number of hops in the route.";
     SwapLimit, "swap.sqrt_limit", Num, "swap", "sqrtPriceLimitX96, when the call sets one.";
     // A decoded liquidity change.
@@ -145,6 +147,10 @@ impl FieldId {
             },
             F::SwapAmountIn => match c.decoded? {
                 Decoded::Swap(s) => Some(Val::Num(s.amount_in)),
+                _ => None,
+            },
+            F::SwapAmountOut => match c.decoded? {
+                Decoded::Swap(s) => s.amount_out_exact.map(Val::Num),
                 _ => None,
             },
             F::SwapHops => match c.decoded? {

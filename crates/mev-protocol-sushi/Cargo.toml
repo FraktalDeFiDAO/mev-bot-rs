@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-sushi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Sushi router: snwapMultiple token-pair swap intents"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

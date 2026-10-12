@@ -61,6 +61,17 @@ sol! {
     interface IAlgebraPool {
         /// Camelot's Algebra 1.9: directional fees in hundredths of a bip.
         function globalState() external view returns (uint160 price, int24 tick, uint16 feeZto, uint16 feeOtz, uint16 timepointIndex, uint8 communityFeeToken0, uint8 communityFeeToken1, bool unlocked);
+        function dataStorageOperator() external view returns (address);
+        /// 256-bit row of initialized ticks: bit `tick & 0xff` of row `tick >> 8` (no spacing compression).
+        function tickTable(int16 row) external view returns (uint256);
+        function ticks(int24 tick) external view returns (uint128 liquidityTotal, int128 liquidityDelta, uint256 outerFeeGrowth0Token, uint256 outerFeeGrowth1Token, int56 outerTickCumulative, uint160 outerSecondsPerLiquidity, uint32 outerSecondsSpent, bool initialized);
+    }
+
+    /// The pool's `DataStorageOperator`: per-direction adaptive-fee configuration (Camelot's verified source).
+    #[sol(rpc)]
+    interface IAlgebraOperator {
+        function feeConfigZto() external view returns (uint16 alpha1, uint16 alpha2, uint32 beta1, uint32 beta2, uint16 gamma1, uint16 gamma2, uint32 volumeBeta, uint16 volumeGamma, uint16 baseFee);
+        function feeConfigOtz() external view returns (uint16 alpha1, uint16 alpha2, uint32 beta1, uint32 beta2, uint16 gamma1, uint16 gamma2, uint32 volumeBeta, uint16 volumeGamma, uint16 baseFee);
     }
 
     /// Metadata every V2/V3-style pool exposes; used to verify auto-discovered pools.
@@ -139,6 +150,7 @@ sol! {
         function liquidateViaAave(address aavePool, address debt, address collateral, uint256 flashAmount, uint256 minProfit, ProtocolCall[] calldata calls, Hop[] calldata hops) external returns (uint256 profit);
         function batch(bytes[] calldata calls) external returns (bool[] memory ok);
         event BatchItem(uint256 indexed index, bytes4 indexed selector, bool ok);
+        event Profit(address indexed token, uint256 amount);
         function setTarget(address target, bool allowed) external;
         function allowedTarget(address target) external view returns (bool);
         error TargetNotAllowed(address target);
@@ -266,6 +278,19 @@ pub fn batch_calldata(items: Vec<Vec<u8>>) -> Vec<u8> {
     .abi_encode()
 }
 
+/// Incremental executor proceeds, emitted only after repayment and starting-balance preservation.
+pub fn profits(
+    logs: &[alloy::rpc::types::Log],
+    executor: alloy::primitives::Address,
+) -> Vec<(alloy::primitives::Address, alloy::primitives::U256)> {
+    use alloy::sol_types::SolEvent;
+    logs.iter()
+        .filter(|l| l.address() == executor)
+        .filter_map(|l| ArbExecutor::Profit::decode_log(&l.inner).ok())
+        .map(|e| (e.token, e.amount))
+        .collect()
+}
+
 /// Per-item results of a `batch` transaction, in item order, from the executor's `BatchItem`
 /// events. Empty when the receipt has none (not a batch).
 pub fn batch_outcomes(
@@ -287,7 +312,7 @@ pub fn batch_outcomes(
 /// loan from `aave_pool` (`liquidateViaAave`) when the loan exceeds what Balancer holds. Both
 /// return the profit as `uint256`.
 pub fn liquidation_calldata(
-    plan: &mev_lending::Plan,
+    plan: &mev_types::Plan,
     hops: &[mev_types::Hop],
     min_profit: alloy::primitives::U256,
     aave_pool: Option<alloy::primitives::Address>,
@@ -318,7 +343,7 @@ pub fn liquidation_calldata(
     }
 }
 
-pub fn to_sol_call(c: &mev_lending::ProtocolCall) -> ArbExecutor::ProtocolCall {
+pub fn to_sol_call(c: &mev_types::ProtocolCall) -> ArbExecutor::ProtocolCall {
     ArbExecutor::ProtocolCall {
         target: c.target,
         data: c.data.clone(),
@@ -358,7 +383,7 @@ mod tests {
             ),
             (2, h.pool, h.token_in, h.token_out, true, 30)
         );
-        let c = mev_lending::ProtocolCall {
+        let c = mev_types::ProtocolCall {
             target: Address::with_last_byte(9),
             data: vec![1, 2, 3].into(),
             approve_spender: Address::with_last_byte(8),

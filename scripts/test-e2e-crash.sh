@@ -38,7 +38,7 @@ fail() { echo "E2E-CRASH FAIL: $*"; echo "--- executor ${EXEC:-unset}: $(cast co
 # `cast send` exits 0 even when the transaction reverts, so read the receipt status; retry a transient failure.
 send() {
   local out try
-  for try in 1 2 3; do
+  for _ in 1 2 3; do
     out=$(cast send "$@" --rpc-url "$RPC" 2>&1) && ! grep -qE '^status +0' <<<"$out" && return 0
     sleep 2
   done

@@ -356,11 +356,19 @@ pub fn action_json(a: &mev_decode::calls::Action) -> serde_json::Value {
                     decode::PoolRef::Address(p) => format!("{p:#x}"),
                     decode::PoolRef::Pair { token_a, token_b, fee } => format!("{token_a:#x}/{token_b:#x}/{fee}"),
                     decode::PoolRef::PairV2 { token_a, token_b } => format!("v2:{token_a:#x}/{token_b:#x}"),
+                    decode::PoolRef::Tokens { token_a, token_b } => format!("any:{token_a:#x}/{token_b:#x}"),
                 },
                 "token_in": format!("{:#x}", s.token_in),
                 "amount_in": s.amount_in.to_string(),
                 "limit_x96": s.sqrt_limit_x96.map(|l| l.to_string()),
                 "hops": s.hops,
+            }),
+        ),
+        Some(Decoded::Pools(p)) => (
+            Some("pools"),
+            serde_json::json!({
+                "protocol": p.protocol,
+                "pools": p.pools.iter().map(|a| format!("{a:#x}")).collect::<Vec<_>>(),
             }),
         ),
         Some(Decoded::Liquidity(l)) => (
@@ -404,7 +412,13 @@ fn tx_line(
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
-    let intent = st.to.and_then(|to| mev_decode::decode_call(to, &st.input));
+    let intent = st.to.and_then(|to| {
+        mev_decode::decode_call_with_value(
+            to,
+            &st.input,
+            alloy::consensus::Transaction::value(&st.tx),
+        )
+    });
     let actions = st
         .to
         .map(|to| mev_decode::calls::actions_in(to, &st.input))
@@ -415,6 +429,7 @@ fn tx_line(
                 decode::PoolRef::Address(a) => format!("{a:#x}"),
                 decode::PoolRef::Pair { token_a, token_b, fee } => format!("{token_a:#x}/{token_b:#x}/{fee}"),
                 decode::PoolRef::PairV2 { token_a, token_b } => format!("v2:{token_a:#x}/{token_b:#x}"),
+                    decode::PoolRef::Tokens { token_a, token_b } => format!("any:{token_a:#x}/{token_b:#x}"),
             },
             "token_in": format!("{:#x}", s.token_in),
             "amount_in": s.amount_in.to_string(),

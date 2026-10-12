@@ -77,6 +77,7 @@ pub struct AppState {
     rows: AtomicU64,
     started: Instant,
     allow_remote: bool,
+    sql_slots: Arc<tokio::sync::Semaphore>,
 }
 
 fn counters_rules() -> RuleSet {
@@ -153,6 +154,7 @@ impl AppState {
             rows: AtomicU64::new(0),
             started: Instant::now(),
             allow_remote,
+            sql_slots: Arc::new(tokio::sync::Semaphore::new(2)),
         });
         st.reload_rules_file();
         st
@@ -697,8 +699,14 @@ async fn sql(
     State(st): State<Arc<AppState>>,
     Json(b): Json<SqlBody>,
 ) -> Result<Json<seqscope_store::SqlResult>, ApiError> {
+    let slot = st
+        .sql_slots
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| bad_request("two SQL queries are already running"))?;
     let db = st.db_path.clone();
     let r = tokio::task::spawn_blocking(move || {
+        let _slot = slot;
         Reader::open(db).and_then(|r| r.sql(&b.sql, b.max_rows.min(10_000)))
     })
     .await

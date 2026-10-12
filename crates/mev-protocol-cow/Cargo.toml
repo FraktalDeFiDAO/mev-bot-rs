@@ -1,0 +1,11 @@
+[package]
+name = "mev-protocol-cow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "CoW Protocol GPv2Settlement: one swap intent (token pair, amount) per settled trade"
+
+[dependencies]
+alloy = { workspace = true }
+mev-protocol = { workspace = true }

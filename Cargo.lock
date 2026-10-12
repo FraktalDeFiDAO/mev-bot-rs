@@ -3126,10 +3126,12 @@ dependencies = [
  "mev-discovery",
  "mev-engine",
  "mev-ingest",
+ "mev-risk",
  "mev-rpc",
  "mev-sequencer",
  "mev-state",
  "mev-types",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -3153,7 +3155,6 @@ name = "mev-bindings"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "mev-lending",
  "mev-types",
 ]
 
@@ -3194,10 +3195,16 @@ dependencies = [
  "mev-protocol",
  "mev-protocol-aave-v3",
  "mev-protocol-balancer",
+ "mev-protocol-camelot",
  "mev-protocol-compound-v3",
+ "mev-protocol-cow",
  "mev-protocol-fluid",
+ "mev-protocol-kyber",
  "mev-protocol-morpho-blue",
+ "mev-protocol-oneinch",
  "mev-protocol-pancake-v3",
+ "mev-protocol-paraswap",
+ "mev-protocol-sushi",
  "mev-protocol-unidentified",
  "mev-protocol-uniswap-router",
  "mev-protocol-uniswap-v2",
@@ -3316,6 +3323,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
+ "mev-types",
  "serde",
 ]
 
@@ -3474,6 +3482,7 @@ dependencies = [
  "mev-lending",
  "mev-oracle",
  "mev-sequencer",
+ "mev-types",
  "tokio",
  "tracing",
 ]
@@ -3546,6 +3555,7 @@ dependencies = [
  "mev-decode",
  "mev-protocol-uniswap-router",
  "mev-sequencer",
+ "mev-types",
  "serde",
  "serde_json",
  "tokio",
@@ -3575,7 +3585,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-protocol-camelot"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
 name = "mev-protocol-compound-v3"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-cow"
 version = "0.1.0"
 dependencies = [
  "alloy",
@@ -3591,6 +3617,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-protocol-kyber"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
 name = "mev-protocol-morpho-blue"
 version = "0.1.0"
 dependencies = [
@@ -3599,7 +3633,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-protocol-oneinch"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
 name = "mev-protocol-pancake-v3"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-paraswap"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-sushi"
 version = "0.1.0"
 dependencies = [
  "alloy",
@@ -3651,8 +3709,10 @@ name = "mev-risk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "mev-types",
  "proptest",
  "serde",
+ "serde_json",
  "tracing",
 ]
 

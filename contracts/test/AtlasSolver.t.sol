@@ -7,10 +7,13 @@ import {AtlasSolver} from "../src/AtlasSolver.sol";
 import {MockERC20, MockVault, MockProtocol} from "./ArbExecutorUnit.t.sol";
 
 /// WETH9-like: deposit/withdraw, ETH held by the token.
-contract MockWETH9 {
-    function deposit() external payable {}
+contract MockWETH9 is MockERC20 {
+    function deposit() external payable {
+        balanceOf[msg.sender] += msg.value;
+    }
 
     function withdraw(uint256 wad) external {
+        balanceOf[msg.sender] -= wad;
         (bool ok,) = msg.sender.call{value: wad}("");
         require(ok, "send");
     }
@@ -103,8 +106,39 @@ contract AtlasSolverTest is Test {
 
     function test_unwrapsWethWhenEthIsShort() public {
         vm.deal(address(weth), 1 ether); // the WETH contract's ETH backing the float
+        weth.mint(address(solver), 1 ether);
         atlas.solverCall(solver, owner, address(env), address(0), 0.3 ether, _op(1000, 1100));
         assertEq(address(env).balance, 0.3 ether, "bid paid from unwrapped WETH");
+    }
+
+    function _wethOp(uint256 reward) internal view returns (bytes memory) {
+        ArbExecutor.ProtocolCall[] memory c = new ArbExecutor.ProtocolCall[](1);
+        c[0] = ArbExecutor.ProtocolCall(
+            address(protocol),
+            abi.encodeCall(MockProtocol.liquidate, (MockERC20(address(weth)), 10 ether, reward)),
+            address(protocol),
+            10 ether
+        );
+        return abi.encodeCall(
+            ArbExecutor.liquidate, (address(weth), address(weth), 10 ether, 0.1 ether, c, new ArbExecutor.Hop[](0))
+        );
+    }
+
+    function test_prefundedWethFloatSurvivesProfitAccountingAndPaysBid() public {
+        weth.mint(address(vault), 100 ether);
+        weth.mint(address(solver), 1 ether);
+        vm.deal(address(weth), 100 ether);
+        atlas.solverCall(solver, owner, address(env), address(0), 0.2 ether, _wethOp(11 ether));
+        assertEq(weth.balanceOf(receiver), 1 ether, "only incremental profit");
+        assertEq(weth.balanceOf(address(solver)), 0.8 ether, "float less actual bid");
+    }
+
+    function test_prefundedWethFloatCannotSubsidizeLosingLiquidation() public {
+        weth.mint(address(vault), 100 ether);
+        weth.mint(address(solver), 1 ether);
+        vm.expectRevert();
+        atlas.solverCall(solver, owner, address(env), address(0), 0, _wethOp(9.5 ether));
+        assertEq(weth.balanceOf(address(solver)), 1 ether);
     }
 
     function test_borrowRepaidFromCallValue() public {

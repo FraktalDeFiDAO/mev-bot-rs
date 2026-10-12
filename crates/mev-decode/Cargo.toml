@@ -29,6 +29,12 @@ mev-protocol-morpho-blue = { workspace = true }
 mev-protocol-compound-v3 = { workspace = true }
 mev-protocol-unidentified = { workspace = true }
 mev-protocol-fluid = { workspace = true }
+mev-protocol-oneinch = { workspace = true }
+mev-protocol-cow = { workspace = true }
+mev-protocol-camelot = { workspace = true }
+mev-protocol-sushi = { workspace = true }
+mev-protocol-paraswap = { workspace = true }
+mev-protocol-kyber = { workspace = true }
 mev-sequencer = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }

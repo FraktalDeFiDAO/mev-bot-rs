@@ -4,7 +4,16 @@
 //! Any binary (bot, backtester, dashboard) can embed it:
 //! `Engine::bootstrap(cfg, secrets, Mode::Shadow, data_dir).await?.run().await`.
 
+/// State may be traded on only while the log stream is reconciled and the feed has had no continuity break
+/// since that reconciliation (a gap, replay storm or reconnect bumps the feed epoch and stays degraded
+/// until a fresh pinned snapshot records the new epoch).
+pub(crate) fn state_confident(reconciled: bool, feed_epoch: u64, reconciled_epoch: u64) -> bool {
+    reconciled && feed_epoch == reconciled_epoch
+}
+
+mod accounting;
 mod decode_check;
+mod exact_quote;
 mod journal;
 mod pending;
 mod tracked;
@@ -30,7 +39,7 @@ use mev_liquidate::{OracleHint, Runner, RunnerConfig, RunnerEvent};
 use mev_metrics::Metrics;
 use mev_risk::{
     RiskGuard, RiskLimits,
-    bid::{BidInput, BidPolicy, Decision, TipBook, TipBudget},
+    bid::{BidPolicy, Decision, IntegerBidInput, IntegerBidPolicy, TipBook},
     loan_cap,
 };
 use mev_rpc::{Backoff, Rpc, RpcMeter};
@@ -42,7 +51,7 @@ use mev_types::Opportunity;
 use race::Trigger;
 use serde_json::json;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 /// Recently observed winning tips kept for the competition estimate (count, max age).
 const TIP_BOOK_CAPACITY: usize = 200;
@@ -77,6 +86,8 @@ fn gate_params(c: &mev_config::GateConfig) -> mev_risk::gate::GateConfig {
         backoff_secs: c.backoff_secs,
         backoff_max_secs: c.backoff_max_secs,
         memory_secs: c.memory_secs,
+        global_min_attempts: c.global_min_attempts,
+        global_probe_secs: c.global_probe_secs,
     }
 }
 
@@ -102,6 +113,7 @@ const ROUTE_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 
 mod atlas;
 mod batch;
+mod continuity;
 mod race;
 
 /// Gas a backrun liquidation is priced at (flash loan + protocol call + swap), and its limit.
@@ -160,7 +172,7 @@ pub struct Engine {
     busy_pools: HashMap<Address, Instant>,
     busy_routes: HashMap<(Address, Address), Vec<Address>>,
     /// PGA priority-fee bidding: policy, recently observed winning tips, tip spend caps.
-    bid_policy: BidPolicy,
+    bid_policy: IntegerBidPolicy,
     /// Fast Feed counters when the paid feed is enabled and keyed.
     fast_feed_stats: Option<Arc<mev_ingest::fast_feed::FastFeedStats>>,
     tips: TipBook,
@@ -191,7 +203,6 @@ pub struct Engine {
     sim_ok: HashMap<(Address, Address), Instant>,
     /// Trades waiting to go out together (only used when `[batch]` is on).
     batch: batch::Queue,
-    tip_budget: TipBudget,
     mode: Mode,
     liq: Option<LiqCtx>,
     presim_rx: Option<PresimRx>,
@@ -199,6 +210,9 @@ pub struct Engine {
     feed_log: Arc<std::sync::Mutex<mev_sequencer::FeedLog>>,
     /// Continuity counters of the standard sequencer feed (gaps, replays, reconnects).
     feed_stats: Arc<mev_sequencer::FeedStats>,
+    confidence: Arc<std::sync::atomic::AtomicBool>,
+    reconciled_feed_epoch: u64,
+    log_continuity: continuity::Continuity,
     /// On-chain event journal of the tracked pools (`[journal] pool_events`).
     event_journal: Option<Arc<mev_presim::record::TxRecorder>>,
     /// Watch-tier pools (address -> venue): subscribed and journaled, not traded.
@@ -215,7 +229,7 @@ pub struct Engine {
     /// Request meters per provider ("fast" = paid), drained into the minute summary.
     meters: Vec<(&'static str, Arc<RpcMeter>)>,
     /// (fetched at, wei); refreshed in the background so hot paths never wait on it.
-    gas_price: Arc<std::sync::Mutex<Option<(Instant, f64)>>>,
+    gas_price: Arc<std::sync::Mutex<Option<(Instant, u128)>>>,
     gas_refreshing: Arc<std::sync::atomic::AtomicBool>,
     /// Tokens we looked up swap routes for on demand (and when): at most one lookup per hour.
     route_lookups: HashMap<Address, Instant>,
@@ -244,6 +258,7 @@ pub struct ScanResult {
 
 enum TxDone {
     Landed {
+        reservation: mev_risk::ledger::Reservation,
         hash: TxHash,
         kind: &'static str,
         est_profit_usd: f64,
@@ -252,17 +267,20 @@ enum TxDone {
         route: Option<(Address, Address)>,
     },
     Failed {
+        reservation: mev_risk::ledger::Reservation,
         hash: Option<TxHash>,
         error: String,
     },
     /// A batched transaction landed: `items` in batch order.
     BatchLanded {
+        reservation: mev_risk::ledger::Reservation,
         hash: TxHash,
         landed: Landed,
         items: Vec<batch::Done>,
     },
     /// A batched transaction was never sent or never landed.
     BatchFailed {
+        reservation: mev_risk::ledger::Reservation,
         hash: Option<TxHash>,
         items: Vec<batch::Done>,
         error: String,
@@ -281,7 +299,11 @@ enum Maint {
         fresh: Vec<mev_dex::Pool>,
         read_at: HashMap<Address, u64>,
     },
-    Ticks(HashMap<Address, mev_dex::TickMap>),
+    Ticks {
+        fresh: Vec<mev_dex::Pool>,
+        read_at: HashMap<Address, u64>,
+    },
+    Degraded,
     Cycles {
         index: mev_search::cycles::CycleIndex,
         watch: std::collections::HashSet<[u8; 20]>,
@@ -297,6 +319,32 @@ struct MaintBusy {
 }
 
 impl Engine {
+    pub(crate) fn submission_guard(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        self.submission_guard_for(vec![])
+    }
+
+    pub(crate) fn submission_guard_for(
+        &self,
+        dependencies: Vec<mev_types::StateVersion>,
+    ) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        let (revision, expected) = self.store.submission_revision();
+        let stop = self.risk.kill_file();
+        let (feed, epoch, confidence) = (
+            self.feed_stats.clone(),
+            self.reconciled_feed_epoch,
+            self.confidence.clone(),
+        );
+        Arc::new(move || {
+            dependencies.iter().all(|v| v.current())
+                && confidence.load(std::sync::atomic::Ordering::Acquire)
+                && feed
+                    .confidence_epoch
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    == epoch
+                && revision.load(std::sync::atomic::Ordering::Acquire) == expected
+                && !stop.exists()
+        })
+    }
     /// Connect, discover pools, size loans, and wire the executor (if deployed).
     pub async fn bootstrap(
         cfg: ChainConfig,
@@ -304,6 +352,10 @@ impl Engine {
         mode: Mode,
         data_dir: PathBuf,
     ) -> Result<Self> {
+        anyhow::ensure!(
+            !cfg.atlas.bid,
+            "Atlas bidding lacks verified escrow settlement and is unavailable"
+        );
         info!(chain = cfg.name, ?mode, "starting");
         let rpc = Rpc::connect(&secrets.http_urls(), &secrets.ws_urls()).await?;
         let usd = cfg.token(&cfg.usd_token)?;
@@ -422,8 +474,35 @@ impl Engine {
         };
         let metrics = Arc::new(Metrics::new(data_dir.clone())?);
         metrics.set_live(mode == Mode::Live);
+        let accounting_dir = if mode == Mode::Shadow {
+            data_dir.join("shadow-accounting")
+        } else {
+            data_dir.clone()
+        };
+        std::fs::create_dir_all(&accounting_dir)?;
         let risk = RiskGuard::new(limits, data_dir.join("STOP"))
-            .with_max_in_flight(cfg.risk.max_concurrent_sends);
+            .with_max_in_flight(cfg.risk.max_concurrent_sends)
+            .with_tip_caps(mev_risk::ledger::TipCaps {
+                per_tx: mev_risk::limit_microusd(cfg.pga.max_tip_usd_per_tx)?,
+                per_minute: mev_risk::limit_microusd(cfg.pga.max_tip_usd_per_minute)?,
+                per_day: mev_risk::limit_microusd(cfg.pga.max_tip_usd_per_day)?,
+            });
+        let risk = if mode == Mode::Live {
+            risk.with_existing_persistence(
+                accounting_dir.join("risk-state.json"),
+                now_secs(),
+                cfg.chain_id,
+                sender.as_ref().map_or(Address::ZERO, |s| s.address),
+            )
+        } else {
+            risk.with_persistence(accounting_dir.join("risk-state.json"), now_secs())
+        };
+        if mode == Mode::Live
+            && let Some(sender) = &sender
+        {
+            let (floor, upper) = risk.nonce_window()?;
+            sender.reconcile_nonce(floor, upper)?;
+        }
         info!(pools = store.len(), kill_switch = %data_dir.join("STOP").display(), "ready");
         // What is tracked, written out so decoding can be checked against it (scripts/venue-coverage.py).
         let tracked_contracts: Arc<std::collections::HashSet<Address>> = {
@@ -529,15 +608,64 @@ impl Engine {
                             tip_book.lock().unwrap().record(t, now_secs());
                         }
                         // Read the swap straight from the calldata, at arrival, before any node round trip.
-                        if let Some(to) = st.to
-                            && let Some(mev_decode::Decoded::Swap(intent)) =
-                                mev_decode::decode_call(to, &st.input)
-                        {
-                            let _ = dec_tx.send(pending::DecodedSwap {
-                                hash: st.hash,
-                                intent,
-                                received: st.received,
-                            });
+                        if let Some(to) = st.to {
+                            // The call itself (ETH-in forms need the value), else every swap inside the wrappers it
+                            // goes through (multicall, smart accounts, the swap forwarders): their pools are pending too.
+                            // Exact swaps first; a bot that names its pools without an exact swap also holds them back.
+                            let decoded: Vec<_> = match mev_decode::decode_call_with_value(
+                                to,
+                                &st.input,
+                                alloy::consensus::Transaction::value(&st.tx),
+                            ) {
+                                Some(mev_decode::Decoded::Swap(s)) => {
+                                    // A cycle bot also names the rest of its pools (the same registry call, many results).
+                                    let mut v = vec![mev_decode::Decoded::Swap(s)];
+                                    v.extend(
+                                        mev_decode::decode_calls(to, &st.input)
+                                            .into_iter()
+                                            .filter(|d| matches!(d, mev_decode::Decoded::Pools(_))),
+                                    );
+                                    v
+                                }
+                                _ => mev_decode::calls::decode_all(to, &st.input),
+                            };
+                            for d in decoded.into_iter().take(8) {
+                                let (intent, named_pools) = match d {
+                                    mev_decode::Decoded::Swap(s) => (Some(s), Vec::new()),
+                                    mev_decode::Decoded::Pools(p) => (None, p.pools),
+                                    _ => continue,
+                                };
+                                let _ = dec_tx.send(pending::DecodedSwap {
+                                    hash: st.hash,
+                                    intent,
+                                    named_pools,
+                                    scan: None,
+                                    pair_scan: false,
+                                    received: st.received,
+                                });
+                            }
+                            // Aggregators name their route's pools in the calldata, not as one exact swap.
+                            if mev_decode::scans_for_pools(to) {
+                                let _ = dec_tx.send(pending::DecodedSwap {
+                                    hash: st.hash,
+                                    intent: None,
+                                    named_pools: Vec::new(),
+                                    scan: Some(st.input.to_vec()),
+                                    pair_scan: false,
+                                    received: st.received,
+                                });
+                            }
+                            // A program that lists its tokens and fee tiers but derives its pools.
+                            if mev_decode::scans_for_pairs(to) {
+                                let _ = dec_tx.send(pending::DecodedSwap {
+                                    hash: st.hash,
+                                    intent: None,
+                                    named_pools: Vec::new(),
+                                    scan: Some(st.input.to_vec()),
+                                    pair_scan: true,
+                                    received: st.received,
+                                });
+                            }
                         }
                         if want_pre {
                             let _ = pre_tx.send(st.clone());
@@ -681,9 +809,12 @@ impl Engine {
             .chain(search_loan.keys().copied())
             .collect();
 
-        let pga_policy = bid_policy(&cfg.pga);
-        let pga_budget =
-            TipBudget::new(cfg.pga.max_tip_usd_per_minute, cfg.pga.max_tip_usd_per_day);
+        let pga_policy = bid_policy(&cfg.pga).integer()?;
+        let gate = mev_risk::gate::RouteGate::new().with_persistence(
+            accounting_dir.join("gate-state.json"),
+            &gate_params(&cfg.gate),
+            now_secs(),
+        );
         Ok(Self {
             cfg,
             rpc,
@@ -706,7 +837,7 @@ impl Engine {
             bid_policy: pga_policy,
             feed_tips,
             atlas,
-            gate: mev_risk::gate::RouteGate::new(),
+            gate,
             sim_bad: mev_risk::gate::Cooldowns::new(),
             healed: HashMap::new(),
             trigger_calls: HashMap::new(),
@@ -717,12 +848,14 @@ impl Engine {
             fast_feed_stats,
             tips: TipBook::new(TIP_BOOK_CAPACITY, TIP_BOOK_HORIZON_SECS),
             route_tips: HashMap::new(),
-            tip_budget: pga_budget,
             mode,
             liq,
             presim_rx,
             feed_log,
             feed_stats,
+            confidence: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            reconciled_feed_epoch: 0,
+            log_continuity: Default::default(),
             event_journal,
             watch: watch.clone(),
             watch_contracts: watch_contracts.clone(),
@@ -743,6 +876,43 @@ impl Engine {
     /// Run until Ctrl-C. Resubscribes and resyncs if the event stream drops.
     pub async fn run(&mut self) -> Result<()> {
         let (tx_done, mut rx_done) = mpsc::unbounded_channel::<TxDone>();
+        if let Some(sender) = self.sender.clone() {
+            for (reservation, pending) in self.risk.unresolved() {
+                if pending.from.as_deref() != Some(sender.address.to_string().as_str()) {
+                    self.halt(
+                        true,
+                        "pending transaction belongs to another signing address".into(),
+                    );
+                    continue;
+                }
+                let Some(hash) = pending.hash.as_ref().and_then(|h| h.parse::<TxHash>().ok())
+                else {
+                    continue;
+                };
+                if let Some(nonce) = pending.nonce {
+                    sender.restore_pending(hash, nonce);
+                }
+                let (sender, done) = (sender.clone(), tx_done.clone());
+                tokio::spawn(async move {
+                    loop {
+                        match Ok::<_, anyhow::Error>(sender.wait_final(hash).await) {
+                            Ok(landed) => {
+                                let _ = done.send(TxDone::Landed {
+                                    reservation,
+                                    hash,
+                                    kind: if pending.arb { "arb" } else { "liquidation" },
+                                    est_profit_usd: 0.0,
+                                    landed,
+                                    route: None,
+                                });
+                                break;
+                            }
+                            Err(_) => tokio::time::sleep(Duration::from_secs(5)).await,
+                        }
+                    }
+                });
+            }
+        }
         let mut resync = tokio::time::interval(Duration::from_secs(60));
         let mut tick_reload =
             tokio::time::interval(Duration::from_secs(self.cfg.ticks.refresh_secs.max(30)));
@@ -771,6 +941,8 @@ impl Engine {
         };
         tokio::pin!(shutdown);
         loop {
+            self.confidence
+                .store(false, std::sync::atomic::Ordering::Release);
             // Never exit on network trouble: resubscribe, and if the WS provider itself is dead
             // (alloy gave up reconnecting), replace it — with backoff so outages don't spin.
             let mut logs = loop {
@@ -799,17 +971,34 @@ impl Engine {
                     }
                 }
             };
+            // Subscribe first, then reconcile at a pinned block. Buffered logs at or below this
+            // snapshot are never applied on top of newer state.
+            if let Err(e) = self.reconcile_subscription().await {
+                warn!(error = %e, "subscription snapshot incomplete; submissions remain disabled");
+                tokio::time::sleep(backoff.next_delay()).await;
+                continue;
+            }
             backoff.reset();
-            info!("subscribed to pool events");
+            info!("subscribed and reconciled pool events");
             loop {
                 let flush_at = self.batch_deadline().map(tokio::time::Instant::from_std);
                 tokio::select! {
                     maybe = logs.next() => {
-                        let Some(log) = maybe else { warn!("log stream ended; resubscribing"); break };
+                        let Some(log) = maybe else { self.confidence.store(false, std::sync::atomic::Ordering::Release); warn!("log stream ended; resubscribing"); break };
                         if let Some(j) = &self.event_journal {
                             let t_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
                             if let Some(line) = journal::event_line(&log, &self.store, &self.watch, t_ms) {
                                 j.record(&line);
+                            }
+                        }
+                        match self.log_continuity.accept(&log) {
+                            Ok(false) => continue,
+                            Ok(true) => {},
+                            Err(reason) => {
+                                self.confidence.store(false, std::sync::atomic::Ordering::Release);
+                                self.metrics.event("state_confidence", json!({"status": "Degraded", "reason": format!("{reason:?}")}));
+                                warn!(?reason, "log continuity invalidated; reconciling before trading");
+                                break;
                             }
                         }
                         if let Some(h) = log.transaction_hash {
@@ -822,7 +1011,19 @@ impl Engine {
                         }
                     }
                     Some(d) = recv_opt(&mut dec_rx) => {
-                        let pools = pending::resolve_pools(&self.store, &d.intent);
+                        let mut pools = d
+                            .intent
+                            .as_ref()
+                            .map(|i| pending::resolve_pools(&self.store, i))
+                            .unwrap_or_default();
+                        // Named pools count only if we watch them.
+                        pools.extend(d.named_pools.iter().filter(|a| self.store.get(a).is_some()).copied());
+                        if let Some(input) = &d.scan {
+                            pools.extend(pending::watched_pools_in(&self.store, input));
+                            if d.pair_scan {
+                                pools.extend(pending::pools_by_token_pairs(&self.store, input));
+                            }
+                        }
                         if !pools.is_empty() {
                             self.pending.insert(d.hash, pools, d.received);
                         }
@@ -864,6 +1065,7 @@ impl Engine {
                     Some(a) = recv_opt(&mut atlas_auctions) => self.on_atlas_auction(a),
                     Some(e) = recv_opt(&mut atlas_events) => self.on_atlas_event(e),
                     _ = resync.tick() => {
+                        if !self.confidence.load(std::sync::atomic::Ordering::Acquire) || self.feed_stats.confidence_epoch.load(std::sync::atomic::Ordering::Acquire) != self.reconciled_feed_epoch { break; }
                         self.spawn_pool_refresh(&maint_tx, &busy);
                         self.spawn_cycle_rebuild(&maint_tx, &busy);
                     }
@@ -881,9 +1083,79 @@ impl Engine {
                 }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
-            if let Err(e) = mev_discovery::refresh(&self.rpc, &mut self.store).await {
-                error!(error = %e, "resync after reconnect failed");
-            }
+        }
+    }
+
+    async fn reconcile_subscription(&mut self) -> Result<()> {
+        use std::sync::atomic::Ordering::{Acquire, Release};
+        let epoch = self.feed_stats.confidence_epoch.load(Acquire);
+        let infos = self.store.pools().map(|p| p.info.clone()).collect();
+        let half = self
+            .cfg
+            .ticks
+            .enabled
+            .then_some(self.cfg.ticks.window_ticks);
+        let snapshot = mev_discovery::snapshot(&self.rpc, infos, half).await?;
+        let read_at = self.store.versions_snapshot();
+        let out = self.store.apply_coherent_refresh(snapshot.pools, &read_at);
+        for o in &out.overwrites {
+            self.record_overwrite(o, "SubscriptionSnapshot", "ReconnectReconciled");
+        }
+        for addr in out.tick_changes {
+            self.metrics.event("state_correction", json!({"pool": addr, "source": "SubscriptionSnapshot", "reason": "TickMapReconciled"}));
+        }
+        self.log_continuity
+            .reconciled(snapshot.block, snapshot.block_hash);
+        self.reconciled_feed_epoch = epoch;
+        anyhow::ensure!(
+            self.feed_stats.confidence_epoch.load(Acquire) == epoch,
+            "feed continuity changed during reconciliation"
+        );
+        self.confidence.store(true, Release);
+        self.metrics.event(
+            "state_confidence",
+            json!({"status": "Reconciled", "block": snapshot.block}),
+        );
+        Ok(())
+    }
+
+    fn shadow_floor(&self, gas_limit: u64, fees: Fees, token: Address) -> Option<U256> {
+        let quote = self.native_price_integer()?;
+        let bound = mev_risk::ledger::native_cost(gas_limit, fees.max_fee_per_gas, quote).ok()?;
+        self.final_profit_floor(bound, token)
+    }
+
+    fn price_integer(&self, token: Address) -> Option<mev_types::price::Ratio> {
+        self.store
+            .usd_price_integer(token, self.usd, self.usd_decimals, self.native)
+    }
+
+    fn native_price_integer(&self) -> Option<u64> {
+        self.price_integer(self.native)?
+            .microusd(U256::from(1_000_000_000_000_000_000u128), true)
+            .filter(|p| *p > 0)
+    }
+
+    fn final_profit_floor(&self, bound_microusd: u64, token: Address) -> Option<U256> {
+        let cost = bound_microusd
+            .checked_add(mev_risk::cost_microusd(self.cfg.risk.min_profit_usd).ok()?)?;
+        self.price_integer(token)?
+            .raw_for_cost(cost)
+            .filter(|floor| *floor <= U256::from(u128::MAX))
+    }
+
+    async fn shadow_candidate(&self, calldata: Vec<u8>, gas_limit: u64, fees: Fees) {
+        if self.mode != Mode::Shadow {
+            return;
+        }
+        let Some(sender) = &self.sender else {
+            return;
+        };
+        match sender.sign_shadow(&calldata, gas_limit, fees).await {
+            Ok(hash) => self.metrics.event("shadow_signed", json!({"hash": hash, "from": sender.address,
+                "gas_limit": gas_limit, "max_fee_per_gas": fees.max_fee_per_gas.to_string(),
+                "calldata_hash": alloy::primitives::keccak256(&calldata), "calldata_bytes": calldata.len()})),
+            Err(e) => self.metrics.event("shadow_sign_failed", json!({"error": e.to_string()})),
         }
     }
 
@@ -987,19 +1259,13 @@ impl Engine {
         best_route(&self.store, col, debt, amt, via).map(|(h, _)| h)
     }
 
-    /// L2 gas price, cached for 10 s (simulations come in bursts; each fetch is a paid call).
-    /// Gas price (wei). Returns the cached value at once; when it is older than 10 s a background
-    /// refresh starts. Only the very first call waits for the RPC.
-    async fn gas_price(&mut self) -> f64 {
+    /// A recent integer fee quote. Missing or stale quotes prevent admission.
+    /// Refreshing never waits for a remote response in the decision handler.
+    fn gas_price(&self) -> Option<u128> {
         use std::sync::atomic::Ordering;
         let cached = *self.gas_price.lock().unwrap();
-        let Some((at, wei)) = cached else {
-            let wei = fetch_gas_price(&self.rpc.http).await;
-            *self.gas_price.lock().unwrap() = Some((Instant::now(), wei));
-            return wei;
-        };
-        if at.elapsed() >= Duration::from_secs(10)
-            && !self.gas_refreshing.swap(true, Ordering::SeqCst)
+        if cached.is_none_or(|(at, _)| at.elapsed() >= Duration::from_secs(10))
+            && !self.gas_refreshing.swap(true, Ordering::AcqRel)
         {
             let (http, cache, busy) = (
                 self.rpc.http.clone(),
@@ -1007,12 +1273,15 @@ impl Engine {
                 self.gas_refreshing.clone(),
             );
             tokio::spawn(async move {
-                let wei = fetch_gas_price(&http).await;
-                *cache.lock().unwrap() = Some((Instant::now(), wei));
-                busy.store(false, Ordering::SeqCst);
+                if let Some(wei) = fetch_gas_price(&http).await {
+                    *cache.lock().unwrap() = Some((Instant::now(), wei));
+                }
+                busy.store(false, Ordering::Release);
             });
         }
-        wei
+        cached
+            .filter(|(at, _)| at.elapsed() < Duration::from_secs(30))
+            .map(|(_, wei)| wei)
     }
 
     /// Is any of `pools` used by an in-flight arbitrage (claims expire after `BUSY_TTL`)?
@@ -1047,10 +1316,24 @@ impl Engine {
     /// resulting mode on the event log and records every switch.
     fn sending(&self, arb: bool) -> bool {
         let day = now_secs() / 86_400;
-        let live = self.mode == Mode::Live
+        let live = state_confident(
+            self.confidence.load(std::sync::atomic::Ordering::Acquire),
+            self.feed_stats
+                .confidence_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+            self.reconciled_feed_epoch,
+        ) && self.mode == Mode::Live
             && self.halt_all_day != Some(day)
             && !(arb && self.halt_arb_day == Some(day));
-        let overall = self.mode == Mode::Live && self.halt_all_day != Some(day);
+        let overall = self.mode == Mode::Live
+            && self.halt_all_day != Some(day)
+            && state_confident(
+                self.confidence.load(std::sync::atomic::Ordering::Acquire),
+                self.feed_stats
+                    .confidence_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+                self.reconciled_feed_epoch,
+            );
         if self.metrics.set_live(overall) {
             let to = if overall { "live" } else { "shadow" };
             self.metrics.event("mode_switch", json!({ "to": to }));
@@ -1062,9 +1345,31 @@ impl Engine {
     /// shadow for the rest of the UTC day (arbitrage alone for its own gas sub-budget).
     fn on_cap(&mut self, block: &mev_risk::Block, arb: bool) {
         use mev_risk::Block;
+        let (total_spent, arb_spent) = self.risk.settled_spend();
         match block {
-            Block::Paused { .. } => self.halt(true, format!("{block:?}")),
-            Block::DailyGasCap { .. } => self.halt(!arb, format!("{block:?}")),
+            Block::Persistence | Block::InvalidInput | Block::Paused { .. } => {
+                self.halt(true, format!("{block:?}"))
+            }
+            // Pending exposure and restart reconciliation are temporary admission blocks.
+            // They must not latch a day-long pause after the liabilities have settled.
+            Block::DailyGasCap { .. }
+                if mev_risk::limit_microusd(self.cfg.risk.max_gas_usd_per_day)
+                    .is_ok_and(|limit| total_spent >= limit) =>
+            {
+                self.halt(true, format!("{block:?}"))
+            }
+            Block::DailyGasCap { .. }
+                if arb
+                    && mev_risk::limit_microusd(
+                        self.cfg
+                            .risk
+                            .max_arb_gas_usd_per_day
+                            .unwrap_or(self.cfg.risk.max_gas_usd_per_day * 2.0 / 3.0),
+                    )
+                    .is_ok_and(|limit| arb_spent >= limit) =>
+            {
+                self.halt(false, format!("{block:?}"))
+            }
             _ => {}
         }
     }
@@ -1163,12 +1468,15 @@ impl Engine {
                 }));
             }
             p.ticks = ticks;
-            if old != p.state {
+            let old_exact = self.store.get(&addr).and_then(|p| p.exact.clone());
+            if old != p.state || old_exact != p.exact {
                 self.record_overwrite(
                     &mev_state::Overwrite {
                         pool: addr,
                         predicted: old.clone(),
                         actual: p.state.clone(),
+                        predicted_exact: old_exact,
+                        actual_exact: p.exact.clone(),
                     },
                     "failed_simulation",
                     "Unknown",
@@ -1195,7 +1503,7 @@ impl Engine {
         &mut self,
         gross_usd: f64,
         gas: u64,
-        gas_price: f64,
+        gas_price: u128,
         native_px: f64,
         ev: &serde_json::Value,
     ) -> Option<(Fees, f64)> {
@@ -1208,11 +1516,11 @@ impl Engine {
         route: Option<(Address, Address)>,
         gross_usd: f64,
         gas: u64,
-        gas_price: f64,
-        native_px: f64,
+        gas_price: u128,
+        _native_px: f64,
         ev: &serde_json::Value,
     ) -> Option<(Fees, f64)> {
-        let base_fee = gas_price.max(0.0) as u128;
+        let base_fee = gas_price;
         if !self.cfg.pga.enabled {
             return Some((Fees::no_bid(base_fee), 0.0));
         }
@@ -1233,11 +1541,11 @@ impl Engine {
         };
         let competition =
             mev_risk::bid::route_competition(obs, self.cfg.pga.route_min_observations, own, market);
-        let input = BidInput {
-            gross_profit_usd: gross_usd,
+        let input = IntegerBidInput {
+            gross_profit_microusd: mev_risk::limit_microusd(gross_usd).ok()?,
             gas_units: gas,
             base_fee_wei: base_fee,
-            usd_per_wei: native_px,
+            native_price_microusd: self.native_price_integer()?,
             competition_tip_wei: competition,
         };
         let bid = match self.bid_policy.decide(&input) {
@@ -1251,26 +1559,14 @@ impl Engine {
                 return None;
             }
         };
-        if let Err(cap) = self.tip_budget.allow(bid.tip_cost_usd, now) {
-            if matches!(cap, mev_risk::bid::TipCap::PerDay { .. }) && self.mode == Mode::Live {
-                self.halt(true, format!("{cap:?}"));
-            }
-            self.metrics.update(|c| c.bids_skipped += 1);
-            self.metrics.event(
-                "bid_skip",
-                json!({ "opp": ev, "reason": format!("{cap:?}") }),
-            );
-            return None;
-        }
-        self.tip_budget.record(bid.tip_cost_usd, now);
         self.metrics.update(|c| {
             c.bids_placed += 1;
-            c.tip_usd += bid.tip_cost_usd;
+            c.estimated_tip_usd += bid.tip_cost_usd;
             c.bid_fraction_sum += bid.fraction_of_net;
         });
         self.metrics.event(
             "bid",
-            json!({ "opp": ev, "tip_wei": bid.max_priority_fee_per_gas.to_string(), "tip_usd": bid.tip_cost_usd,
+            json!({ "opp": ev, "tip_wei": bid.max_priority_fee_per_gas.to_string(), "estimated_tip_usd": bid.tip_cost_usd,
                     "fraction_of_net": bid.fraction_of_net, "competition_wei": competition.map(|c| c.to_string()), "feed_competition_wei": from_feed.map(|c| c.to_string()) }),
         );
         Some((Fees::from_bid(&bid), bid.tip_cost_usd))
@@ -1301,14 +1597,17 @@ impl Engine {
             return;
         }
         let infos: Vec<_> = self.store.pools().map(|p| p.info.clone()).collect();
+        let expected = infos.len();
         let read_at = self.store.versions_snapshot();
         let (rpc, tx, flag) = (self.rpc.clone(), tx.clone(), busy.pools.clone());
         tokio::spawn(async move {
             match mev_discovery::load_pools(&rpc, infos).await {
-                Ok(fresh) => {
+                Ok(fresh) if fresh.len() == expected => {
                     let _ = tx.send(Maint::Pools { fresh, read_at });
                 }
-                Err(e) => warn!(error = %e, "resync failed"),
+                _ => {
+                    let _ = tx.send(Maint::Degraded);
+                }
             }
             flag.store(false, SeqCst);
         });
@@ -1320,15 +1619,21 @@ impl Engine {
         if busy.ticks.swap(true, SeqCst) {
             return;
         }
-        let pools: Vec<_> = self.store.pools().cloned().collect();
+        let infos: Vec<_> = self.store.pools().map(|p| p.info.clone()).collect();
         let (rpc, tx, flag) = (self.rpc.clone(), tx.clone(), busy.ticks.clone());
         let half = self.cfg.ticks.window_ticks;
+        let read_at = self.store.versions_snapshot();
         tokio::spawn(async move {
-            match mev_discovery::ticks::load_ticks(&rpc, &pools, half).await {
-                Ok(maps) => {
-                    let _ = tx.send(Maint::Ticks(maps));
+            match mev_discovery::snapshot(&rpc, infos, Some(half)).await {
+                Ok(snapshot) => {
+                    let _ = tx.send(Maint::Ticks {
+                        fresh: snapshot.pools,
+                        read_at,
+                    });
                 }
-                Err(e) => warn!(error = %e, "tick reload failed"),
+                _ => {
+                    let _ = tx.send(Maint::Degraded);
+                }
             }
             flag.store(false, SeqCst);
         });
@@ -1374,6 +1679,8 @@ impl Engine {
                     pool: r.pool,
                     predicted: r.tentative,
                     actual: r.restored,
+                    predicted_exact: None,
+                    actual_exact: self.store.get(&r.pool).and_then(|p| p.exact.clone()),
                 },
                 source,
                 "FastFeedTxLost",
@@ -1396,12 +1703,27 @@ impl Engine {
                     "pool state resynced"
                 );
             }
-            Maint::Ticks(maps) => {
-                let n = maps.len();
-                for (addr, map) in maps {
-                    self.store.set_ticks(&addr, map);
+            Maint::Ticks { fresh, read_at } => {
+                let out = self.store.apply_coherent_refresh(fresh, &read_at);
+                for o in &out.overwrites {
+                    self.record_overwrite(o, "TickSnapshot", "TickStateReconciled");
                 }
-                info!(pools = n, "tick maps reloaded");
+                for addr in out.tick_changes {
+                    self.metrics.event("state_correction", json!({"pool": addr, "source": "TickSnapshot", "reason": "TickMapReconciled"}));
+                }
+                info!(
+                    applied = out.applied,
+                    skipped = out.skipped,
+                    "coherent tick snapshot applied"
+                );
+            }
+            Maint::Degraded => {
+                self.confidence
+                    .store(false, std::sync::atomic::Ordering::Release);
+                self.metrics.event(
+                    "state_confidence",
+                    json!({"status": "Degraded", "reason": "IncompleteSnapshot"}),
+                );
             }
             Maint::Cycles { index, watch } => {
                 self.cycles = index;
@@ -1430,7 +1752,9 @@ impl Engine {
         self.metrics.event(
             "state_correction",
             json!({ "market": o.pool, "dex": dex, "protocol": protocol, "source": source,
-                    "reason": reason, "predicted": parts(&o.predicted), "actual": parts(&o.actual) }),
+                    "reason": reason, "predicted": parts(&o.predicted), "actual": parts(&o.actual),
+                    "predicted_integer": o.predicted_exact.as_ref().map(|s| format!("{s:?}")),
+                    "actual_integer": o.actual_exact.as_ref().map(|s| format!("{s:?}")) }),
         );
     }
 
@@ -1532,7 +1856,7 @@ impl Engine {
             bids_skipped = c.bids_skipped,
             bids_won = c.bids_won,
             bids_lost = c.bids_lost,
-            tip_usd = format!("{:.4}", c.tip_usd),
+            estimated_tip_usd = format!("{:.4}", c.estimated_tip_usd),
             round_within = c.round_within,
             round_over = c.round_over,
             feed_triggers = c.feed_triggers,
@@ -1615,6 +1939,54 @@ impl Engine {
         }
         self.last_sim.insert(key, Instant::now());
 
+        // Protocol-exact re-quote from integer pool state (invariant 1): the f64 search only nominates.
+        // A route the contracts' own math says does not return its input never reaches simulation or a send.
+        let mut exact_ok = false;
+        match exact_quote::exact_profit(&self.store, &opp) {
+            Some(p) if p.is_zero() => {
+                self.metrics.event(
+                    "exact_reject",
+                    json!({ "opp": base, "reason": "no exact profit" }),
+                );
+                return;
+            }
+            Some(p) => {
+                // Size the trade on the integer quote too: the float optimum is only a starting point.
+                let (amount, profit) =
+                    exact_quote::refine_amount(&self.store, &opp).unwrap_or((opp.amount_in, p));
+                self.metrics.event(
+                    "exact_requote",
+                    json!({ "opp": base, "exact_profit_raw": profit.to_string(), "float_amount": opp.amount_in.to_string(), "exact_amount": amount.to_string() }),
+                );
+                opp.amount_in = amount;
+                opp.est_profit_usd = f64::from(profit) * loan_px;
+                exact_ok = true;
+            }
+            None => match exact_quote::bound_profit(&self.store, &opp) {
+                // An adaptive-fee hop (Camelot V3) priced at its maximum possible fee still returns more than
+                // it costs: profitable whatever fee it charges, so no remote simulation is needed.
+                Some(p) => {
+                    self.metrics.event(
+                        "exact_bound",
+                        json!({ "opp": base, "certain_profit_raw": p.to_string() }),
+                    );
+                    opp.est_profit_usd = f64::from(p) * loan_px;
+                    exact_ok = true;
+                }
+                None => self
+                    .metrics
+                    .event("exact_unavailable", json!({ "opp": base })),
+            },
+        }
+
+        if self.mode == Mode::Live && !exact_ok {
+            self.metrics.event(
+                "exact_submission_blocked",
+                json!({"opp": base, "reason": "integer route proof unavailable"}),
+            );
+            return;
+        }
+
         // Live without pre-simulation: trust the local model and save the eth_call round trip
         // (the race is decided in ~100s of ms). Shadow always simulates to keep measuring it.
         // Live sends on the model only when it is exact for this route (no V3 tick crossed);
@@ -1623,9 +1995,13 @@ impl Engine {
         let presimulate = !self.sending(true)
             || (!self.cfg.risk.fast_send
                 && (self.cfg.risk.arb_presimulate
-                    || !opp.exact
+                    // A route the integer walk priced completely (ticks crossed included) needs no
+                    // remote eth_call to confirm its output; token behaviour is still covered by `unvetted`.
+                    || (!opp.exact && !exact_ok)
                     || self.unvetted(&opp, key)
-                    || (self.cfg.uniswap_v4.as_ref().is_some_and(|v| v.presimulate)
+                    // V4 routes are simulated too, unless the integer walk priced every hop (V4 included) exactly.
+                    || (!exact_ok
+                        && self.cfg.uniswap_v4.as_ref().is_some_and(|v| v.presimulate)
                         && opp.hops.iter().any(|h| matches!(h.kind, 3 | 4)))));
         let (profit_usd, gas) = if presimulate {
             self.metrics.update(|c| c.simulated += 1);
@@ -1703,8 +2079,10 @@ impl Engine {
                 mev_sim::arb_gas_estimate(opp.hops.len()),
             )
         };
-        let gas_price = self.gas_price().await;
-        let gas_usd = gas as f64 * gas_price * native_px;
+        let Some(gas_price) = self.gas_price() else {
+            return self.metrics.event("fee_quote_unavailable", json!({}));
+        };
+        let gas_usd = gas as f64 * gas_price as f64 * native_px;
         let net_usd = profit_usd - gas_usd;
         self.metrics.update(|c| c.sim_profitable += 1);
         self.metrics.event(
@@ -1732,7 +2110,16 @@ impl Engine {
         }
         if !self.sending(true) {
             // Shadow: log the PGA bid this would have placed (nothing is sent).
-            let _ = self.pga_bid(profit_usd, gas, gas_price, native_px, &base);
+            if let Some((fees, _)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
+                && let Some(min_profit) = self.shadow_floor(gas * 5 / 2, fees, opp.loan_token)
+            {
+                self.shadow_candidate(
+                    mev_bindings::arb_calldata(&opp, min_profit, self.cfg.executor_flash_swaps),
+                    gas * 5 / 2,
+                    fees,
+                )
+                .await;
+            }
             return;
         }
         let Some(sender) = self.sender.clone() else {
@@ -1785,18 +2172,18 @@ impl Engine {
                 build: Box::new(move |mp| mev_bindings::arb_calldata(&o, mp, flash)),
                 gas,
                 gas_limit: gas * 5 / 2,
-                gas_usd,
                 gross_usd: profit_usd,
                 est_profit_usd: opp.est_profit_usd,
-                px: loan_px,
+                profit_token: opp.loan_token,
                 route: Some((opp.buy_pool, opp.sell_pool)),
                 seen: trigger.seen,
                 versions: opp.versions.clone(),
+                dependencies: vec![],
             };
             return self.enqueue(item, tx_done).await;
         }
         // PGA bid, decided now (fresh base fee and competition), not at detection.
-        let Some((fees, tip_usd)) = self.pga_bid_for(
+        let Some((fees, _tip_usd)) = self.pga_bid_for(
             Some((opp.buy_pool, opp.sell_pool)),
             profit_usd,
             gas,
@@ -1807,15 +2194,22 @@ impl Engine {
             return;
         };
         // On-chain floor: the trade must pay for its gas and its bid, or it reverts.
-        let min_profit = if loan_px > 0.0 {
-            U256::from(((gas_usd + tip_usd) / loan_px) as u128)
-        } else {
-            U256::ZERO
-        };
+        // No price means no safe floor: skip rather than send with `minProfit = 0`.
         // `gas` is a calibrated estimate (no estimate_gas round-trip); leave headroom for heavier
         // hops (Algebra pools use ~2x a Uniswap V3 hop).
         let gas_limit = gas * 5 / 2;
-        self.risk.mark_sent();
+        let Some((reservation, bound_microusd)) =
+            self.admit(profit_usd, gas_limit, fees, native_px, true)
+        else {
+            return;
+        };
+        let sender = sender
+            .reserved(reservation.clone())
+            .guarded(self.submission_guard());
+        let Some(min_profit) = self.final_profit_floor(bound_microusd, opp.loan_token) else {
+            let _ = reservation.cancel_unsigned();
+            return;
+        };
         self.metrics.update(|c| c.sent += 1);
         let tx_done = tx_done.clone();
         let metrics = self.metrics.clone();
@@ -1835,6 +2229,7 @@ impl Engine {
                 Ok(sent) => sent,
                 Err(e) => {
                     let _ = tx_done.send(TxDone::Failed {
+                        reservation,
                         hash: None,
                         error: e.to_string(),
                     });
@@ -1865,10 +2260,11 @@ impl Engine {
                     c.round_over += 1
                 }
             });
-            let landed = match sender.wait(hash, Duration::from_secs(30)).await {
+            let landed = match Ok::<_, anyhow::Error>(sender.wait_final(hash).await) {
                 Ok(l) => l,
                 Err(e) => {
                     let _ = tx_done.send(TxDone::Failed {
+                        reservation,
                         hash: Some(hash),
                         error: e.to_string(),
                     });
@@ -1876,6 +2272,7 @@ impl Engine {
                 }
             };
             let _ = tx_done.send(TxDone::Landed {
+                reservation,
                 hash,
                 kind: "arb",
                 est_profit_usd: opp.est_profit_usd,
@@ -1945,6 +2342,13 @@ impl Engine {
         &mut self,
         plan: &Plan,
     ) -> Option<(Vec<mev_types::Hop>, serde_json::Value, Option<Address>)> {
+        if self.mode == Mode::Live
+            && (plan.dependencies.is_empty() || plan.dependencies.iter().any(|v| !v.current()))
+        {
+            self.metrics
+                .event("liq_stale", json!({"account": plan.account.to_string()}));
+            return None;
+        }
         let via = self.liq.as_ref()?.via.clone();
         let base = json!({ "protocol": plan.protocol, "account": plan.account.to_string(),
             "collateral": self.cfg.symbol(plan.collateral_asset), "debt": self.cfg.symbol(plan.debt_asset),
@@ -2002,12 +2406,14 @@ impl Engine {
         let Some((hops, base, aave_pool)) = self.liq_precheck(&plan).await else {
             return;
         };
-        let Some(debt_px) = self.price(plan.debt_asset) else {
+        let Some(_debt_px) = self.price(plan.debt_asset) else {
             return self.metrics.event("liq_no_price", base);
         };
         let native_px = self.price(self.native).unwrap_or(0.0);
-        let gas_price = self.gas_price().await;
-        let gas_usd = BACKRUN_GAS as f64 * gas_price * native_px;
+        let Some(gas_price) = self.gas_price() else {
+            return self.metrics.event("fee_quote_unavailable", json!({}));
+        };
+        let gas_usd = BACKRUN_GAS as f64 * gas_price as f64 * native_px;
         // Unsimulated: discount the oracle-price bonus for swap fees and slippage.
         let net_usd = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT - gas_usd;
         let lead_ms = lead.as_millis() as u64;
@@ -2020,7 +2426,17 @@ impl Engine {
         if !self.sending(false) {
             // Shadow: log the PGA bid this would have placed (nothing is sent).
             let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
-            let _ = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev);
+            if let Some((fees, _)) = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev)
+                && let Some(min_profit) =
+                    self.shadow_floor(BACKRUN_GAS_LIMIT, fees, plan.debt_asset)
+            {
+                self.shadow_candidate(
+                    mev_bindings::liquidation_calldata(&plan, &hops, min_profit, aave_pool),
+                    BACKRUN_GAS_LIMIT,
+                    fees,
+                )
+                .await;
+            }
             return;
         }
         let Some(sender) = self.sender.clone() else {
@@ -2035,6 +2451,12 @@ impl Engine {
         }
         let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
         if self.batch_on() {
+            let versions = hops
+                .iter()
+                .map(|h| (h.pool, self.store.version(&h.pool)))
+                .collect();
+            let dependencies = plan.dependencies.clone();
+            let profit_token = plan.debt_asset;
             let item = batch::Item {
                 kind: "liquidation_backrun",
                 build: Box::new(move |mp| {
@@ -2042,28 +2464,35 @@ impl Engine {
                 }),
                 gas: BACKRUN_GAS,
                 gas_limit: BACKRUN_GAS_LIMIT,
-                gas_usd,
                 gross_usd: gross,
                 est_profit_usd: net_usd,
-                px: debt_px,
+                profit_token,
                 route: None,
                 seen: Instant::now()
                     .checked_sub(lead)
                     .unwrap_or_else(Instant::now),
-                versions: vec![],
+                versions,
+                dependencies,
             };
             return self.enqueue(item, tx_done).await;
         }
-        let Some((fees, tip_usd)) = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev)
+        let Some((fees, _tip_usd)) = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev)
         else {
             return;
         };
-        let min_profit = if debt_px > 0.0 {
-            U256::from(((gas_usd + tip_usd) / debt_px) as u128)
-        } else {
-            U256::ZERO
+        // No price means no safe floor: skip rather than send with `minProfit = 0`.
+        let Some((reservation, bound_microusd)) =
+            self.admit(gross, BACKRUN_GAS_LIMIT, fees, native_px, false)
+        else {
+            return;
         };
-        self.risk.mark_sent();
+        let sender = sender
+            .reserved(reservation.clone())
+            .guarded(self.submission_guard_for(plan.dependencies.clone()));
+        let Some(min_profit) = self.final_profit_floor(bound_microusd, plan.debt_asset) else {
+            let _ = reservation.cancel_unsigned();
+            return;
+        };
         self.metrics.update(|c| c.sent += 1);
         let tx_done = tx_done.clone();
         let metrics = self.metrics.clone();
@@ -2078,8 +2507,9 @@ impl Engine {
                         json!({ "hash": hash, "kind": "liquidation_backrun", "net_usd": net_usd, "lead_ms": lead_ms }),
                     );
                     info!(%hash, protocol = plan.protocol, account = %plan.account, lead_ms, "sent liquidation backrun");
-                    match sender.wait(hash, Duration::from_secs(30)).await {
+                    match Ok::<_, anyhow::Error>(sender.wait_final(hash).await) {
                         Ok(landed) => TxDone::Landed {
+                            reservation,
                             hash,
                             kind: "liquidation_backrun",
                             est_profit_usd: net_usd,
@@ -2087,12 +2517,14 @@ impl Engine {
                             route: None,
                         },
                         Err(e) => TxDone::Failed {
+                            reservation,
                             hash: Some(hash),
                             error: e.to_string(),
                         },
                     }
                 }
                 Err(e) => TxDone::Failed {
+                    reservation,
                     hash: None,
                     error: e.to_string(),
                 },
@@ -2129,8 +2561,10 @@ impl Engine {
         };
         let profit_usd = f64::from(profit) * debt_px;
         let native_px = self.price(self.native).unwrap_or(0.0);
-        let gas_price = self.gas_price().await;
-        let gas_usd = gas as f64 * gas_price * native_px;
+        let Some(gas_price) = self.gas_price() else {
+            return self.metrics.event("fee_quote_unavailable", json!({}));
+        };
+        let gas_usd = gas as f64 * gas_price as f64 * native_px;
         let net_usd = profit_usd - gas_usd;
         self.metrics.update(|c| c.liq_profitable += 1);
         self.metrics.event(
@@ -2142,7 +2576,17 @@ impl Engine {
 
         if !self.sending(false) {
             // Shadow: log the PGA bid this would have placed (nothing is sent).
-            let _ = self.pga_bid(profit_usd, gas, gas_price, native_px, &base);
+            if let Some((fees, _)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base) {
+                let limit = gas + gas * 3 / 10;
+                if let Some(min_profit) = self.shadow_floor(limit, fees, plan.debt_asset) {
+                    self.shadow_candidate(
+                        mev_bindings::liquidation_calldata(&plan, &hops, min_profit, aave_pool),
+                        limit,
+                        fees,
+                    )
+                    .await;
+                }
+            }
             return;
         }
         let Some(sender) = self.sender.clone() else {
@@ -2156,6 +2600,12 @@ impl Engine {
             );
         }
         if self.batch_on() {
+            let versions = hops
+                .iter()
+                .map(|h| (h.pool, self.store.version(&h.pool)))
+                .collect();
+            let dependencies = plan.dependencies.clone();
+            let profit_token = plan.debt_asset;
             let item = batch::Item {
                 kind: "liquidation",
                 build: Box::new(move |mp| {
@@ -2163,28 +2613,35 @@ impl Engine {
                 }),
                 gas,
                 gas_limit: gas + gas * 3 / 10,
-                gas_usd,
                 gross_usd: profit_usd,
                 est_profit_usd: net_usd,
-                px: debt_px,
+                profit_token,
                 route: None,
                 seen: Instant::now(),
-                versions: vec![],
+                versions,
+                dependencies,
             };
             return self.enqueue(item, tx_done).await;
         }
-        let Some((fees, tip_usd)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
+        let Some((fees, _tip_usd)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base)
         else {
             return;
         };
         // On-chain floor: at least cover gas and the bid, in debt-asset units.
-        let min_profit = if debt_px > 0.0 {
-            U256::from(((gas_usd + tip_usd) / debt_px) as u128)
-        } else {
-            U256::ZERO
-        };
+        // No price means no safe floor: skip rather than send with `minProfit = 0`.
         let gas_limit = gas + gas * 3 / 10;
-        self.risk.mark_sent();
+        let Some((reservation, bound_microusd)) =
+            self.admit(profit_usd, gas_limit, fees, native_px, false)
+        else {
+            return;
+        };
+        let sender = sender
+            .reserved(reservation.clone())
+            .guarded(self.submission_guard_for(plan.dependencies.clone()));
+        let Some(min_profit) = self.final_profit_floor(bound_microusd, plan.debt_asset) else {
+            let _ = reservation.cancel_unsigned();
+            return;
+        };
         self.metrics.update(|c| c.sent += 1);
         let tx_done = tx_done.clone();
         let metrics = self.metrics.clone();
@@ -2199,8 +2656,9 @@ impl Engine {
                         json!({ "hash": hash, "kind": "liquidation", "net_usd": net_usd }),
                     );
                     info!(%hash, protocol = plan.protocol, "sent liquidation");
-                    match sender.wait(hash, Duration::from_secs(30)).await {
+                    match Ok::<_, anyhow::Error>(sender.wait_final(hash).await) {
                         Ok(landed) => TxDone::Landed {
+                            reservation,
                             hash,
                             kind: "liquidation",
                             est_profit_usd: net_usd,
@@ -2208,102 +2666,20 @@ impl Engine {
                             route: None,
                         },
                         Err(e) => TxDone::Failed {
+                            reservation,
                             hash: Some(hash),
                             error: e.to_string(),
                         },
                     }
                 }
                 Err(e) => TxDone::Failed {
+                    reservation,
                     hash: None,
                     error: e.to_string(),
                 },
             };
             let _ = tx_done.send(done);
         });
-    }
-
-    fn on_tx_done(&mut self, done: TxDone) {
-        let native_px = self.price(self.native).unwrap_or(0.0);
-        match done {
-            TxDone::Landed {
-                hash,
-                kind,
-                est_profit_usd,
-                landed,
-                route,
-            } => {
-                if let Some(r) = route {
-                    self.release_pools(r);
-                }
-                if let (true, Some(r)) = (kind == "arb", route) {
-                    self.gate.record(r, landed.success, now_secs());
-                }
-                if let (false, Some(r)) = (landed.success, route) {
-                    // Lost race or mispriced: the next attempt on this route likely fails the same
-                    // way. Spend gas on uncontested (long-tail) routes instead.
-                    self.cooldown.insert(r, Instant::now());
-                }
-                let gas_usd =
-                    landed.gas_used as f64 * landed.effective_gas_price as f64 * native_px;
-                if kind == "arb" {
-                    self.risk.record_arb_gas(gas_usd, now_secs());
-                }
-                if !landed.success && kind != "liquidation" {
-                    // Arbs and unsimulated backruns revert when another bot got there first.
-                    self.risk.record_lost_race(gas_usd, now_secs());
-                } else {
-                    self.risk.record(landed.success, gas_usd, now_secs());
-                }
-                if landed.success {
-                    self.risk
-                        .record_profit(est_profit_usd - gas_usd, now_secs());
-                }
-                let bidding = self.cfg.pga.enabled;
-                self.metrics.update(|c| {
-                    if bidding {
-                        if landed.success {
-                            c.bids_won += 1
-                        } else {
-                            c.bids_lost += 1
-                        }
-                    }
-                    c.gas_usd += gas_usd;
-                    if landed.success {
-                        c.landed_ok += 1;
-                        c.profit_usd += est_profit_usd;
-                    } else {
-                        c.landed_reverted += 1;
-                    }
-                });
-                self.metrics.event(
-                    "landed",
-                    json!({ "hash": hash, "success": landed.success, "gas_used": landed.gas_used,
-                            "gas_usd": gas_usd, "block": landed.block, "est_profit_usd": est_profit_usd, "kind": kind }),
-                );
-                info!(%hash, success = landed.success, gas_usd = format!("{gas_usd:.4}"), "landed");
-            }
-            TxDone::BatchLanded {
-                hash,
-                landed,
-                items,
-            } => self.on_batch_landed(hash, landed, items),
-            TxDone::BatchFailed { hash, items, error } => self.on_batch_failed(hash, items, error),
-            TxDone::TipSeen { tip, route } => {
-                self.tips.record(tip, now_secs());
-                if let Some(r) = route {
-                    self.route_tips
-                        .entry(r)
-                        .or_insert_with(|| TipBook::new(ROUTE_TIP_CAPACITY, TIP_BOOK_HORIZON_SECS))
-                        .record(tip, now_secs());
-                }
-            }
-            TxDone::Failed { hash, error } => {
-                self.risk.record(false, 0.0, now_secs());
-                self.metrics
-                    .event("send_failed", json!({ "hash": hash, "error": error }));
-                warn!(?hash, %error, "send failed");
-            }
-        }
     }
 }
 
@@ -2351,7 +2727,11 @@ async fn wire_executor(
             Some(Arc::new(s))
         }
         (None, Mode::Live) => bail!("live mode needs PRIVATE_KEY"),
-        _ => None,
+        (_, Mode::Shadow) => {
+            let mut s = Sender::shadow(rpc.http.clone(), exec, cfg.chain_id);
+            s.flash_swaps = cfg.executor_flash_swaps;
+            Some(Arc::new(s))
+        }
     };
     let mut sim = Simulator::new(rpc.http.clone(), exec, owner);
     sim.flash_swaps = cfg.executor_flash_swaps;
@@ -2475,6 +2855,16 @@ async fn recv_opt<T>(rx: &mut Option<mpsc::UnboundedReceiver<T>>) -> Option<T> {
     }
 }
 
+/// On-chain `minProfit` (loan-token raw units) covering `cost_usd`; `None` when the token has no price.
+#[cfg(test)]
+fn profit_floor(cost_usd: f64, usd_per_raw: f64) -> Option<U256> {
+    if !usd_per_raw.is_finite() || usd_per_raw <= 0.0 {
+        return None;
+    }
+    let cost = mev_risk::cost_microusd(cost_usd).ok()?;
+    mev_risk::money::profit_floor(cost, &usd_per_raw.to_string()).ok()
+}
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2492,11 +2882,12 @@ fn watchlist(store: &PoolStore) -> std::collections::HashSet<[u8; 20]> {
         .collect()
 }
 
-async fn fetch_gas_price(http: &alloy::providers::DynProvider) -> f64 {
-    http.get_gas_price()
+async fn fetch_gas_price(http: &alloy::providers::DynProvider) -> Option<u128> {
+    tokio::time::timeout(Duration::from_secs(3), http.get_gas_price())
         .await
-        .map(|g| g as f64)
-        .unwrap_or(10_000_000.0)
+        .ok()?
+        .ok()
+        .filter(|g| *g > 0)
 }
 
 /// Hashes seen recently, bounded (oldest evicted): drops a tx delivered by both feeds.
@@ -2586,6 +2977,7 @@ mod feed_dedup_tests {
 #[cfg(test)]
 mod pga_replay {
     use super::*;
+    use mev_risk::bid::BidInput;
     use mev_sim::pga::{Offer, PastView, Round, Strategy, replay};
 
     struct Live {
@@ -2661,5 +3053,32 @@ mod pga_replay {
         );
         // Default caps: no single tip above $0.25.
         assert!(bid.tips_paid_usd <= 0.25 * bid.bids as f64 + 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod profit_floor_tests {
+    use super::*;
+
+    #[test]
+    fn floor_needs_a_price() {
+        assert_eq!(profit_floor(0.02, 0.0), None);
+        assert_eq!(profit_floor(0.02, f64::NAN), None);
+        assert_eq!(profit_floor(0.02, 1e-6), Some(U256::from(20_000u64)));
+    }
+}
+
+#[cfg(test)]
+mod confidence_tests {
+    use super::state_confident;
+
+    #[test]
+    fn a_feed_break_or_a_dropped_stream_degrades_until_a_new_snapshot_records_the_epoch() {
+        assert!(state_confident(true, 3, 3));
+        assert!(!state_confident(false, 3, 3), "log stream dropped");
+        assert!(!state_confident(true, 4, 3), "feed gap after the snapshot");
+        // A snapshot taken during the break (epoch moved again) is not accepted either.
+        assert!(!state_confident(true, 5, 4));
+        assert!(state_confident(true, 5, 5), "reconciled at the new epoch");
     }
 }

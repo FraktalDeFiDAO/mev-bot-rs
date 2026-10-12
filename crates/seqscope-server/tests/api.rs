@@ -111,6 +111,28 @@ impl H {
         }
     }
 
+    /// The row count once it has stopped changing (rows are written by a background thread, so a read straight after
+    /// feeding can land mid-write): the same value on three reads 100 ms apart, or the last read after 10 s.
+    fn settled_rows(&self) -> u64 {
+        let read = || {
+            Reader::open(self.dir.join("x.db"))
+                .and_then(|r| r.count())
+                .unwrap_or(0)
+        };
+        let end = Instant::now() + Duration::from_secs(10);
+        let (mut last, mut same) = (read(), 0);
+        while same < 3 && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(100));
+            let now = read();
+            if now == last {
+                same += 1;
+            } else {
+                (last, same) = (now, 0);
+            }
+        }
+        last
+    }
+
     /// Wait until the database holds at least `n` rows.
     fn wait_rows(&self, n: u64) -> u64 {
         let end = Instant::now() + Duration::from_secs(10);
@@ -812,7 +834,7 @@ async fn rules_are_added_switched_changed_and_removed_without_touching_text() {
     )
     .await;
     assert_eq!(s, StatusCode::OK);
-    let count = Reader::open(h.dir.join("x.db")).unwrap().count().unwrap();
+    let count = h.settled_rows();
     h.feed_corpus(600);
     std::thread::sleep(Duration::from_millis(300));
     assert_eq!(

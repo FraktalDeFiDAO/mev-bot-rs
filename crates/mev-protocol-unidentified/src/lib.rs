@@ -3,13 +3,22 @@
 //! contracts we do not control, which may change without notice. Kept apart so they can be renamed or dropped once
 //! identified. Both run one exact-input swap on one Uniswap-V3-style pool with a price limit.
 
+pub mod aa_bot;
+pub mod b04_bot;
+pub mod cycle_bot;
+pub mod dag_router;
+pub mod execute_trade;
+pub mod meta_swap;
 pub mod packed;
 pub mod packed_table;
+pub mod rfq_swap;
 pub mod router_f;
+pub mod router_h;
+pub mod v2_aggregator;
 pub mod v4_bots;
 
 use alloy::primitives::{Address, address};
-use mev_protocol::{Contract, Decoded, PoolRef, Protocol, SwapIntent, abi};
+use mev_protocol::{Contract, Decoded, PoolRef, PoolSet, Protocol, SwapIntent, abi};
 
 /// Selector `0xa00597a0`: `(amountIn, sqrtPriceLimitX96, tokenIn, flag, pool, deadline, ..)`.
 pub const ROUTER_A: Address = address!("278d858f05b94576C1E6f73285886876ff6eF8D2");
@@ -49,6 +58,11 @@ pub fn resolve_pool(a: Address) -> Address {
 
 pub const SELECTOR_A: [u8; 4] = [0xa0, 0x05, 0x97, 0xa0];
 pub const SELECTOR_B: [u8; 4] = [0x00, 0x00, 0x00, 0xe7];
+/// Router A's Uniswap-V2-pair variant `0x95435ac9`: `(amountIn, w1, tokenIn, token0In, 99700, pair, deadline)` plus a
+/// trailing byte. Measured 2026-10-10 on 40 of 40 landed calls against the pair's own `Swap` event: pair, input token
+/// and direction exact (`token0In` = 1 when token0 goes in); `amountIn` is within 1e-11 of the amount the pair received
+/// (the contract trims a few wei); `w1` is not a price limit (V2 has none), so none is reported.
+pub const SELECTOR_A_V2: [u8; 4] = [0x95, 0x43, 0x5a, 0xc9];
 
 pub struct Unidentified;
 
@@ -70,6 +84,16 @@ impl Protocol for Unidentified {
                 token_in: abi::addr(d, 2)?,
                 pool: PoolRef::Address(abi::addr(d, 4)?),
                 hops: 1,
+                amount_out_exact: None,
+            }
+        } else if to == ROUTER_A && sel == SELECTOR_A_V2 {
+            SwapIntent {
+                amount_in: abi::uint(d, 0)?,
+                sqrt_limit_x96: None,
+                token_in: abi::addr(d, 2)?,
+                pool: PoolRef::Address(abi::addr(d, 5)?),
+                hops: 1,
+                amount_out_exact: None,
             }
         } else if to == ROUTER_B && sel == SELECTOR_B {
             SwapIntent {
@@ -78,11 +102,26 @@ impl Protocol for Unidentified {
                 sqrt_limit_x96: Some(abi::uint(d, 3)?),
                 token_in: abi::addr(d, 4)?,
                 hops: 1,
+                amount_out_exact: None,
             }
         } else if to == ROUTER_A && sel == v4_bots::SELECTOR_A_V4 {
             v4_bots::decode_a_v4(d)?
         } else if to == v4_bots::ROUTER_E {
             v4_bots::decode_e(sel, d)?
+        } else if to == dag_router::ROUTER_G {
+            dag_router::decode(sel, d)?
+        } else if to == cycle_bot::BOT {
+            cycle_bot::decode(sel, d)?
+        } else if to == meta_swap::ROUTER {
+            meta_swap::decode(sel, d)?
+        } else if to == rfq_swap::ROUTER {
+            rfq_swap::decode(sel, d)?
+        } else if to == execute_trade::BOT {
+            execute_trade::decode(sel, d)?
+        } else if to == v2_aggregator::ROUTER {
+            v2_aggregator::decode(sel, d)?
+        } else if to == router_h::ROUTER_H {
+            router_h::decode(sel, d)?
         } else if to == router_f::ROUTER_F {
             router_f::decode(sel, d)?
         } else {
@@ -91,11 +130,45 @@ impl Protocol for Unidentified {
         Some(Decoded::Swap(swap))
     }
 
+    fn decode_calls(&self, to: Address, input: &[u8]) -> Vec<Decoded> {
+        let mut out: Vec<Decoded> = self.decode_call(to, input).into_iter().collect();
+        // Bots that name every pool of a cycle: the exact first hop (where known) plus the set, which a rival's pending
+        // transaction would move. The sets are not exact (see each module for the measured precision and recall).
+        if to == b04_bot::BOT
+            && let Some(pools) = b04_bot::pools(input)
+        {
+            out.push(Decoded::Pools(PoolSet {
+                protocol: "unidentified",
+                pools,
+            }));
+        }
+        if let Some((sel, d)) = abi::split(input) {
+            let set = if to == cycle_bot::BOT {
+                cycle_bot::pools(sel, d)
+            } else if to == aa_bot::BOT {
+                aa_bot::pools(input)
+            } else if to == router_f::ROUTER_F {
+                router_f::pools(sel, d)
+            } else if to == router_h::ROUTER_H {
+                router_h::pools(sel, d)
+            } else {
+                None
+            };
+            if let Some(pools) = set {
+                out.push(Decoded::Pools(PoolSet {
+                    protocol: "unidentified",
+                    pools,
+                }));
+            }
+        }
+        out
+    }
+
     fn contracts(&self) -> Vec<Contract> {
         vec![
             Contract {
                 address: ROUTER_A,
-                name: "unidentified, selectors a00597a0 (V3) and 669dc5b6 (V4)",
+                name: "unidentified, selectors a00597a0 (V3), 95435ac9 (V2) and 669dc5b6 (V4)",
                 decoded: true,
             },
             Contract {
@@ -109,8 +182,53 @@ impl Protocol for Unidentified {
                 decoded: true,
             },
             Contract {
+                address: dag_router::ROUTER_G,
+                name: "unidentified aggregator, dagSwapByOrderId (f2c42696) decoded to its tokens",
+                decoded: true,
+            },
+            Contract {
+                address: b04_bot::BOT,
+                name: "unidentified packed MEV bot (salted selector): the pools it names; no exact swap",
+                decoded: true,
+            },
+            Contract {
+                address: aa_bot::BOT,
+                name: "unidentified packed MEV bot (7ef88937): the pools it declares; no exact swap",
+                decoded: true,
+            },
+            Contract {
+                address: cycle_bot::BOT,
+                name: "unidentified cycle-arbitrage bot (c1c0e9c4): first pool, token and amount of the base layout",
+                decoded: true,
+            },
+            Contract {
+                address: meta_swap::ROUTER,
+                name: "meta-aggregator router (5f575529): tokens and amount; the aggregator's own call is not read",
+                decoded: true,
+            },
+            Contract {
+                address: rfq_swap::ROUTER,
+                name: "unidentified quote-based swap router (f3efe779): tokens and amount",
+                decoded: true,
+            },
+            Contract {
+                address: execute_trade::BOT,
+                name: "unidentified arbitrage bot, executeTrade (b4b9c57b): pair, fee, token and amount",
+                decoded: true,
+            },
+            Contract {
+                address: v2_aggregator::ROUTER,
+                name: "unidentified aggregator, exactInputV2Swap (0dc4bdae) and exactInputV3Swap (b9b5149b): token, amount and first pool",
+                decoded: true,
+            },
+            Contract {
+                address: router_h::ROUTER_H,
+                name: "unidentified packed bot, selector 00000001 (one pool, token and amount decoded; other legs not)",
+                decoded: true,
+            },
+            Contract {
                 address: router_f::ROUTER_F,
-                name: "unidentified packed bot (00000002 V3, 00000011 V4 decoded; 00000001 multi-leg not)",
+                name: "unidentified packed bot (00000002 V3, 00000011 V4, 00000001 V2 legs decoded; other 00000001 shapes not)",
                 decoded: true,
             },
             Contract {
@@ -171,6 +289,35 @@ mod tests {
         assert_eq!(s.amount_in, U256::from(0x2678e8e1de7d99u64));
         assert_eq!(s.sqrt_limit_x96, Some(U256::from(7_777u64)));
     }
+
+    #[test]
+    fn router_a_v2_variant_names_the_pair_token_and_amount() {
+        // Landed call 0x7f20c845...: 15.2 token swapped on a V2 pair; the pair's Swap event agreed on all three.
+        let pair = address!("b7e50106a5bd3cf21af210a755f9c8740890a8c9");
+        let tok = address!("539bde0d7dbd336b79148aa742883198bbf60342");
+        let input = call(
+            SOME_V2,
+            vec![
+                w(U256::from(0xd25bb5c30d8a9b560u128)),
+                w(U256::from(0x1cc9f0a45aaebabffa7d16au128)),
+                wa(tok),
+                w(U256::from(1)),
+                w(U256::from(99_700u64)),
+                wa(pair),
+                w(U256::from(0x6ac980b9u64)),
+                vec![0x0f],
+            ],
+        );
+        let s = swap(Unidentified.decode_call(ROUTER_A, &input));
+        assert_eq!(s.pool, PoolRef::Address(pair));
+        assert_eq!(s.token_in, tok);
+        assert_eq!(s.amount_in, U256::from(0xd25bb5c30d8a9b560u128));
+        assert_eq!(s.sqrt_limit_x96, None);
+        // Only router A answers to this selector.
+        assert!(Unidentified.decode_call(ROUTER_B, &input).is_none());
+    }
+
+    const SOME_V2: [u8; 4] = SELECTOR_A_V2;
 
     #[test]
     fn router_b_reads_pool_amount_limit_and_token() {

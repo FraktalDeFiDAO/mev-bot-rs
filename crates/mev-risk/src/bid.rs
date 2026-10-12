@@ -74,28 +74,95 @@ pub enum Decision {
     Skip(Skip),
 }
 
+/// Integer admission inputs. Prices are micro-USD per native coin; gas and fees stay raw.
+#[derive(Debug, Clone, Copy)]
+pub struct IntegerBidInput {
+    pub gross_profit_microusd: u64,
+    pub gas_units: u64,
+    pub base_fee_wei: u128,
+    pub native_price_microusd: u64,
+    pub competition_tip_wei: Option<u128>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IntegerBidPolicy {
+    pub max_fraction_bps: u32,
+    pub max_tip_microusd: u64,
+    pub min_net_microusd: u64,
+    pub min_tip_wei: u128,
+    pub default_tip_wei: u128,
+    pub outbid_margin_bps: u64,
+}
+
 impl BidPolicy {
-    /// Decide whether and how much to bid for `x`.
+    /// Legacy config boundary. Compile once at startup; execution uses IntegerBidPolicy.
+    pub fn integer(&self) -> Result<IntegerBidPolicy, crate::Block> {
+        if !self.max_fraction_of_net.is_finite()
+            || !(0.0..=1.0).contains(&self.max_fraction_of_net)
+            || !self.outbid_margin.is_finite()
+            || !(0.0..=1e8).contains(&self.outbid_margin)
+        {
+            return Err(crate::Block::InvalidInput);
+        }
+        Ok(IntegerBidPolicy {
+            max_fraction_bps: (self.max_fraction_of_net * 10_000.0).floor() as u32,
+            max_tip_microusd: crate::limit_microusd(self.max_tip_usd_per_tx)?,
+            min_net_microusd: crate::cost_microusd(self.min_net_usd)?,
+            min_tip_wei: self.min_tip_wei,
+            default_tip_wei: self.default_tip_wei,
+            outbid_margin_bps: (self.outbid_margin * 10_000.0).ceil() as u64,
+        })
+    }
+
+    /// Compatibility for research and old callers. Not used by live engine execution.
     pub fn decide(&self, x: &BidInput) -> Decision {
-        if x.gas_units == 0 || !(x.usd_per_wei.is_finite() && x.usd_per_wei > 0.0) {
+        let (Ok(policy), Ok(price), Ok(gross)) = (
+            self.integer(),
+            crate::cost_microusd(x.usd_per_wei * 1e18),
+            crate::limit_microusd(x.gross_profit_usd),
+        ) else {
+            return Decision::Skip(Skip::InvalidInput);
+        };
+        policy.decide(&IntegerBidInput {
+            gross_profit_microusd: gross,
+            gas_units: x.gas_units,
+            base_fee_wei: x.base_fee_wei,
+            native_price_microusd: price,
+            competition_tip_wei: x.competition_tip_wei,
+        })
+    }
+}
+
+impl IntegerBidPolicy {
+    pub fn decide(&self, x: &IntegerBidInput) -> Decision {
+        if x.gas_units == 0 || x.native_price_microusd == 0 || self.max_fraction_bps > 10_000 {
             return Decision::Skip(Skip::InvalidInput);
         }
-        let gas = x.gas_units as f64;
-        let base_cost_usd = gas * x.base_fee_wei as f64 * x.usd_per_wei;
-        let net_usd = x.gross_profit_usd - base_cost_usd;
-        if net_usd.is_nan() || net_usd <= self.min_net_usd {
-            return Decision::Skip(Skip::NotProfitable { net_usd });
+        let Ok(base_cost) =
+            crate::ledger::native_cost(x.gas_units, x.base_fee_wei, x.native_price_microusd)
+        else {
+            return Decision::Skip(Skip::InvalidInput);
+        };
+        let net = i128::from(x.gross_profit_microusd) - i128::from(base_cost);
+        if net <= i128::from(self.min_net_microusd) {
+            return Decision::Skip(Skip::NotProfitable {
+                net_usd: net as f64 / 1_000_000.0,
+            });
         }
-        // Budget: a share of net, the hard cap, and never below the profit floor after the tip.
-        let budget_usd = (net_usd * self.max_fraction_of_net.clamp(0.0, 1.0))
-            .min(self.max_tip_usd_per_tx)
-            .min(net_usd - self.min_net_usd)
-            .max(0.0);
-        let max_wei = (budget_usd / (gas * x.usd_per_wei)).floor() as u128;
+        let budget = (net * i128::from(self.max_fraction_bps) / 10_000)
+            .min(i128::from(self.max_tip_microusd))
+            .min(net - i128::from(self.min_net_microusd)) as u128;
+        let denominator = u128::from(x.gas_units) * u128::from(x.native_price_microusd);
+        let max_wei = budget * 1_000_000_000_000_000_000u128 / denominator;
         let tip = match x.competition_tip_wei {
             Some(c) => {
-                let needed = ((c as f64) * (1.0 + self.outbid_margin.max(0.0))).ceil() as u128 + 1;
-                let needed = needed.max(self.min_tip_wei);
+                let Some(scaled) = c
+                    .checked_mul(10_000 + u128::from(self.outbid_margin_bps))
+                    .and_then(|n| n.div_ceil(10_000).checked_add(1))
+                else {
+                    return Decision::Skip(Skip::InvalidInput);
+                };
+                let needed = scaled.max(self.min_tip_wei);
                 if needed > max_wei {
                     return Decision::Skip(Skip::OutbidTooExpensive {
                         needed_wei: needed,
@@ -104,7 +171,6 @@ impl BidPolicy {
                 }
                 needed
             }
-            // No competition data: the default, within budget.
             None => self.default_tip_wei.max(self.min_tip_wei).min(max_wei),
         };
         if tip < self.min_tip_wei {
@@ -113,14 +179,24 @@ impl BidPolicy {
                 max_wei,
             });
         }
-        let tip_cost_usd = gas * tip as f64 * x.usd_per_wei;
+        let Ok(tip_cost) = crate::ledger::native_cost(x.gas_units, tip, x.native_price_microusd)
+        else {
+            return Decision::Skip(Skip::InvalidInput);
+        };
+        let Some(max_fee) = x
+            .base_fee_wei
+            .checked_mul(2)
+            .and_then(|base| base.checked_add(tip))
+        else {
+            return Decision::Skip(Skip::InvalidInput);
+        };
         Decision::Bid(Bid {
             max_priority_fee_per_gas: tip,
-            max_fee_per_gas: x.base_fee_wei.saturating_mul(2).saturating_add(tip),
-            base_cost_usd,
-            tip_cost_usd,
-            net_after_tip_usd: net_usd - tip_cost_usd,
-            fraction_of_net: tip_cost_usd / net_usd,
+            max_fee_per_gas: max_fee,
+            base_cost_usd: base_cost as f64 / 1_000_000.0,
+            tip_cost_usd: tip_cost as f64 / 1_000_000.0,
+            net_after_tip_usd: (net - i128::from(tip_cost)) as f64 / 1_000_000.0,
+            fraction_of_net: tip_cost as f64 / net as f64,
         })
     }
 }
@@ -210,73 +286,9 @@ impl TipBook {
     }
 }
 
-/// Priority-fee spend caps per rolling minute and per UTC day, USD.
-#[derive(Debug, Clone)]
-pub struct TipBudget {
-    per_minute_usd: f64,
-    per_day_usd: f64,
-    minute: VecDeque<(u64, f64)>,
-    day: u64,
-    day_spent: f64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TipCap {
-    PerMinute { spent_usd: f64 },
-    PerDay { spent_usd: f64 },
-}
-
-impl TipBudget {
-    pub fn new(per_minute_usd: f64, per_day_usd: f64) -> Self {
-        Self {
-            per_minute_usd,
-            per_day_usd,
-            minute: VecDeque::new(),
-            day: 0,
-            day_spent: 0.0,
-        }
-    }
-
-    /// May a bid costing `tip_usd` be placed now?
-    pub fn allow(&mut self, tip_usd: f64, now_secs: u64) -> Result<(), TipCap> {
-        self.roll(now_secs);
-        let minute: f64 = self.minute.iter().map(|(_, u)| u).sum();
-        if minute + tip_usd > self.per_minute_usd {
-            return Err(TipCap::PerMinute { spent_usd: minute });
-        }
-        if self.day_spent + tip_usd > self.per_day_usd {
-            return Err(TipCap::PerDay {
-                spent_usd: self.day_spent,
-            });
-        }
-        Ok(())
-    }
-
-    /// Count `tip_usd` as spent (at placement: a placed bid's fee is paid if it is included).
-    pub fn record(&mut self, tip_usd: f64, now_secs: u64) {
-        self.roll(now_secs);
-        self.minute.push_back((now_secs, tip_usd));
-        self.day_spent += tip_usd;
-    }
-
-    fn roll(&mut self, now_secs: u64) {
-        while self
-            .minute
-            .front()
-            .is_some_and(|(t, _)| now_secs.saturating_sub(*t) >= 60)
-        {
-            self.minute.pop_front();
-        }
-        let day = now_secs / 86_400;
-        if day != self.day {
-            self.day = day;
-            self.day_spent = 0.0;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
+
     #[test]
     fn a_route_with_history_is_priced_by_its_own_winners() {
         let m = Some(20_000_000);
@@ -407,25 +419,6 @@ mod tests {
         assert_eq!(t.estimate(1.0, 10), Some(100));
         // All older than the horizon: no estimate (fall back to the default tip).
         assert_eq!(t.estimate(0.5, 10_000), None);
-    }
-
-    #[test]
-    fn tip_budget_caps_per_minute_and_per_day() {
-        let mut b = TipBudget::new(1.0, 2.5);
-        let t0 = 86_400 * 10;
-        assert!(b.allow(0.6, t0).is_ok());
-        b.record(0.6, t0);
-        assert!(matches!(
-            b.allow(0.6, t0 + 30),
-            Err(TipCap::PerMinute { .. })
-        ));
-        // A minute later the window has rolled.
-        assert!(b.allow(0.6, t0 + 61).is_ok());
-        b.record(0.6, t0 + 61);
-        b.record(0.9, t0 + 130);
-        assert!(matches!(b.allow(0.5, t0 + 200), Err(TipCap::PerDay { .. })));
-        // Next UTC day resets.
-        assert!(b.allow(0.5, t0 + 86_400).is_ok());
     }
 
     #[test]

@@ -108,6 +108,7 @@ fn every_transaction_produces_at_least_one_call_and_every_row_is_well_formed() {
                 "swap",
                 "liquidity",
                 "liquidation",
+                "pools",
                 "undecoded_known",
                 "unknown"
             ]
@@ -426,7 +427,8 @@ proptest! {
         let rules = vec![rule("a", pick(a), ActionKind::Store, 1), rule("b", pick(b), ActionKind::Store, 1), rule("c", pick(c), ActionKind::Store, 1)];
         let all = engine(rules.clone(), Mode::All);
         let first = engine(rules, Mode::First);
-        let key = |r: &Row| (r.hash, r.to.clone(), r.selector.clone(), r.rule.clone());
+        // The kind is part of the identity: one call can yield an exact swap and the pool set it names.
+        let key = |r: &Row| (r.hash, r.to.clone(), r.selector.clone(), r.rule.clone(), r.kind.clone());
         for t in corpus().iter().step_by(7) {
             let a_rows: HashSet<_> = all.process(t).iter().map(key).collect();
             let f_rows = first.process(t);

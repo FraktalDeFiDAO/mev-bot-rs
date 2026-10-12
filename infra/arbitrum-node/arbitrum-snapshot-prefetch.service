@@ -1,0 +1,13 @@
+[Unit]
+Description=Migration-only range prefetch of snapshot part one
+RequiresMountsFor=/data/arbitrum
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=1000
+Group=1000
+ExecStart=/usr/bin/python3 /opt/arbitrum-volume-migration/arbitrum-prefetch-part-one.py
+TimeoutStartSec=infinity
+TimeoutStopSec=60
+# Deliberately not enabled: used once while replaying part zero from old EBS.

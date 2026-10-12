@@ -71,6 +71,7 @@ pub(crate) fn v4_swap(
         amount_in,
         sqrt_limit_x96: non_zero(limit),
         hops: 1,
+        amount_out_exact: None,
     })
 }
 
@@ -113,6 +114,7 @@ pub fn decode_e(sel: [u8; 4], d: &[u8]) -> Option<SwapIntent> {
             amount_in: abi::uint(d, 4)?,
             sqrt_limit_x96: non_zero(abi::uint(d, 6)?),
             hops: 1,
+            amount_out_exact: None,
         });
     }
     if sel != SELECTOR_E_V4 {

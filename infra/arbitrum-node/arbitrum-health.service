@@ -1,0 +1,10 @@
+[Unit]
+Description=Validate Arbitrum RPC chain, WebSocket and block progress
+ConditionPathExists=/run/arbitrum/mode
+After=arbitrum-nitro.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/grep -qx full-node /run/arbitrum/mode
+ExecStart=/usr/local/bin/arbitrum-status --validate 600
+TimeoutStartSec=12min

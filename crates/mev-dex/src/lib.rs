@@ -5,7 +5,10 @@
 
 use std::sync::Arc;
 
+use alloy::primitives::U256;
 use mev_types::{Address, PoolInfo, PoolKind};
+
+pub mod exact;
 
 const Q96: f64 = 79_228_162_514_264_337_593_543_950_336.0; // 2^96
 
@@ -32,6 +35,53 @@ pub struct TickMap {
     /// boundary cannot be told apart from just above or below it in f64, so while the pool's price
     /// is still this one the on-chain tick decides which side it is on.
     pub hint: Option<(f64, i32)>,
+    /// The same `(tick, liquidityNet)` table as exact integers (`liquidityNet` is an int128, which
+    /// `f64` cannot hold), maintained alongside `ticks` for the exact re-quote (invariant 1).
+    pub exact: Vec<(i32, i128)>,
+}
+
+/// A pool's on-chain state as exact integers, kept next to the `f64` model and set only from raw
+/// reads or events. `None` on a pool means the exact state is unknown and exact re-quotes refuse.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExactState {
+    V2 {
+        reserve0: U256,
+        reserve1: U256,
+    },
+    /// Camelot V2 (volatile): reserves plus the per-direction fee, in 1/100_000 (`token0FeePercent` /
+    /// `token1FeePercent`), which is what the pair's own `getAmountOut` uses.
+    V2Fee {
+        reserve0: U256,
+        reserve1: U256,
+        fee0: u32,
+        fee1: u32,
+    },
+    V3 {
+        sqrt_price: U256,
+        tick: i32,
+        liquidity: u128,
+    },
+    /// Camelot V3 (Algebra): the price state plus the **largest fee** the pool's adaptive-fee configuration can
+    /// ever charge per direction (`baseFee + alpha1 + alpha2` of `DataStorageOperator.feeConfig*`, in 1/1e6). The
+    /// actual fee is recomputed from oracle history by the first swap of each block, so only the output at the
+    /// maximum fee is a certain **lower bound** (output falls as fee rises); see `exact_amount_out_bound`.
+    Algebra {
+        sqrt_price: U256,
+        tick: i32,
+        liquidity: u128,
+        max_fee_zero_for_one: u32,
+        max_fee_one_for_zero: u32,
+    },
+    /// Uniswap V4 hookless pool, in the **pool's own** orientation (currency0/currency1), whatever order
+    /// the bot stores its tokens in (a price flipped to our order is not an integer). Fees are per
+    /// direction, in hundredths of a bip, as the manager charges them (protocol and LP compounded).
+    V4 {
+        sqrt_price: U256,
+        tick: i32,
+        liquidity: u128,
+        fee_zero_for_one: u32,
+        fee_one_for_zero: u32,
+    },
 }
 
 /// Result of walking a swap through the loaded ticks.
@@ -53,6 +103,8 @@ pub struct Pool {
     /// Fee fraction charged when token0 / token1 is the input (e.g. 0.003).
     pub fee0: f64,
     pub fee1: f64,
+    /// Exact integer state (see `ExactState`). Cleared by anything that cannot keep it exact.
+    pub exact: Option<ExactState>,
 }
 
 impl Pool {
@@ -71,12 +123,278 @@ impl Pool {
             state,
             fee0: fee,
             fee1: fee,
+            exact: None,
         }
     }
 
     pub fn with_ticks(mut self, ticks: TickMap) -> Self {
         self.ticks = Some(Arc::new(ticks));
         self
+    }
+
+    pub fn with_exact(mut self, exact: ExactState) -> Self {
+        self.exact = Some(exact);
+        self
+    }
+
+    /// Mid-price and depth from canonical integer state; floats never vouch for a price.
+    pub fn integer_rate(&self, token_in: Address) -> Option<(mev_types::price::Ratio, U256)> {
+        use alloy::primitives::U512;
+        use mev_types::price::Ratio;
+        if !self.info.has(token_in) {
+            return None;
+        }
+        let logical_zero = token_in == self.info.token0;
+        match self.exact.as_ref()? {
+            ExactState::V2 { reserve0, reserve1 }
+            | ExactState::V2Fee {
+                reserve0, reserve1, ..
+            } => {
+                let (rin, rout) = if logical_zero {
+                    (*reserve0, *reserve1)
+                } else {
+                    (*reserve1, *reserve0)
+                };
+                Some((Ratio::new(U512::from(rout), U512::from(rin))?, rin))
+            }
+            ExactState::V3 {
+                sqrt_price,
+                liquidity,
+                ..
+            }
+            | ExactState::Algebra {
+                sqrt_price,
+                liquidity,
+                ..
+            }
+            | ExactState::V4 {
+                sqrt_price,
+                liquidity,
+                ..
+            } => {
+                if *liquidity == 0
+                    || *sqrt_price < U256::from(exact::MIN_SQRT_RATIO)
+                    || *sqrt_price >= exact::max_sqrt()
+                {
+                    return None;
+                }
+                let physical_zero =
+                    logical_zero ^ matches!(self.info.kind, PoolKind::UniV4 { flipped: true, .. });
+                let p = U512::from(*sqrt_price);
+                let q = U512::from(exact::Q96);
+                let p0 = Ratio::new(p.checked_mul(p)?, q.checked_mul(q)?)?;
+                let depth_rate = if physical_zero {
+                    Ratio::new(q, p)?
+                } else {
+                    Ratio::new(p, q)?
+                };
+                let depth = depth_rate.value(U256::from(*liquidity), false)?;
+                Some((if physical_zero { p0 } else { p0.inverse() }, depth))
+            }
+        }
+    }
+
+    /// The protocol-exact output of `amount_in` of `token_in`, or `None` when the exact state is not
+    /// known, the pool type is not modelled exactly (Camelot, Algebra, V4), or a V3 swap would leave the
+    /// loaded tick window. Never an estimate: a `Some` equals what the contract computes from this state.
+    pub fn exact_amount_out(&self, token_in: Address, amount_in: U256) -> Option<U256> {
+        let zero_for_one = token_in == self.info.token0;
+        match (self.exact.as_ref()?, self.info.kind) {
+            (ExactState::V2 { reserve0, reserve1 }, PoolKind::UniV2 { fee_bps }) => {
+                let (rin, rout) = if zero_for_one {
+                    (*reserve0, *reserve1)
+                } else {
+                    (*reserve1, *reserve0)
+                };
+                exact::v2_amount_out(
+                    amount_in,
+                    rin,
+                    rout,
+                    10_000u64.checked_sub(fee_bps as u64)?,
+                    10_000,
+                )
+            }
+            (
+                ExactState::V2Fee {
+                    reserve0,
+                    reserve1,
+                    fee0,
+                    fee1,
+                },
+                PoolKind::CamelotV2,
+            ) => {
+                let (rin, rout, fee) = if zero_for_one {
+                    (*reserve0, *reserve1, *fee0)
+                } else {
+                    (*reserve1, *reserve0, *fee1)
+                };
+                exact::v2_amount_out(
+                    amount_in,
+                    rin,
+                    rout,
+                    100_000u64.checked_sub(u64::from(fee))?,
+                    100_000,
+                )
+            }
+            (
+                ExactState::V3 {
+                    sqrt_price,
+                    tick,
+                    liquidity,
+                },
+                PoolKind::UniV3 { fee } | PoolKind::PancakeV3 { fee },
+            ) => self.exact_v3_walk(
+                *sqrt_price,
+                *tick,
+                *liquidity,
+                fee,
+                zero_for_one,
+                false,
+                amount_in,
+            ),
+            (
+                ExactState::V4 {
+                    sqrt_price,
+                    tick,
+                    liquidity,
+                    fee_zero_for_one,
+                    fee_one_for_zero,
+                },
+                PoolKind::UniV4 { flipped, .. },
+            ) => {
+                // Our token0 is the pool's currency1 when flipped.
+                let native_zfo = zero_for_one != flipped;
+                let fee = if native_zfo {
+                    *fee_zero_for_one
+                } else {
+                    *fee_one_for_zero
+                };
+                self.exact_v3_walk(
+                    *sqrt_price,
+                    *tick,
+                    *liquidity,
+                    fee,
+                    native_zfo,
+                    flipped,
+                    amount_in,
+                )
+            }
+            _ => None,
+        }
+    }
+
+    /// Like `exact_amount_out`, but also prices pools whose fee is not known in advance. The flag says whether the
+    /// number is the contract's exact output (`true`) or a guaranteed **lower bound** on it (`false`: Algebra, quoted
+    /// at its maximum possible fee). A route whose lower-bound profit is positive is profitable whatever the fee.
+    pub fn exact_amount_out_bound(
+        &self,
+        token_in: Address,
+        amount_in: U256,
+    ) -> Option<(U256, bool)> {
+        if let Some(out) = self.exact_amount_out(token_in, amount_in) {
+            return Some((out, true));
+        }
+        let ExactState::Algebra {
+            sqrt_price,
+            tick,
+            liquidity,
+            max_fee_zero_for_one,
+            max_fee_one_for_zero,
+        } = self.exact.as_ref()?
+        else {
+            return None;
+        };
+        if !matches!(self.info.kind, PoolKind::AlgebraV3) {
+            return None;
+        }
+        let zero_for_one = token_in == self.info.token0;
+        let fee = if zero_for_one {
+            *max_fee_zero_for_one
+        } else {
+            *max_fee_one_for_zero
+        };
+        // Algebra's tick table is not compressed by spacing (spacing 1 = row of 256 ticks), and a missing tick
+        // map means the window is unknown: refuse rather than assume a bucket.
+        self.ticks.as_ref()?;
+        self.exact_v3_walk_with_spacing(
+            1,
+            *sqrt_price,
+            *tick,
+            *liquidity,
+            fee,
+            zero_for_one,
+            false,
+            amount_in,
+        )
+        .map(|out| (out, false))
+    }
+
+    /// Exact V3-style walk. `mirrored`: the tick table is stored for our flipped token order
+    /// (`tick -> -tick`, `net -> -net`, window swapped), so it is turned back into the pool's own first.
+    #[allow(clippy::too_many_arguments)]
+    fn exact_v3_walk(
+        &self,
+        sqrt_price: U256,
+        tick: i32,
+        liquidity: u128,
+        fee_pips: u32,
+        native_zero_for_one: bool,
+        mirrored: bool,
+        amount_in: U256,
+    ) -> Option<U256> {
+        let spacing = tick_spacing(&self.info.kind) as i32;
+        self.exact_v3_walk_with_spacing(
+            spacing,
+            sqrt_price,
+            tick,
+            liquidity,
+            fee_pips,
+            native_zero_for_one,
+            mirrored,
+            amount_in,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn exact_v3_walk_with_spacing(
+        &self,
+        spacing: i32,
+        sqrt_price: U256,
+        tick: i32,
+        liquidity: u128,
+        fee_pips: u32,
+        native_zero_for_one: bool,
+        mirrored: bool,
+        amount_in: U256,
+    ) -> Option<U256> {
+        let (ticks, lo, hi) = match self.ticks.as_deref() {
+            Some(m) if mirrored => {
+                let mut t: Vec<(i32, i128)> = m
+                    .exact
+                    .iter()
+                    .map(|&(k, n)| n.checked_neg().map(|n| (-k, n)))
+                    .collect::<Option<Vec<_>>>()?;
+                t.sort_by_key(|(k, _)| *k);
+                (t, -m.hi, -m.lo)
+            }
+            Some(m) => (m.exact.clone(), m.lo, m.hi),
+            None => {
+                let lo = tick.div_euclid(spacing) * spacing;
+                (Vec::new(), lo, lo + spacing)
+            }
+        };
+        let pool = exact::V3Exact {
+            sqrt_price,
+            tick,
+            liquidity,
+            fee_pips,
+            spacing,
+            ticks,
+            lo,
+            hi,
+        };
+        let r = pool.swap_exact_in(native_zero_for_one, amount_in, None)?;
+        (r.complete && r.amount_in == amount_in).then_some(r.amount_out)
     }
 
     pub fn with_directional_fees(mut self, fee0: f64, fee1: f64) -> Self {
@@ -352,7 +670,8 @@ pub fn tick_spacing(kind: &PoolKind) -> u32 {
             10000 => 200,
             f => (f / 50).max(1),
         },
-        PoolKind::AlgebraV3 => 60,
+        // Camelot's deployment (read from two live pools, 2026-10-11) uses spacing 10, not Algebra's default 60.
+        PoolKind::AlgebraV3 => 10,
         PoolKind::UniV4 { tick_spacing, .. } => tick_spacing.max(1),
         PoolKind::UniV2 { .. } | PoolKind::CamelotV2 => 1,
     }
@@ -435,6 +754,7 @@ mod tests {
         p.fee0 = 0.0;
         p.fee1 = 0.0;
         p.with_ticks(TickMap {
+            exact: Vec::new(),
             // At -200 and 200 liquidity goes to 0; at -100 and 100 it steps by 2e6.
             ticks: vec![(-200, 3e6), (-100, -2e6), (100, -2e6), (200, -3e6)],
             lo: -300,
@@ -593,6 +913,7 @@ mod tests {
             p.fee0 = 0.0;
             p.fee1 = 0.0;
             p.with_ticks(TickMap {
+                exact: Vec::new(),
                 ticks: vec![(0, 1e6), (100, -1e6)],
                 lo: -300,
                 hi: 300,

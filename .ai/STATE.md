@@ -1,42 +1,24 @@
 # Session state
 
-Read this plus `CLAUDE.md` to resume. Rewrite at every breakpoint; keep under ~400 words.
+**Updated:** 2026-10-11. Active request: full audit → **fix all issues** → continue. Work is ongoing; do not claim all findings closed or stop at a plan. CWD `/home/admministrator/projects/mev-bot`, branch `fix/audit-2026-10-10`, baseline HEAD `08d80455b8e1a16cc6fb4d7416ac24a4c4d0fa56`. No commit/push/deployment, live signing, production key access or funding performed.
 
----
+Read CLAUDE.md, .ai/CONTEXT_POLICY.md, docs/PROGRESS.md and sequencer-first invariants. User authorizes local fixes. Repository requires owner go for deployments; prepare reviewed concrete changes first. No subagents unless explicitly requested by user/AGENTS/skill; none spawned. Diagnosing-bugs skill applied. Code-review skill inspected but not applied (fixed-point committed diff workflow does not match this uncommitted patch).
 
-**Updated:** 2026-10-07
-**Running:** LIVE on AWS us-east-2 `mev-ohio:~/src/mev-bot` (sole host; Contabo stopped, rollback only),
-build from `main` (see `git log`; deploy tags `deploy-YYYYMMDD-HHMMSS`). Hot wallet ~0.005 ETH (low).
-**Executor:** `0x17357E33012e8c05E654a7D1CC7D9dedd6B63acf` (redeployed 2026-10-06: V4 hops, `batch`,
-`liquidateViaAave`, flash swaps). `executor_v4 = true`, `executor_batch = true`; `[batch] enabled = false`.
-**On:** PGA bidding + per-route tip books, win-rate gate (#54), sim back-off for failed routes (120 s),
-V4 (79 hookless pools, `presimulate = true`, `ModifyLiquidity` applied), tick-aware V3/Pancake/V4
-pricing (`[ticks]`, window ±800, reload 300 s), triangles (~62k cycles), V4 race detection.
-**Observe-only:** Atlas solver (`[atlas] enabled, bid=false`; needs ~0.1 ETH bond, `docs/research/ATLAS.md`).
-**Deploy:** `scripts/deploy.sh live --yes` builds from the working tree (stash `docs/knowledge/` first;
-run in background, it takes 10-15 min). The user merges PRs and runs `deploy-executor.sh` himself.
-**Ops:** `scripts/report.sh` (PnL, AWS spend, health), `scripts/watchdog.sh` (on the host: container,
-heartbeat, kill switch, wallet gas, cap events; optional webhook file `data/arbitrum/alert_webhook`),
-`scripts/test-e2e-crash.sh` (N borrowers liquidated in one crash, batching on).
-**RPC:** keyed Chainstack endpoints in `.env`; arb1 public RPC rate-limits the dev IP (Ohio is fine).
+Baseline: `docs/audits/2026-10-11-complete-audit.md` (27 findings), sanitised evidence/checksums under its evidence directory. **Current remediation/status:** `docs/audits/2026-10-11-remediation.md` — read this before closing findings. Full integer strategy math (H08), Atlas escrow liability/settlement (H10), hot-path purity (M07), full tip reservation and production migration/deployment/watchdog remain open.
 
-## Facts that decide what to build
+Implemented: durable integer ledger with pending/hash/nonce/from/native-price ownership, restart reconciliation, fail-closed/fsynced storage and locks; original-nonce broadcast and endless receipt reconciliation; signed term validation; maximum fee/gas floors; producer/pool/confidence/STOP checks at actual sign/broadcast; canonical block coherent state/ticks and reconnect subscription-first snapshot; V4 boundary updates; parser/SQL resource bounds; safe shadow credentials + disposable non-broadcast signer; CI suites/pins and operator guards; shared DTO layer + accounting module. See status document for precise limitations.
 
-- Results so far: ~180 landed sends, 0 wins, ~$4–5 gas+tips; net PnL negative (see `report.sh`).
-  Arbitrum orders each 125 ms round by priority fee; we land in the winners' round and lose on tips.
-- Real arb edges are $0.03–$0.8 and contested; the thin-pool "edges" were phantoms (DECISIONS #73).
-- Calm days have ~no liquidations reachable without the Atlas auction; crash days are the upside.
-- AWS: usage ≈ credits (net $0); Chainstack $49/mo is the real fixed cost. The stopped Nitro node's EBS
-  volumes live in another account (not visible from profile `mev-bot`): user to confirm they're deleted.
+Verification scratch `/tmp/mev-fix-*.log`. Contracts offline/full passed: runtime ArbExecutor 21,376 B, AtlasSolver 23,555 B. Browser passed 23 logic +17 browser, clean flush9,352/0 dropped. Targeted Rust passes; latest final term/policy checks still need result polling. Final workspace/CI/shell checks and evidence capture pending. Local historical shadow-presim log passed through redactor without printing contents; check result.
 
-## Open (needs the user)
+Huge generated docs/graph dirt and untracked infra/root nitro launcher existed before this work. Preserve it; stage only our files if committing. `scripts/graph.sh optimize` completed; rerun after final changes and record query2200/current scoped query result as useful. Build/test only via scripts/dev.sh (container has no rg). Never run bot on host. Production snapshot (read-only,13:17:33 UTC Oct11): cb248f59 checkout,47 reverts/0 wins/~$2.44 across Oct10–11; watchdog inactive and risk/tip/gate files absent. This is dated evidence, not a new production check.
 
-1. Atlas bond (~0.1 ETH) to bid on auctions; wallet top-up (watchdog alerts below 0.003 ETH).
-2. `[batch] enabled`: run `scripts/test-e2e-crash.sh` first, then decide.
-3. Fast Feed key; a second host only once there is profit to protect.
-4. Stopped-node disks and the `docs/knowledge/` untracked churn.
 
-## Next (engineering)
+## 2026-10-11 later session (continuation)
+Closed/advanced: H02 closed locally; H08 substantially done (exact module chain: mev-dex::exact → Pool.exact/TickMap.exact → mev-engine::exact_quote; Aave/Morpho/Fluid exact payouts; integer bid + gate); H10 mitigated by construction (bid refused); L01 documented acceptance (.cargo/audit.toml); M07 reduced. Workspace `cargo test` + `clippy -D warnings` green after these edits. Not done: production deployment (needs owner go), Atlas escrow settlement, Compound v3 exact sizing, search in integers, M07 worker design. Nothing committed.
 
-Watch for the first profitable landed arb or a V4 race with a known winner (`race` events);
-tune per-route bids from `route_tips`; consider tick-aware Algebra pools; liquidation census over more lenders.
+## 2026-10-11 third session
+Added: `mev-ledger-seed` (mev-analytics bin + `seed` module) and `docs/runbooks/live-cutover.md` (H01/M11 prep; nothing deployed); ledger admission no longer fsyncs (only `attach` does); Compound slippage floor 0.998; live differential test `mev-discovery/tests/exact_vs_quoter_live.rs` (integer V3 math == QuoterV2 on 4 mainnet pools, public RPC). Constraint: `.env` reads are denied to Claude; only public endpoints used. Still open: H10 settlement, Camelot/Algebra/V4 exact math, Compound exact quote plumbing, reorg/provider-failure tests, the deployment itself (operator).
+
+## 2026-10-11 fourth session
+V4 exact done (hookless, native orientation, events, flipped mirrored table) + word-boundary stepping in the integer walk (fixes unit mismatches on big moves for V3 and V4); engine skips V4 presimulate when exact_ok. Camelot V2 exact. Algebra deliberately left on eth_call (Camelot deployment differs from public source; fee is oracle-driven per block). Live tests (ignored, public RPC): exact_vs_quoter_live, exact_camelot_live, exact_v4_live (V4 first run scans manager history ~1 min, cache at data/.exact-v4-test-registry.json — delete after).
+Algebra (Camelot V3): sources found via Sourcify (verified), implemented as certain lower bound at max fee (ExactState::Algebra, Pool::exact_amount_out_bound, engine `exact_bound`); tick loader Style::Algebra (tickTable/ticks, spacing 1). Live test exact_algebra_live.rs. Remaining non-exact: only V4 hooked pools (not tracked at all) and stable Camelot pairs (dropped).

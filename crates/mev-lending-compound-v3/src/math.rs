@@ -6,7 +6,7 @@
 use alloy::primitives::Address;
 
 /// buyCollateral reverts if the quote exceeds available collateral; stay just under it.
-const QUOTE_HAIRCUT: f64 = 0.999;
+pub(crate) const QUOTE_HAIRCUT: f64 = 0.999;
 
 #[derive(Debug, Clone)]
 pub struct AssetParams {

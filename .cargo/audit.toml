@@ -1,0 +1,4 @@
+# All advisory categories remain visible. Upstream unmaintained notices are open findings,
+# not accepted exceptions. Do not suppress them without an explicit owner decision.
+[advisories]
+ignore = []

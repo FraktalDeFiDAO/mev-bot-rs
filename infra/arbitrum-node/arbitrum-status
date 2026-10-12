@@ -7,16 +7,14 @@ if [[ -z "$REFERENCE_RPC_URL" && -r /etc/arbitrum/nitro.env ]]; then
   REFERENCE_RPC_URL="$(sed -n 's/^ARBITRUM_REFERENCE_RPC_URL=//p' /etc/arbitrum/nitro.env | head -n1)"
 fi
 
-if [[ "${1:-}" == "--help" ]]; then
-  echo "Usage: arbitrum-status [--validate [timeout-seconds]]"
-  exit 0
-fi
+usage() { echo "Usage: arbitrum-status [--validate [timeout-seconds]]"; }
+if [[ "${1:-}" == "--help" ]]; then usage; exit 0; fi
 
 rpc() {
   local endpoint="$1" method="$2" payload
   payload="$(jq -cn --arg method "$method" '{jsonrpc:"2.0",id:1,method:$method,params:[]}')"
-  curl --fail --silent --show-error --max-time 8 \
-    -H 'content-type: application/json' --data "$payload" "$endpoint"
+  curl --fail --silent --show-error --max-time 8 -H 'content-type: application/json' \
+    --data "$payload" "$endpoint"
 }
 
 hex_to_dec() {
@@ -25,50 +23,54 @@ hex_to_dec() {
   printf '%d' "$((16#$value))"
 }
 
+ws_probe() {
+  curl --silent --show-error --max-time 3 --http1.1 -o /dev/null -w '%{http_code}' \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H 'Origin: http://localhost' \
+    http://127.0.0.1:8548 2>/dev/null || true
+}
+
 print_status() {
-  echo "=== Host ==="
+  echo '=== Host ==='
   uptime
   echo
-  echo "=== Nitro service/container ==="
+  echo '=== Nitro service/container ==='
+  systemctl --no-pager --full status arbitrum-snapshot-init.service 2>&1 | head -n 10 || true
+  [[ ! -r /data/arbitrum/snapshot-import-status.json ]] || cat /data/arbitrum/snapshot-import-status.json
+  [[ ! -r /run/arbitrum/mode ]] || echo "operation mode: $(cat /run/arbitrum/mode)"
   systemctl --no-pager --full status arbitrum-nitro.service 2>&1 | head -n 12 || true
   docker ps --filter name=arbitrum-nitro --format 'container={{.Names}} status={{.Status}} image={{.Image}}' 2>/dev/null || true
   echo
-  echo "=== Data volume ==="
+  echo '=== Data volume ==='
   findmnt --target /data/arbitrum -o SOURCE,FSTYPE,OPTIONS 2>&1 || true
   df -hT /data/arbitrum 2>&1 || true
-  du -sh /data/arbitrum/snapshot-download 2>/dev/null || true
+  find /data/arbitrum/snapshot-cache /data/arbitrum-old/snapshot-cache -maxdepth 1 -type f -name '*.tar.part*' -printf '%p %s bytes\n' 2>/dev/null || true
+  du -sh /data/arbitrum/nitro/tmp 2>/dev/null || true
+  if [[ -d /data/arbitrum/nitro/tmp ]]; then
+    echo 'Snapshot files (current downloaded byte counts):'
+    find /data/arbitrum/nitro/tmp -maxdepth 1 -type f -name '*.tar*' \
+      -printf '%f %s bytes\n' 2>/dev/null || true
+  fi
   echo
-  echo "=== CPU / memory / storage I/O ==="
+  echo '=== CPU / RAM / disk I/O ==='
   free -h 2>&1 || true
-  (command -v iostat >/dev/null && iostat -dx 1 2) 2>&1 | tail -n 20 || true
+  if command -v mpstat >/dev/null; then mpstat 1 1 2>&1; fi
+  if command -v iostat >/dev/null; then iostat -dx 1 2 2>&1 | tail -n 20; fi
+  docker stats --no-stream --format 'container={{.Name}} CPU={{.CPUPerc}} memory={{.MemUsage}} network={{.NetIO}} disk={{.BlockIO}}' \
+    arbitrum-nitro 2>/dev/null || true
   echo
-  echo "=== RPC ==="
-
-  local chain head syncing local_dec ref_result ref_dec behind
-  if ! chain="$(rpc "$RPC_URL" eth_chainId 2>&1)"; then
-    echo "HTTP RPC: unavailable (${chain})"
-    echo "Expected chain ID: 0xa4b1 (42161)"
+  echo '=== RPC ==='
+  local chain_result head_result syncing_result head local_dec ref_result ref_dec lag ws
+  if ! chain_result="$(rpc "$RPC_URL" eth_chainId 2>&1)"; then
+    echo "HTTP RPC: unavailable (${chain_result})"
   else
-    echo "eth_chainId: $(jq -r '.result // .error.message // "invalid response"' <<<"$chain")"
-    if [[ "$(jq -r '.result // empty' <<<"$chain")" != "0xa4b1" ]]; then
-      echo "CHAIN CHECK: FAILED (expected 0xa4b1 / 42161)"
-    else
-      echo "CHAIN CHECK: Arbitrum One (42161)"
-    fi
-
-    ws_status="$(curl --silent --show-error --max-time 3 --http1.1 -o /dev/null -w '%{http_code}' \
-      -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-      -H 'Sec-WebSocket-Version: 13' \
-      -H "Sec-WebSocket-Key: $(head -c 16 /dev/urandom | base64)" \
-      -H 'Origin: http://localhost' http://127.0.0.1:8548 2>/dev/null || true)"
-    if [[ "$ws_status" == "101" ]]; then
-      echo "WebSocket RPC: enabled (HTTP upgrade 101)"
-    else
-      echo "WebSocket RPC: unavailable (HTTP ${ws_status:-no response})"
-    fi
-
-    if head="$(rpc "$RPC_URL" eth_blockNumber 2>&1)"; then
-      head="$(jq -r '.result // .error.message // "unknown"' <<<"$head")"
+    chain="$(jq -r '.result // .error.message // "invalid response"' <<<"$chain_result")"
+    echo "eth_chainId: ${chain}"
+    [[ "$chain" == 0xa4b1 ]] && echo 'CHAIN CHECK: Arbitrum One (42161)' || echo 'CHAIN CHECK: FAILED (expected 0xa4b1)'
+    ws="$(ws_probe)"
+    [[ "$ws" == 101 ]] && echo 'WebSocket RPC: enabled (HTTP upgrade 101)' || echo "WebSocket RPC: unavailable (HTTP ${ws:-no response})"
+    if head_result="$(rpc "$RPC_URL" eth_blockNumber 2>&1)"; then
+      head="$(jq -r '.result // .error.message // "unknown"' <<<"$head_result")"
       if [[ "$head" =~ ^0x[0-9a-fA-F]+$ ]]; then
         local_dec="$(hex_to_dec "$head")"
         echo "local head: ${local_dec} (${head})"
@@ -78,101 +80,73 @@ print_status() {
       fi
     else
       local_dec=""
-      echo "eth_blockNumber: ${head}"
+      echo "eth_blockNumber: ${head_result}"
     fi
-
-    if syncing="$(rpc "$RPC_URL" eth_syncing 2>&1)"; then
-      if [[ "$(jq -r '.result | type' <<<"$syncing")" == "boolean" ]]; then
-        echo "eth_syncing: $(jq -r '.result' <<<"$syncing")"
+    if syncing_result="$(rpc "$RPC_URL" eth_syncing 2>&1)"; then
+      if [[ "$(jq -r '.result | type' <<<"$syncing_result")" == boolean ]]; then
+        echo "eth_syncing: $(jq -r '.result' <<<"$syncing_result")"
       else
-        echo "eth_syncing: $(jq -c '.result // .error' <<<"$syncing")"
+        echo "eth_syncing: $(jq -c '.result // .error' <<<"$syncing_result")"
       fi
-    else
-      echo "eth_syncing: unavailable (${syncing})"
-    fi
-
-    if [[ -n "$REFERENCE_RPC_URL" && -n "$local_dec" ]]; then
+    else echo "eth_syncing: unavailable (${syncing_result})"; fi
+    if [[ -n "${local_dec:-}" && -n "$REFERENCE_RPC_URL" ]]; then
       if ref_result="$(rpc "$REFERENCE_RPC_URL" eth_blockNumber 2>&1)"; then
         ref_result="$(jq -r '.result // empty' <<<"$ref_result")"
         if [[ "$ref_result" =~ ^0x[0-9a-fA-F]+$ ]]; then
           ref_dec="$(hex_to_dec "$ref_result")"
-          behind=$((ref_dec - local_dec))
-          (( behind < 0 )) && behind=0
+          lag=$((ref_dec - local_dec)); (( lag < 0 )) && lag=0
           echo "reference head: ${ref_dec} (${ref_result})"
-          echo "blocks behind reference: ${behind}"
-        else
-          echo "reference RPC returned an invalid block height"
-        fi
-      else
-        echo "reference RPC: unavailable (${ref_result})"
-      fi
-    else
-      echo "reference comparison: not configured"
-    fi
+          echo "blocks behind reference: ${lag}"
+        else echo 'reference RPC returned an invalid block height'; fi
+      else echo "reference RPC: unavailable (${ref_result})"; fi
+    else echo 'reference comparison: not configured'; fi
   fi
-
   echo
-  echo "=== Recent feed / sync / error log lines ==="
-  docker logs --since 10m arbitrum-nitro 2>&1 | \
-    grep -Ei 'feed|sequencer|sync|snapshot|error|warn|fatal' | tail -n 25 || true
+  echo '=== Recent feed / sync / error log lines ==='
+  docker logs --since 10m arbitrum-nitro 2>&1 | grep -Ei 'feed|sequencer|sync|snapshot|error|warn|fatal' \
+    | sed -E 's#(https?|wss?)://[^[:space:]"]+#<URL redacted>#g' | tail -n 25 || true
 }
 
-if [[ "${1:-}" != "--validate" ]]; then
-  print_status
-  exit 0
-fi
-
+if [[ "${1:-}" != --validate ]]; then print_status; exit 0; fi
 timeout_seconds="${2:-600}"
-if ! [[ "$timeout_seconds" =~ ^[0-9]+$ ]]; then
-  echo "timeout-seconds must be a positive integer" >&2
-  exit 2
-fi
+[[ "$timeout_seconds" =~ ^[0-9]+$ ]] || { echo 'timeout-seconds must be a positive integer' >&2; exit 2; }
 deadline=$((SECONDS + timeout_seconds))
 last_head=""
 progress_seen=false
 last_ws_status=""
 while (( SECONDS <= deadline )); do
   chain_result="$(rpc "$RPC_URL" eth_chainId 2>/dev/null || true)"
-  if [[ "$(jq -r '.result // empty' <<<"$chain_result" 2>/dev/null)" == "0xa4b1" ]]; then
+  if [[ "$(jq -r '.result // empty' <<<"$chain_result" 2>/dev/null)" == 0xa4b1 ]]; then
     head_result="$(rpc "$RPC_URL" eth_blockNumber 2>/dev/null || true)"
     current_head="$(jq -r '.result // empty' <<<"$head_result" 2>/dev/null)"
     syncing_result="$(rpc "$RPC_URL" eth_syncing 2>/dev/null || true)"
-    syncing_value="$(jq -r '.result // empty' <<<"$syncing_result" 2>/dev/null)"
-    ws_status="$(curl --silent --show-error --max-time 3 --http1.1 -o /dev/null -w '%{http_code}' \
-      -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-      -H 'Sec-WebSocket-Version: 13' \
-      -H "Sec-WebSocket-Key: $(head -c 16 /dev/urandom | base64)" \
-      -H 'Origin: http://localhost' http://127.0.0.1:8548 2>/dev/null || true)"
-    last_ws_status="$ws_status"
+    syncing_value="$(jq -c 'if has("result") then .result else empty end' <<<"$syncing_result" 2>/dev/null)"
+    last_ws_status="$(ws_probe)"
     if [[ "$current_head" =~ ^0x[0-9a-fA-F]+$ ]]; then
-      echo "chain=42161 local_head=$(hex_to_dec "$current_head") syncing=${syncing_value:-unknown} websocket_http=${ws_status:-unavailable}"
-      [[ -n "$last_head" && "$current_head" != "$last_head" ]] && progress_seen=true
-      last_head="$current_head"
-      if [[ "$syncing_value" != "false" && -n "$syncing_value" ]]; then
+      echo "chain=42161 local_head=$(hex_to_dec "$current_head") syncing=${syncing_value:-unknown} websocket_http=${last_ws_status:-unavailable}"
+      if [[ -n "$last_head" ]] && (( $(hex_to_dec "$current_head") > $(hex_to_dec "$last_head") )); then
         progress_seen=true
       fi
+      last_head="$current_head"
       if [[ -n "$REFERENCE_RPC_URL" ]]; then
-        ref_result="$(rpc "$REFERENCE_RPC_URL" eth_blockNumber 2>/dev/null || true)"
-        ref_head="$(jq -r '.result // empty' <<<"$ref_result" 2>/dev/null)"
+        reference="$(rpc "$REFERENCE_RPC_URL" eth_blockNumber 2>/dev/null || true)"
+        ref_head="$(jq -r '.result // empty' <<<"$reference" 2>/dev/null)"
         if [[ "$ref_head" =~ ^0x[0-9a-fA-F]+$ ]]; then
           lag=$(( $(hex_to_dec "$ref_head") - $(hex_to_dec "$current_head") ))
           (( lag < 0 )) && lag=0
           echo "reference_head=$(hex_to_dec "$ref_head") blocks_behind=${lag}"
-          if [[ "$syncing_value" == "false" && $lag -le 100 && "$ws_status" == "101" ]]; then
-            echo "VALIDATION: HTTP and WebSocket RPC respond on chain 42161; node is within 100 blocks of reference head."
+          if [[ "$syncing_value" == false && $lag -le 100 && "$last_ws_status" == 101 ]]; then
+            echo 'VALIDATION: HTTP and WebSocket RPC respond on chain 42161; node is within 100 blocks of reference head.'
             exit 0
           fi
         fi
       fi
     fi
-  else
-    echo "Waiting for Arbitrum One HTTP RPC..."
-  fi
+  else echo 'Waiting for Arbitrum One HTTP RPC...'; fi
   sleep 30
 done
-
-if [[ "$progress_seen" == true && "$last_ws_status" == "101" ]]; then
-  echo "VALIDATION: HTTP and WebSocket RPC respond on chain 42161 and Nitro reports active sync or a changing head."
+if [[ "$progress_seen" == true && "$last_ws_status" == 101 ]]; then
+  echo 'VALIDATION: HTTP and WebSocket RPC respond on chain 42161 and local block height increased.'
   exit 0
 fi
 echo "VALIDATION: no trusted sync completion or head progress was confirmed within ${timeout_seconds}s." >&2

@@ -136,6 +136,9 @@ contract ArbExecutor {
     address transient expectedTokenIn;
     uint256 transient expectedMaxIn;
     uint256 transient lastProfit;
+    uint256 transient startingDebt;
+    uint256 transient startingCollateral;
+    uint256 transient startingNative;
     /// The pool a flash swap was started on; its callback (and only that one) runs the route.
     address transient flashPool;
     /// The Aave pool an Aave-funded liquidation borrowed from; only its callback is accepted.
@@ -160,6 +163,7 @@ contract ArbExecutor {
     event PoolManagerSet(address indexed poolManager);
     /// One item of a `batch`: its position, selector and whether it executed.
     event BatchItem(uint256 indexed index, bytes4 indexed selector, bool ok);
+    event Profit(address indexed token, uint256 amount);
 
     constructor(address vault_, address weth_, address profitReceiver_) {
         vault = IBalancerVault(vault_);
@@ -208,6 +212,7 @@ contract ArbExecutor {
         uint256[] memory amounts = new uint256[](1);
         amounts[0] = amount;
 
+        startingDebt = IERC20(token).balanceOf(address(this));
         flashActive = true;
         vault.flashLoan(address(this), tokens, amounts, abi.encode(MODE_ARB, abi.encode(minProfit, hops)));
         flashActive = false;
@@ -228,6 +233,7 @@ contract ArbExecutor {
             revert BadRoute();
         }
         Hop calldata first = hops[0];
+        startingDebt = IERC20(first.tokenIn).balanceOf(address(this));
         flashPool = first.pool;
         IUniV3Pool(first.pool)
             .swap(
@@ -267,6 +273,8 @@ contract ArbExecutor {
         uint256[] memory amounts = new uint256[](1);
         amounts[0] = flashAmount;
 
+        _snapshotLiquidation(debt, collateral);
+
         flashActive = true;
         vault.flashLoan(
             address(this), tokens, amounts, abi.encode(MODE_LIQUIDATE, abi.encode(collateral, minProfit, calls, hops))
@@ -295,6 +303,7 @@ contract ArbExecutor {
         } else if (hops.length == 0 || hops[0].tokenIn != collateral || hops[hops.length - 1].tokenOut != debt) {
             revert BadRoute();
         }
+        _snapshotLiquidation(debt, collateral);
         aaveFlashPool = aavePool;
         IAaveFlashPool(aavePool)
             .flashLoanSimple(address(this), debt, flashAmount, abi.encode(collateral, minProfit, calls, hops), 0);
@@ -349,9 +358,10 @@ contract ArbExecutor {
         uint256 minProfit = _liquidate(params, asset);
         uint256 owed = amount + premium;
         uint256 balance = IERC20(asset).balanceOf(address(this));
-        if (balance < owed + minProfit) revert NotProfitable(balance, owed + minProfit);
-        uint256 profit = balance - owed;
+        if (balance < startingDebt + owed + minProfit) revert NotProfitable(balance, startingDebt + owed + minProfit);
+        uint256 profit = balance - owed - startingDebt;
         if (profit > 0) _transfer(asset, profitReceiver, profit);
+        emit Profit(asset, profit);
         _approve(asset, msg.sender, owed);
         lastProfit = profit;
         return true;
@@ -375,11 +385,12 @@ contract ArbExecutor {
         else revert BadRoute();
 
         uint256 balance = IERC20(token).balanceOf(address(this));
-        if (balance < owed + minProfit) revert NotProfitable(balance, owed + minProfit);
+        if (balance < startingDebt + owed + minProfit) revert NotProfitable(balance, startingDebt + owed + minProfit);
 
         _transfer(token, address(vault), owed);
-        uint256 profit = balance - owed;
+        uint256 profit = balance - owed - startingDebt;
         if (profit > 0) _transfer(token, profitReceiver, profit);
+        emit Profit(token, profit);
         lastProfit = profit;
     }
 
@@ -387,6 +398,12 @@ contract ArbExecutor {
         Hop[] memory hops;
         (minProfit, hops) = abi.decode(inner, (uint256, Hop[]));
         _runHops(hops, amount);
+    }
+
+    function _snapshotLiquidation(address debt, address collateral) internal {
+        startingDebt = IERC20(debt).balanceOf(address(this));
+        startingCollateral = IERC20(collateral).balanceOf(address(this));
+        startingNative = address(this).balance;
     }
 
     function _liquidate(bytes memory inner, address debt) internal returns (uint256 minProfit) {
@@ -410,8 +427,9 @@ contract ArbExecutor {
         }
         liquidating = false;
         // Native ETH collateral -> WETH, so the swap route and accounting stay ERC20-only.
-        if (address(this).balance > 0) weth.deposit{value: address(this).balance}();
-        if (collateral != debt) _runHops(hops, IERC20(collateral).balanceOf(address(this)));
+        uint256 nativeReceived = address(this).balance - startingNative;
+        if (nativeReceived > 0) weth.deposit{value: nativeReceived}();
+        if (collateral != debt) _runHops(hops, IERC20(collateral).balanceOf(address(this)) - startingCollateral);
         return minProfit_;
     }
 
@@ -456,10 +474,11 @@ contract ArbExecutor {
         }
         address token = first.tokenIn;
         uint256 balance = IERC20(token).balanceOf(address(this));
-        if (balance < owed + minProfit) revert NotProfitable(balance, owed + minProfit);
+        if (balance < startingDebt + owed + minProfit) revert NotProfitable(balance, startingDebt + owed + minProfit);
         _transfer(token, msg.sender, owed);
-        uint256 profit = balance - owed;
+        uint256 profit = balance - owed - startingDebt;
         if (profit > 0) _transfer(token, profitReceiver, profit);
+        emit Profit(token, profit);
         lastProfit = profit;
     }
 
