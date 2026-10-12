@@ -296,6 +296,19 @@ mod tests {
                 .await
                 .unwrap(),
         );
+        addrs.extend(
+            mev_decode::protocols()
+                .iter()
+                .filter(|p| {
+                    p.events()
+                        .iter()
+                        .any(|k| k.class == events::Class::Liquidation)
+                })
+                .flat_map(|p| p.contracts())
+                .map(|c| c.address),
+        );
+        addrs.sort();
+        addrs.dedup();
         let topics: Vec<B256> = events::kinds()
             .iter()
             .filter(|k| k.class == events::Class::Liquidation)

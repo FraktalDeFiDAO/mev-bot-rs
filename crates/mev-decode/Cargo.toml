@@ -27,6 +27,7 @@ mev-protocol-balancer = { workspace = true }
 mev-protocol-aave-v3 = { workspace = true }
 mev-protocol-morpho-blue = { workspace = true }
 mev-protocol-compound-v3 = { workspace = true }
+mev-protocol-dolomite = { workspace = true }
 mev-protocol-unidentified = { workspace = true }
 mev-protocol-fluid = { workspace = true }
 mev-protocol-oneinch = { workspace = true }

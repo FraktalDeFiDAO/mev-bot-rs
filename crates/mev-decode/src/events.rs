@@ -268,6 +268,26 @@ pub fn describe(
             ("to", a(3)),
         ],
         "absorb_fluid" => vec![("collateral_amount", u(0)), ("debt_amount", u(1))],
+        "liquidation_dolomite" => vec![
+            ("solid", ta(1)),
+            ("solid_account", u(0)),
+            ("liquid", ta(2)),
+            ("liquid_account", u(1)),
+            ("held_market", u(2)),
+            ("owed_market", u(3)),
+            // The liquidated account's held collateral (seized) and owed debt (repaid), magnitudes; signs in words 12 / 16.
+            ("liquid_held_delta", u(13)),
+            ("liquid_owed_delta", u(17)),
+        ],
+        "vaporize_dolomite" => vec![
+            ("solid", ta(1)),
+            ("solid_account", u(0)),
+            ("vapor", ta(2)),
+            ("vapor_account", u(1)),
+            ("held_market", u(2)),
+            ("owed_market", u(3)),
+            ("vapor_owed_delta", u(13)),
+        ],
         "swap_fluid_dex" => vec![
             ("swap0to1", u(0)),
             ("amount_in", u(1)),
