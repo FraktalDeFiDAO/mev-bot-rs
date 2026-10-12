@@ -42,13 +42,13 @@ pub async fn pool_logs(
     Ok(sub.into_stream())
 }
 
-/// Poll `http` for factory creation events (new pools and pairs) and forward every log exactly once, in block order.
+/// Poll `http` for the given contracts' events (factory creations, lending liquidations) and forward every log exactly once, in block order.
 /// Starts at the current head (what already exists is found by startup discovery) and keeps a block cursor, so a slow
 /// or failed poll never skips blocks: the next one asks for everything since the last block it saw. Returns only when
 /// `out` is closed.
-pub async fn poll_factory_logs(
+pub async fn poll_logs(
     http: DynProvider,
-    factories: Vec<Address>,
+    addresses: std::sync::Arc<std::sync::RwLock<Vec<Address>>>,
     topics: Vec<alloy::primitives::B256>,
     out: tokio::sync::mpsc::UnboundedSender<Log>,
     every: std::time::Duration,
@@ -69,7 +69,7 @@ pub async fn poll_factory_logs(
         while next <= head {
             let to = (next + SPAN - 1).min(head);
             let filter = Filter::new()
-                .address(factories.clone())
+                .address(addresses.read().map(|a| a.clone()).unwrap_or_default())
                 .event_signature(topics.clone())
                 .from_block(next)
                 .to_block(to);

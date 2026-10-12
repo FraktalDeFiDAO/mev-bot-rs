@@ -21,6 +21,11 @@ sol! {
         event LogAbsorb(uint256 colAmount, uint256 debtAmount);
         function liquidate(uint256 debtAmt, uint256 colPerUnitDebt, address to, bool absorb) external payable returns (uint256, uint256);
     }
+
+    /// A Fluid DEX pool (`DexT1`): `Swap` carries no indexed fields (verified on mainnet pools, 2026-10-12).
+    interface Dex {
+        event Swap(bool swap0to1, uint256 amountIn, uint256 amountOut, address to);
+    }
 }
 
 /// The vaults configured in `config/arbitrum.toml` (`[fluid] vaults`).
@@ -64,12 +69,14 @@ impl Protocol for Fluid {
                 Class::Liquidation,
                 p,
             ),
+            EventKind::new(Dex::Swap::SIGNATURE_HASH, "swap_fluid_dex", Class::Swap, p),
         ]
     }
 
     fn decode_call(&self, to: Address, input: &[u8]) -> Option<Decoded> {
         let (sel, args) = abi::split(input)?;
-        if sel != Vault::liquidateCall::SELECTOR || !VAULTS.iter().any(|(v, _)| *v == to) {
+        // Any contract answering to this exact selector: the vault list is ~100 and grows, so it is not hard-coded.
+        if sel != Vault::liquidateCall::SELECTOR {
             return None;
         }
         let c = Vault::liquidateCall::abi_decode_raw(args).ok()?;
@@ -121,9 +128,9 @@ mod tests {
         );
         assert!(
             Fluid
-                .decode_call(Address::with_last_byte(5), &input)
+                .decode_call(Address::with_last_byte(5), &input[..4])
                 .is_none(),
-            "not a configured vault"
+            "selector alone, no arguments"
         );
         assert!(
             Fluid.decode_call(VAULTS[1].0, &input[..30]).is_none(),
@@ -149,7 +156,18 @@ mod tests {
         let topic = |n: &str| format!("{:x}", ev.iter().find(|k| k.name == n).unwrap().topic0);
         assert!(topic("liquidation_fluid").starts_with("80fd9cc6b1"));
         assert!(topic("absorb_fluid").starts_with("115609402b"));
-        assert!(ev.iter().all(|k| k.class == Class::Liquidation));
+        assert!(
+            ev.iter()
+                .filter(|k| k.name != "swap_fluid_dex")
+                .all(|k| k.class == Class::Liquidation)
+        );
+        assert_eq!(
+            ev.iter()
+                .find(|k| k.name == "swap_fluid_dex")
+                .unwrap()
+                .class,
+            Class::Swap
+        );
     }
 
     #[test]

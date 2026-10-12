@@ -89,7 +89,10 @@ scan_step = 2000000
 enabled = true
 vault_resolver = "0xA5C3E16523eeeDDcC34706b0E6bE88b4c6EA95cC"
 usd_oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"
-# T1 vaults with liquidations in the last 30 days (2026-10-03 scan): 67 + 5 of 98 events.
+# Vaults to watch besides the auto-listed ones. The two below were the busy ones on 2026-10-03; by 2026-10-12 the
+# liquidations were on three others (in the 9 days to then: 34, 30 and 5 events, none on these two), hence auto_vaults.
+dex_factory = "0x91716C4EDA1Fb55e84Bf8b4c7085f84285c19085"   # Fluid DEX pools (23 on 2026-10-12): swaps recorded
+auto_vaults = true       # also every T1 vault the resolver lists: liquidations move between vaults
 vaults = [
   "0xf55B8e9F0c51Ace009f4b41d03321675d4C643b3",   # ETH collateral / ARB debt
   "0x82b27fa821419f5689381b565a8b0786aa2548de",   # WBTC collateral / USDT0 debt

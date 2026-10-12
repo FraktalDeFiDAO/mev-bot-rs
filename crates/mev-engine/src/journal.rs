@@ -264,4 +264,139 @@ mod tests {
         let v = event_line(&l, &PoolStore::default(), &Default::default(), 1).unwrap();
         assert!(v["price_move_bps"].is_null());
     }
+
+    /// Live read-only check: liquidation events of every lender we watch decode into journal lines.
+    ///   cargo test -p mev-engine journal::tests::live_liquidations -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_liquidations_of_every_watched_lender_are_journaled() {
+        use alloy::providers::Provider;
+        let cfg = mev_config::ChainConfig::load(std::path::Path::new("../../config/arbitrum.toml"))
+            .unwrap();
+        let p = mev_rpc::http_provider(
+            &std::env::var("ARBITRUM_LOG_RPC")
+                .unwrap_or_else(|_| "https://arb1.arbitrum.io/rpc".into()),
+        )
+        .unwrap();
+        let mut addrs = vec![
+            cfg.aave.as_ref().unwrap().pool,
+            cfg.morpho.as_ref().unwrap().morpho,
+        ];
+        addrs.extend(
+            cfg.compound_v3
+                .as_ref()
+                .unwrap()
+                .comets
+                .iter()
+                .map(|c| c.address),
+        );
+        let f = cfg.fluid.as_ref().unwrap();
+        addrs.extend(
+            mev_lending_fluid::all_vaults(&p, f.vault_resolver)
+                .await
+                .unwrap(),
+        );
+        let topics: Vec<B256> = events::kinds()
+            .iter()
+            .filter(|k| k.class == events::Class::Liquidation)
+            .map(|k| k.topic0)
+            .collect();
+        let head = p.get_block_number().await.unwrap();
+        let mut by_kind = std::collections::BTreeMap::<String, usize>::new();
+        let mut by_emitter = std::collections::BTreeMap::<String, usize>::new();
+        let span = 3_000_000u64; // ~9 days
+        for start in (head - span..head).step_by(100_000) {
+            let filter = alloy::rpc::types::Filter::new()
+                .address(addrs.clone())
+                .event_signature(topics.clone())
+                .from_block(start)
+                .to_block((start + 99_999).min(head));
+            for log in p
+                .get_logs(&filter)
+                .await
+                .unwrap_or_else(|e| panic!("get_logs: {e}"))
+            {
+                let line = event_line(&log, &PoolStore::default(), &Default::default(), 0)
+                    .unwrap_or_else(|| {
+                        panic!("unrecognised liquidation log {:?}", log.transaction_hash)
+                    });
+                assert_eq!(line["class"], "liquidation");
+                *by_kind
+                    .entry(line["kind"].as_str().unwrap().to_string())
+                    .or_default() += 1;
+                *by_emitter
+                    .entry(format!(
+                        "{} {}",
+                        line["kind"].as_str().unwrap(),
+                        log.address()
+                    ))
+                    .or_default() += 1;
+            }
+        }
+        println!(
+            "{} watched contracts; liquidation events in the last {span} blocks: {by_kind:?}",
+            addrs.len()
+        );
+        for (k, n) in by_emitter
+            .iter()
+            .filter(|(k, _)| k.starts_with("liquidation_fluid"))
+        {
+            println!("  {k}: {n}");
+        }
+    }
+
+    /// Live read-only check: Fluid DEX `Swap` events across every pool decode into journal lines.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_fluid_dex_swaps_are_journaled() {
+        use alloy::providers::Provider;
+        let cfg = mev_config::ChainConfig::load(std::path::Path::new("../../config/arbitrum.toml"))
+            .unwrap();
+        let p = mev_rpc::http_provider(
+            &std::env::var("ARBITRUM_LOG_RPC")
+                .unwrap_or_else(|_| "https://arb1.arbitrum.io/rpc".into()),
+        )
+        .unwrap();
+        let factory = cfg.fluid.unwrap().dex_factory.expect("[fluid] dex_factory");
+        let dexes = mev_lending_fluid::all_dexes(&p, factory).await.unwrap();
+        let topic = events::kinds()
+            .iter()
+            .find(|k| k.name == "swap_fluid_dex")
+            .unwrap()
+            .topic0;
+        let head = p.get_block_number().await.unwrap();
+        let (mut n, mut pools) = (0usize, std::collections::BTreeSet::new());
+        for start in (head - 1_000_000..head).step_by(100_000) {
+            let f = alloy::rpc::types::Filter::new()
+                .address(dexes.clone())
+                .event_signature(vec![topic])
+                .from_block(start)
+                .to_block((start + 99_999).min(head));
+            for log in p
+                .get_logs(&f)
+                .await
+                .unwrap_or_else(|e| panic!("get_logs: {e}"))
+            {
+                let line = event_line(&log, &PoolStore::default(), &Default::default(), 0)
+                    .expect("recognised");
+                assert_eq!(line["kind"], "swap_fluid_dex");
+                assert!(
+                    line["fields"]["amount_in"]
+                        .as_str()
+                        .unwrap()
+                        .parse::<u128>()
+                        .unwrap()
+                        > 0
+                );
+                n += 1;
+                pools.insert(log.address());
+            }
+        }
+        println!(
+            "{} Fluid DEX pools; {n} swaps in the last 1,000,000 blocks across {} pools",
+            dexes.len(),
+            pools.len()
+        );
+        assert!(n > 0, "no swaps decoded: topic or pool list is wrong");
+    }
 }
