@@ -13,6 +13,8 @@ sol! {
     #[sol(rpc)]
     interface IUniswapV2Factory {
         function getPair(address tokenA, address tokenB) external view returns (address pair);
+        /// Also emitted by Camelot V2 and Sushi V2 (same signature).
+        event PairCreated(address indexed token0, address indexed token1, address pair, uint256 index);
     }
 
     #[sol(rpc)]
@@ -33,6 +35,8 @@ sol! {
     #[sol(rpc)]
     interface IUniswapV3Factory {
         function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool);
+        /// Uniswap V3, Sushi V3 and PancakeSwap V3 factories.
+        event PoolCreated(address indexed token0, address indexed token1, uint24 indexed fee, int24 tickSpacing, address pool);
     }
 
     #[sol(rpc)]
@@ -55,6 +59,7 @@ sol! {
     #[sol(rpc)]
     interface IAlgebraFactory {
         function poolByPair(address tokenA, address tokenB) external view returns (address pool);
+        event Pool(address indexed token0, address indexed token1, address pool);
     }
 
     #[sol(rpc)]

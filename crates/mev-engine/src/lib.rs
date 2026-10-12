@@ -4,6 +4,32 @@
 //! Any binary (bot, backtester, dashboard) can embed it:
 //! `Engine::bootstrap(cfg, secrets, Mode::Shadow, data_dir).await?.run().await`.
 
+/// Most already-queued logs applied together before trades are looked for.
+const LOG_BURST_MAX: usize = 512;
+
+enum LogIngest {
+    /// Already covered by the snapshot, or an exact replay.
+    Skip,
+    /// Applied; the pool whose state it changed.
+    Applied(Address),
+    /// The ordering guard tripped: stop trading until a fresh snapshot.
+    Invalid,
+}
+
+/// Each pool once, in first-touched order, with the last transaction that touched it.
+fn last_trigger_per_pool(
+    touched: Vec<(Address, Option<alloy::primitives::TxHash>)>,
+) -> Vec<(Address, Option<alloy::primitives::TxHash>)> {
+    let mut out: Vec<(Address, Option<alloy::primitives::TxHash>)> = Vec::new();
+    for (pool, tx) in touched {
+        match out.iter_mut().find(|(p, _)| *p == pool) {
+            Some(slot) => slot.1 = tx,
+            None => out.push((pool, tx)),
+        }
+    }
+    out
+}
+
 /// State may be traded on only while the log stream is reconciled and the feed has had no continuity break
 /// since that reconciliation (a gap, replay storm or reconnect bumps the feed epoch and stays degraded
 /// until a fresh pinned snapshot records the new epoch).
@@ -193,6 +219,13 @@ pub struct Engine {
     /// Pending feed transactions that moved a pool (as `eth_simulateV1` calls), so a trade they
     /// trigger is verified on top of them. Pruned by age.
     trigger_calls: HashMap<TxHash, (Instant, serde_json::Value, u64)>,
+    /// Pools announced by exchange factories since start: every one is recorded, whether or not it is tracked.
+    created_seen: std::collections::HashSet<Address>,
+    /// New pools not tracked yet because nothing else trades their pair; the first second venue for the pair
+    /// (a trade needs two) promotes both.
+    created_waiting: HashMap<(Address, Address), Vec<mev_types::PoolInfo>>,
+    /// Tracked pool set grew: re-subscribe so their logs arrive.
+    resubscribe_pending: bool,
     /// An endpoint that serves `eth_simulateV1` (the presim provider).
     sim_v1: Option<alloy::providers::DynProvider>,
     /// Tokens we trade routinely (configured pairs and loan tokens). A route touching any other
@@ -304,6 +337,9 @@ enum Maint {
         read_at: HashMap<Address, u64>,
     },
     Degraded,
+    NewPools {
+        fresh: Vec<mev_dex::Pool>,
+    },
     Cycles {
         index: mev_search::cycles::CycleIndex,
         watch: std::collections::HashSet<[u8; 20]>,
@@ -841,6 +877,9 @@ impl Engine {
             sim_bad: mev_risk::gate::Cooldowns::new(),
             healed: HashMap::new(),
             trigger_calls: HashMap::new(),
+            created_seen: Default::default(),
+            created_waiting: HashMap::new(),
+            resubscribe_pending: false,
             sim_v1,
             trusted,
             sim_ok: HashMap::new(),
@@ -925,6 +964,15 @@ impl Engine {
         self.rebuild_cycles();
         info!(cycles = self.cycles.len(), "triangular cycles indexed");
         let mut liq_rx = self.liq.as_mut().and_then(|l| l.rx.take());
+        // New pools and pairs: poll the exchange factories' creation events (cursor-based, no gaps).
+        let (created_tx, mut created_rx) = mpsc::unbounded_channel::<alloy::rpc::types::Log>();
+        tokio::spawn(mev_ingest::poll_factory_logs(
+            self.rpc.http.clone(),
+            mev_discovery::created::factories(&self.cfg.dexes),
+            mev_discovery::created::creation_topics(),
+            created_tx,
+            Duration::from_secs(4),
+        ));
         let mut presim_rx = self.presim_rx.take();
         let mut dec_rx = self.dec_rx.take();
         let mut atlas_auctions = self.atlas.as_mut().and_then(|a| a.auction_rx.take());
@@ -984,30 +1032,38 @@ impl Engine {
                 let flush_at = self.batch_deadline().map(tokio::time::Instant::from_std);
                 tokio::select! {
                     maybe = logs.next() => {
-                        let Some(log) = maybe else { self.confidence.store(false, std::sync::atomic::Ordering::Release); warn!("log stream ended; resubscribing"); break };
-                        if let Some(j) = &self.event_journal {
-                            let t_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
-                            if let Some(line) = journal::event_line(&log, &self.store, &self.watch, t_ms) {
-                                j.record(&line);
+                        let Some(first) = maybe else { self.confidence.store(false, std::sync::atomic::Ordering::Release); warn!("log stream ended; resubscribing"); break };
+                        // A block's logs arrive in a burst. Apply the whole burst before looking for trades: evaluating
+                        // after each log prices a pool that has just moved against a partner that has not, which is an
+                        // "edge" only until the next log of the same transaction or block lands (and exactly the edge
+                        // another bot's arbitrage just closed). Nothing waits: only logs already queued are drained.
+                        let mut batch = vec![first];
+                        let mut ended = false;
+                        while batch.len() < LOG_BURST_MAX {
+                            match futures::FutureExt::now_or_never(logs.next()) {
+                                Some(Some(next)) => batch.push(next),
+                                Some(None) => { ended = true; break }
+                                None => break,
                             }
                         }
-                        match self.log_continuity.accept(&log) {
-                            Ok(false) => continue,
-                            Ok(true) => {},
-                            Err(reason) => {
-                                self.confidence.store(false, std::sync::atomic::Ordering::Release);
-                                self.metrics.event("state_confidence", json!({"status": "Degraded", "reason": format!("{reason:?}")}));
-                                warn!(?reason, "log continuity invalidated; reconciling before trading");
-                                break;
+                        let mut touched: Vec<(Address, Option<alloy::primitives::TxHash>)> = Vec::new();
+                        let mut invalid = false;
+                        for log in &batch {
+                            match self.ingest_log(log) {
+                                LogIngest::Skip => {}
+                                LogIngest::Applied(pool) => touched.push((pool, log.transaction_hash)),
+                                LogIngest::Invalid => { invalid = true; break }
                             }
                         }
-                        if let Some(h) = log.transaction_hash {
-                            self.pending.settle(&h, pending::Settled::Block);
-                        }
-                        if let Some(pool) = self.store.apply_log(&log) {
-                            self.metrics.update(|c| c.updates += 1);
-                            let trigger = Trigger { tx: log.transaction_hash, source: "block", seen: Instant::now() };
+                        for (pool, tx) in last_trigger_per_pool(touched) {
+                            let trigger = Trigger { tx, source: "block", seen: Instant::now() };
                             self.on_pool_update(pool, trigger, &tx_done).await;
+                        }
+                        if invalid { break }
+                        if ended {
+                            self.confidence.store(false, std::sync::atomic::Ordering::Release);
+                            warn!("log stream ended; resubscribing");
+                            break;
                         }
                     }
                     Some(d) = recv_opt(&mut dec_rx) => {
@@ -1049,12 +1105,17 @@ impl Engine {
                             self.metrics.event("decode_differ", d);
                         }
                         // Same path as block logs, a block early; the real logs overwrite it.
+                        // Apply every log of the transaction first, then look for trades once per pool it moved.
+                        let mut moved: Vec<(Address, Option<alloy::primitives::TxHash>)> = Vec::new();
                         for log in &pre.logs {
                             if let Some(pool) = self.store.apply_log_tentative(log, Instant::now()) {
                                 self.metrics.update(|c| c.presim_updates += 1);
-                                let trigger = Trigger { tx: Some(pre.tx), source: "presim", seen: pre.received };
-                                self.on_pool_update(pool, trigger, &tx_done).await;
+                                moved.push((pool, Some(pre.tx)));
                             }
+                        }
+                        for (pool, _) in last_trigger_per_pool(moved) {
+                            let trigger = Trigger { tx: Some(pre.tx), source: "presim", seen: pre.received };
+                            self.on_pool_update(pool, trigger, &tx_done).await;
                         }
                     }
                     Some(done) = rx_done.recv() => self.on_tx_done(done),
@@ -1072,7 +1133,16 @@ impl Engine {
                     _ = tick_reload.tick(), if self.cfg.ticks.enabled => {
                         self.spawn_tick_reload(&maint_tx, &busy);
                     }
-                    Some(m) = maint_rx.recv() => self.apply_maint(m),
+                    Some(log) = created_rx.recv() => self.on_pool_created(&log, &maint_tx),
+                    Some(m) = maint_rx.recv() => {
+                        self.apply_maint(m);
+                        if self.resubscribe_pending {
+                            self.resubscribe_pending = false;
+                            self.confidence.store(false, std::sync::atomic::Ordering::Release);
+                            info!(pools = self.store.len(), "tracked pool set grew; re-subscribing");
+                            break;
+                        }
+                    }
                     _ = tentative_sweep.tick() => self.roll_back_unconfirmed(),
                     _ = summary.tick() => self.log_summary(),
                     _ = &mut shutdown => {
@@ -1083,6 +1153,46 @@ impl Engine {
                 }
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    /// Journal, order-check and apply one pool log. Never evaluates trades: the caller does that once the
+    /// whole burst of logs is in.
+    fn ingest_log(&mut self, log: &alloy::rpc::types::Log) -> LogIngest {
+        if let Some(j) = &self.event_journal {
+            let t_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64);
+            if let Some(line) = journal::event_line(log, &self.store, &self.watch, t_ms) {
+                j.record(&line);
+            }
+        }
+        match self.log_continuity.accept(log) {
+            Ok(false) => return LogIngest::Skip,
+            Ok(true) => {}
+            Err(reason) => {
+                self.confidence
+                    .store(false, std::sync::atomic::Ordering::Release);
+                self.metrics.event(
+                    "state_confidence",
+                    json!({"status": "Degraded", "reason": format!("{reason:?}")}),
+                );
+                warn!(
+                    ?reason,
+                    "log continuity invalidated; reconciling before trading"
+                );
+                return LogIngest::Invalid;
+            }
+        }
+        if let Some(h) = log.transaction_hash {
+            self.pending.settle(&h, pending::Settled::Block);
+        }
+        match self.store.apply_log(log) {
+            Some(pool) => {
+                self.metrics.update(|c| c.updates += 1);
+                LogIngest::Applied(pool)
+            }
+            None => LogIngest::Skip,
         }
     }
 
@@ -1725,6 +1835,29 @@ impl Engine {
                     json!({"status": "Degraded", "reason": "IncompleteSnapshot"}),
                 );
             }
+            Maint::NewPools { fresh } => {
+                let mut added = 0usize;
+                for p in fresh {
+                    if self.store.get(&p.info.address).is_some() {
+                        continue;
+                    }
+                    self.metrics.event(
+                        "pool_tracked",
+                        json!({
+                            "pool": p.info.address, "dex": p.info.dex, "kind": format!("{:?}", p.info.kind),
+                            "token0": p.info.token0, "token1": p.info.token1,
+                            "symbol0": self.cfg.symbol(p.info.token0), "symbol1": self.cfg.symbol(p.info.token1),
+                            "state": format!("{:?}", p.state),
+                        }),
+                    );
+                    self.store.insert(p);
+                    added += 1;
+                }
+                if added > 0 {
+                    self.rebuild_cycles();
+                    self.resubscribe_pending = true;
+                }
+            }
             Maint::Cycles { index, watch } => {
                 self.cycles = index;
                 *self.presim_watch.write().unwrap() = watch;
@@ -1765,6 +1898,59 @@ impl Engine {
 
     /// Re-enumerate triangular cycles over the current pool set (startup only; resyncs run in the
     /// background).
+    /// A factory announced a new pool. Always recorded; tracked when a trade through it could exist: both tokens are
+    /// ones we already hold pools for, or another venue already trades the pair. Pools that qualify are loaded in
+    /// the background and the log subscription is renewed so their events arrive.
+    fn on_pool_created(
+        &mut self,
+        log: &alloy::rpc::types::Log,
+        maint_tx: &mpsc::UnboundedSender<Maint>,
+    ) {
+        let Some(c) = mev_discovery::created::parse(log, &self.cfg.dexes) else {
+            return;
+        };
+        let info = c.info.clone();
+        if !self.created_seen.insert(info.address) || self.store.get(&info.address).is_some() {
+            return;
+        }
+        let key = if info.token0 < info.token1 {
+            (info.token0, info.token1)
+        } else {
+            (info.token1, info.token0)
+        };
+        let second_venue = !self.store.pools_for(info.token0, info.token1).is_empty()
+            || self.created_waiting.contains_key(&key);
+        let both_known = self.store.has_token(&info.token0) && self.store.has_token(&info.token1);
+        let track = second_venue || both_known;
+        self.metrics.event(
+            "pool_created",
+            json!({
+                "pool": info.address, "dex": info.dex, "kind": format!("{:?}", info.kind),
+                "token0": info.token0, "token1": info.token1,
+                "symbol0": self.cfg.symbol(info.token0), "symbol1": self.cfg.symbol(info.token1),
+                "fee": c.fee, "tick_spacing": c.tick_spacing, "block": c.block, "tx": c.tx, "log_index": c.log_index,
+                "tracked": track,
+                "reason": if second_venue { "second venue for the pair" } else if both_known { "both tokens already traded" } else { "waiting for a second venue" },
+            }),
+        );
+        if !track {
+            self.created_waiting.entry(key).or_default().push(info);
+            return;
+        }
+        let mut batch = self.created_waiting.remove(&key).unwrap_or_default();
+        batch.push(info);
+        let (rpc, tx) = (self.rpc.clone(), maint_tx.clone());
+        tokio::spawn(async move {
+            match mev_discovery::load_pools(&rpc, batch).await {
+                Ok(fresh) if !fresh.is_empty() => {
+                    let _ = tx.send(Maint::NewPools { fresh });
+                }
+                Ok(_) => {}
+                Err(e) => warn!(error = %format!("{e:#}"), "loading newly created pools failed"),
+            }
+        });
+    }
+
     fn rebuild_cycles(&mut self) {
         let loans: Vec<Address> = self.search_loan.keys().copied().collect();
         self.cycles =
@@ -1915,6 +2101,10 @@ impl Engine {
             "loan": self.cfg.symbol(opp.loan_token), "amount": opp.amount_in.to_string(),
             "est_profit_usd": opp.est_profit_usd, "buy": opp.buy_pool, "sell": opp.sell_pool,
             "route": route_json(&opp),
+            // Where the opportunity came from: a block's logs ("block") or a pending feed transaction applied
+            // tentatively ("presim"), so revert rates can be told apart by cause.
+            "source": trigger.source,
+            "trigger_tx": trigger.tx,
         });
         // A route through a Uniswap V4 pool needs an executor with V4 hops. Until one is deployed
         // (`executor_v4`), record what V4 would have offered and move on.
@@ -3080,5 +3270,29 @@ mod confidence_tests {
         // A snapshot taken during the break (epoch moved again) is not accepted either.
         assert!(!state_confident(true, 5, 4));
         assert!(state_confident(true, 5, 5), "reconciled at the new epoch");
+    }
+}
+
+#[cfg(test)]
+mod burst_tests {
+    use super::*;
+
+    #[test]
+    fn a_burst_evaluates_each_pool_once_after_all_its_logs_with_the_last_transaction() {
+        let (a, b) = (Address::with_last_byte(1), Address::with_last_byte(2));
+        let (t1, t2, t3) = (
+            alloy::primitives::TxHash::repeat_byte(1),
+            alloy::primitives::TxHash::repeat_byte(2),
+            alloy::primitives::TxHash::repeat_byte(3),
+        );
+        // A competitor's arbitrage: leg on A, leg on B, then another transaction on A in the same block.
+        let out = last_trigger_per_pool(vec![
+            (a, Some(t1)),
+            (b, Some(t1)),
+            (a, Some(t2)),
+            (b, Some(t3)),
+        ]);
+        assert_eq!(out, vec![(a, Some(t2)), (b, Some(t3))]);
+        assert!(last_trigger_per_pool(vec![]).is_empty());
     }
 }

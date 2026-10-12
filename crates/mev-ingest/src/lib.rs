@@ -41,3 +41,51 @@ pub async fn pool_logs(
         .context("log subscription failed")?;
     Ok(sub.into_stream())
 }
+
+/// Poll `http` for factory creation events (new pools and pairs) and forward every log exactly once, in block order.
+/// Starts at the current head (what already exists is found by startup discovery) and keeps a block cursor, so a slow
+/// or failed poll never skips blocks: the next one asks for everything since the last block it saw. Returns only when
+/// `out` is closed.
+pub async fn poll_factory_logs(
+    http: DynProvider,
+    factories: Vec<Address>,
+    topics: Vec<alloy::primitives::B256>,
+    out: tokio::sync::mpsc::UnboundedSender<Log>,
+    every: std::time::Duration,
+) {
+    /// A range wider than this is requested in slices (public endpoints cap `eth_getLogs` spans).
+    const SPAN: u64 = 2_000;
+    let mut next = loop {
+        match http.get_block_number().await {
+            Ok(head) => break head + 1,
+            Err(_) => tokio::time::sleep(every).await,
+        }
+    };
+    loop {
+        tokio::time::sleep(every).await;
+        let Ok(head) = http.get_block_number().await else {
+            continue;
+        };
+        while next <= head {
+            let to = (next + SPAN - 1).min(head);
+            let filter = Filter::new()
+                .address(factories.clone())
+                .event_signature(topics.clone())
+                .from_block(next)
+                .to_block(to);
+            match http.get_logs(&filter).await {
+                Ok(mut logs) => {
+                    logs.sort_by_key(|l| (l.block_number, l.log_index));
+                    for log in logs {
+                        if out.send(log).is_err() {
+                            return;
+                        }
+                    }
+                    next = to + 1;
+                }
+                // Keep the cursor: the same range is asked again on the next poll.
+                Err(_) => break,
+            }
+        }
+    }
+}

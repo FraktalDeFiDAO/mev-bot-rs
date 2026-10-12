@@ -53,7 +53,11 @@ pub fn event_line(
             .into_iter()
             .map(|(k, v)| (k.to_string(), Value::String(v)))
             .collect();
+    // How far this event moved the pool's price against what the cache held just before applying it: the number
+    // that says whether the swap was big enough to open an edge. Display/telemetry only.
+    let price_move_bps = known.and_then(|p| price_move_bps(p, kind, log.data().data.as_ref()));
     Some(json!({
+        "price_move_bps": price_move_bps,
         "t_ms": t_ms,
         "block": log.block_number,
         "tx": log.transaction_hash.map(|h| format!("{h:#x}")),
@@ -70,6 +74,32 @@ pub fn event_line(
         "removed": log.removed,
         "fields": fields,
     }))
+}
+
+/// Relative change of the pool's token0 price (token1 per token0) implied by the event, in basis points.
+fn price_move_bps(pool: &mev_dex::Pool, kind: &events::Kind, data: &[u8]) -> Option<f64> {
+    let before = pool.price0();
+    if !(before.is_finite() && before > 0.0) {
+        return None;
+    }
+    let after = match events::price_update(kind, data)? {
+        events::PriceUpdate::SqrtPrice { sqrt_price_x96, .. } => {
+            // V4 pools may be stored mirrored; leave their orientation to the dedicated state path.
+            if matches!(pool.info.kind, mev_types::PoolKind::UniV4 { .. }) {
+                return None;
+            }
+            let s = f64::from(sqrt_price_x96) / 2f64.powi(96);
+            s * s
+        }
+        events::PriceUpdate::Reserves { reserve0, reserve1 } => {
+            let r0 = f64::from(reserve0);
+            if r0 <= 0.0 {
+                return None;
+            }
+            f64::from(reserve1) / r0
+        }
+    };
+    Some((after / before - 1.0) * 10_000.0)
 }
 
 #[cfg(test)]
@@ -201,5 +231,37 @@ mod tests {
             ),
             (Some("watch"), Some("uniswap_v3"), Some(true))
         );
+    }
+
+    #[test]
+    fn a_sync_records_how_far_it_moved_the_cached_price() {
+        use mev_dex::{Pool, PoolState};
+        use mev_types::{PoolInfo, PoolKind};
+        let pool_addr = Address::with_last_byte(0x61);
+        let mut store = PoolStore::default();
+        store.insert(Pool::new(
+            PoolInfo {
+                address: pool_addr,
+                dex: "uniswap_v2".into(),
+                kind: PoolKind::UniV2 { fee_bps: 30 },
+                token0: Address::with_last_byte(1),
+                token1: Address::with_last_byte(2),
+            },
+            PoolState::V2 {
+                reserve0: 1_000_000.0,
+                reserve1: 1_000_000.0,
+            },
+        ));
+        let mut data = Vec::new();
+        for v in [U256::from(1_000_000u64), U256::from(1_010_000u64)] {
+            data.extend(v.to_be_bytes::<32>());
+        }
+        let l = log(pool_addr, vec![kind_topic("sync_v2")], data);
+        let v = event_line(&l, &store, &Default::default(), 1).unwrap();
+        let bps = v["price_move_bps"].as_f64().unwrap();
+        assert!((bps - 100.0).abs() < 1e-6, "{bps}");
+        // An event on a pool we hold no state for has no cached price to compare with.
+        let v = event_line(&l, &PoolStore::default(), &Default::default(), 1).unwrap();
+        assert!(v["price_move_bps"].is_null());
     }
 }
