@@ -5,17 +5,18 @@
 # data/arbitrum/alert_webhook (a file, never committed); each new alert is POSTed to it as JSON {"text": ...}.
 # Checks: container up + healthy, heartbeat fresh, kill switch, hot wallet gas balance, disk, cap/mode events.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 D=data/arbitrum
+mkdir -p "$D" || exit 1
 NAME=mev-bot-arbitrum
 MIN_ETH="${MIN_ETH:-0.003}"        # alert below this hot-wallet balance
 MAX_HEARTBEAT_AGE="${MAX_HEARTBEAT_AGE:-180}"
 RPC="${WATCHDOG_RPC:-https://arb1.arbitrum.io/rpc}"
 alerts=()
 
-status="$(podman ps -a --filter "name=$NAME" --format '{{.Status}}' 2>/dev/null | head -1)"
+status="$(podman inspect "$NAME" --format '{{.State.Status}} {{.State.Health.Status}}' 2>/dev/null)"
 case "$status" in
-  Up*healthy*) ;;
+  "running healthy") ;;
   "") alerts+=("container $NAME not found") ;;
   *) alerts+=("container not healthy: $status") ;;
 esac
@@ -35,13 +36,28 @@ if [[ -n $addr ]]; then
     -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getBalance\",\"params\":[\"$addr\",\"latest\"]}" "$RPC" \
     | jq -r '.result // empty')"
   if [[ -n $hex ]]; then
-    low="$(python3 -c "print(1 if int('$hex',16)/1e18 < $MIN_ETH else 0)")"
-    eth="$(python3 -c "print('%.5f' % (int('$hex',16)/1e18))")"
+    balance_info="$(python3 - "$hex" "$MIN_ETH" "${HALT_ETH:-0.001}" <<'PY'
+import re, sys
+from decimal import Decimal
+raw, minimum, halt = sys.argv[1:]
+if not re.fullmatch(r"0x[0-9a-fA-F]+", raw):
+    sys.exit(1)
+eth = Decimal(int(raw, 16)) / Decimal(10**18)
+minimum, halt = Decimal(minimum), Decimal(halt)
+if not minimum.is_finite() or not halt.is_finite() or min(minimum, halt) < 0:
+    sys.exit(1)
+print(f"{eth:.5f} {int(eth < minimum)} {int(eth < halt)}")
+PY
+    )" || balance_info=""
+    if [[ -z $balance_info ]]; then
+      alerts+=("invalid hot wallet balance response")
+    else
+    read -r eth low empty <<< "$balance_info"
     [[ $low == 1 ]] && alerts+=("hot wallet low: $eth ETH (< $MIN_ETH) $addr")
     # Nearly empty: stop sending rather than burn the last gas on reverts (clear with run.sh resume).
-    empty="$(python3 -c "print(1 if int('$hex',16)/1e18 < ${HALT_ETH:-0.001} else 0)")"
     if [[ $empty == 1 && ! -f $D/STOP ]]; then
       touch "$D/STOP" && alerts+=("hot wallet nearly empty ($eth ETH): kill switch set automatically")
+    fi
     fi
   else
     alerts+=("could not read hot wallet balance")

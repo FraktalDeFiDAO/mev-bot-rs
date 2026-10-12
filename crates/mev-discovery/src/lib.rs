@@ -141,6 +141,7 @@ fn calls_for(p: &PoolInfo) -> Vec<(Address, alloy::primitives::Bytes)> {
         PoolKind::AlgebraV3 => vec![
             call(p.address, IAlgebraPool::globalStateCall {}),
             call(p.address, IUniswapV3Pool::liquidityCall {}),
+            call(p.address, IAlgebraPool::dataStorageOperatorCall {}),
         ],
         // V4: the pool's slot0 and liquidity words, read from the manager's storage.
         PoolKind::UniV4 { id, manager, .. } => {
@@ -167,9 +168,20 @@ fn calls_for(p: &PoolInfo) -> Vec<(Address, alloy::primitives::Bytes)> {
 
 /// Read current state for pools. Camelot stable pairs (non constant-product) are dropped.
 pub async fn load_pools(rpc: &Rpc, infos: Vec<PoolInfo>) -> Result<Vec<Pool>> {
+    let (block, _) = mev_rpc::snapshot_block(&rpc.http).await?;
+    load_pools_at(rpc, infos, block).await
+}
+
+pub async fn load_pools_at(
+    rpc: &Rpc,
+    infos: Vec<PoolInfo>,
+    block: alloy::eips::BlockId,
+) -> Result<Vec<Pool>> {
     let per_pool: Vec<_> = infos.iter().map(calls_for).collect();
     let flat: Vec<_> = per_pool.iter().flatten().cloned().collect();
-    let res = rpc.multicall(&flat).await?;
+    let res = rpc.multicall_at(&flat, block).await?;
+    // Algebra: the maximum fee each direction can ever charge, from the pool's operator (one batched read).
+    let max_fees = algebra_max_fees(rpc, &infos, &per_pool, &res, block).await;
     let mut i = 0;
     let mut pools = Vec::new();
     for (info, calls) in infos.into_iter().zip(per_pool) {
@@ -185,7 +197,13 @@ pub async fn load_pools(rpc: &Rpc, infos: Vec<PoolInfo>) -> Result<Vec<Pool>> {
                     decode::<IUniswapV3Pool::slot0Call>(&r[0]),
                     decode::<IUniswapV3Pool::liquidityCall>(&r[1]),
                 ) {
-                    (Some(s), Some(l)) => Some(Pool::new(info, v3(s.sqrtPriceX96, l))),
+                    (Some(s), Some(l)) => Some(Pool::new(info, v3(s.sqrtPriceX96, l)).with_exact(
+                        mev_dex::ExactState::V3 {
+                            sqrt_price: alloy::primitives::U256::from(s.sqrtPriceX96),
+                            tick: s.tick.as_i32(),
+                            liquidity: l,
+                        },
+                    )),
                     _ => None,
                 }
             }
@@ -194,7 +212,13 @@ pub async fn load_pools(rpc: &Rpc, infos: Vec<PoolInfo>) -> Result<Vec<Pool>> {
                     decode::<IPancakeV3Pool::slot0Call>(&r[0]),
                     decode::<IUniswapV3Pool::liquidityCall>(&r[1]),
                 ) {
-                    (Some(s), Some(l)) => Some(Pool::new(info, v3(s.sqrtPriceX96, l))),
+                    (Some(s), Some(l)) => Some(Pool::new(info, v3(s.sqrtPriceX96, l)).with_exact(
+                        mev_dex::ExactState::V3 {
+                            sqrt_price: alloy::primitives::U256::from(s.sqrtPriceX96),
+                            tick: s.tick.as_i32(),
+                            liquidity: l,
+                        },
+                    )),
                     _ => None,
                 }
             }
@@ -204,10 +228,23 @@ pub async fn load_pools(rpc: &Rpc, infos: Vec<PoolInfo>) -> Result<Vec<Pool>> {
                     decode::<IUniswapV3Pool::liquidityCall>(&r[1]),
                 ) {
                     (Some(g), Some(l)) => {
-                        Some(Pool::new(info, v3(g.price, l)).with_directional_fees(
+                        let exact = max_fees.get(&info.address).map(|&(zto, otz)| {
+                            mev_dex::ExactState::Algebra {
+                                sqrt_price: alloy::primitives::U256::from(g.price),
+                                tick: g.tick.as_i32(),
+                                liquidity: l,
+                                max_fee_zero_for_one: zto,
+                                max_fee_one_for_zero: otz,
+                            }
+                        });
+                        let pool = Pool::new(info, v3(g.price, l)).with_directional_fees(
                             g.feeZto as f64 / V3_FEE_DENOM,
                             g.feeOtz as f64 / V3_FEE_DENOM,
-                        ))
+                        );
+                        Some(match exact {
+                            Some(e) => pool.with_exact(e),
+                            None => pool,
+                        })
                     }
                     _ => None,
                 }
@@ -229,6 +266,10 @@ pub async fn load_pools(rpc: &Rpc, infos: Vec<PoolInfo>) -> Result<Vec<Pool>> {
                         reserve1: f64::from(x.reserve1),
                     },
                 )
+                .with_exact(mev_dex::ExactState::V2 {
+                    reserve0: alloy::primitives::U256::from(x.reserve0),
+                    reserve1: alloy::primitives::U256::from(x.reserve1),
+                })
             }),
             PoolKind::CamelotV2 => {
                 let reserves = decode::<IUniswapV2Pair::getReservesCall>(&r[0]);
@@ -244,6 +285,12 @@ pub async fn load_pools(rpc: &Rpc, infos: Vec<PoolInfo>) -> Result<Vec<Pool>> {
                                 reserve1: f64::from(x.reserve1),
                             },
                         )
+                        .with_exact(mev_dex::ExactState::V2Fee {
+                            reserve0: alloy::primitives::U256::from(x.reserve0),
+                            reserve1: alloy::primitives::U256::from(x.reserve1),
+                            fee0: u32::from(f0),
+                            fee1: u32::from(f1),
+                        })
                         .with_directional_fees(
                             f0 as f64 / CAMELOT_FEE_DENOM,
                             f1 as f64 / CAMELOT_FEE_DENOM,
@@ -260,6 +307,62 @@ pub async fn load_pools(rpc: &Rpc, infos: Vec<PoolInfo>) -> Result<Vec<Pool>> {
     Ok(pools)
 }
 
+/// Largest fee each direction of an Algebra pool can charge: `baseFee + alpha1 + alpha2` of its operator's
+/// `feeConfigZto` / `feeConfigOtz` (each sigmoid is capped by its alpha, and the volume sigmoid by their sum), as
+/// per Camelot's verified `AdaptiveFee`. Pools whose reads fail get no exact state (callers fall back to simulation).
+async fn algebra_max_fees(
+    rpc: &Rpc,
+    infos: &[PoolInfo],
+    per_pool: &[Vec<(Address, alloy::primitives::Bytes)>],
+    res: &[Option<alloy::primitives::Bytes>],
+    block: alloy::eips::BlockId,
+) -> HashMap<Address, (u32, u32)> {
+    let mut operators = Vec::new();
+    let mut i = 0;
+    for (info, calls) in infos.iter().zip(per_pool) {
+        let r = &res[i..i + calls.len()];
+        i += calls.len();
+        if info.kind == PoolKind::AlgebraV3
+            && let Some(op) = decode::<IAlgebraPool::dataStorageOperatorCall>(&r[2])
+        {
+            operators.push((info.address, op));
+        }
+    }
+    if operators.is_empty() {
+        return HashMap::new();
+    }
+    let calls: Vec<_> = operators
+        .iter()
+        .flat_map(|(_, op)| {
+            [
+                call(*op, mev_bindings::IAlgebraOperator::feeConfigZtoCall {}),
+                call(*op, mev_bindings::IAlgebraOperator::feeConfigOtzCall {}),
+            ]
+        })
+        .collect();
+    let Ok(out) = rpc.multicall_at(&calls, block).await else {
+        return HashMap::new();
+    };
+    let mut fees = HashMap::new();
+    for ((pool, _), r) in operators.iter().zip(out.chunks(2)) {
+        let (Some(z), Some(o)) = (
+            decode::<mev_bindings::IAlgebraOperator::feeConfigZtoCall>(&r[0]),
+            decode::<mev_bindings::IAlgebraOperator::feeConfigOtzCall>(&r[1]),
+        ) else {
+            continue;
+        };
+        let max = |a1: u16, a2: u16, base: u16| u32::from(a1) + u32::from(a2) + u32::from(base);
+        fees.insert(
+            *pool,
+            (
+                max(z.alpha1, z.alpha2, z.baseFee),
+                max(o.alpha1, o.alpha2, o.baseFee),
+            ),
+        );
+    }
+    fees
+}
+
 /// Re-read state (and Algebra/Camelot fees) for every pool in the store.
 /// A V4 pool from its storage words. Directional fees are the manager's: protocol fee (a pair of
 /// 12-bit fees, one per direction) compounded with the LP fee. Mirrored when our token order is the
@@ -270,15 +373,18 @@ fn v4_pool(
     liquidity: alloy::primitives::B256,
     flipped: bool,
 ) -> Option<Pool> {
-    let (sqrt, _tick, protocol, lp) = mev_bindings::decode_v4_slot0(slot0);
+    let (sqrt, tick, protocol, lp) = mev_bindings::decode_v4_slot0(slot0);
     let liq = u128::try_from(alloy::primitives::U256::from_be_bytes(liquidity.0)).ok()?;
+    let sqrt_raw = sqrt;
     let sqrt = sqrt_price_from_x96(f64::from(sqrt));
     if sqrt <= 0.0 || liq == 0 {
         return None; // uninitialized or empty
     }
     // `protocol`: zeroForOne fee in the low 12 bits, oneForZero in the high 12.
-    let zero_for_one = mev_bindings::v4_swap_fee(protocol & 0xfff, lp) as f64 / V3_FEE_DENOM;
-    let one_for_zero = mev_bindings::v4_swap_fee(protocol >> 12, lp) as f64 / V3_FEE_DENOM;
+    let fee_zfo = mev_bindings::v4_swap_fee(protocol & 0xfff, lp);
+    let fee_ofz = mev_bindings::v4_swap_fee(protocol >> 12, lp);
+    let zero_for_one = fee_zfo as f64 / V3_FEE_DENOM;
+    let one_for_zero = fee_ofz as f64 / V3_FEE_DENOM;
     let (fee0, fee1) = if flipped {
         (one_for_zero, zero_for_one)
     } else {
@@ -288,7 +394,61 @@ fn v4_pool(
         sqrt_price: if flipped { 1.0 / sqrt } else { sqrt },
         liquidity: liq as f64,
     };
-    Some(Pool::new(info, state).with_directional_fees(fee0, fee1))
+    Some(
+        Pool::new(info, state)
+            .with_directional_fees(fee0, fee1)
+            .with_exact(mev_dex::ExactState::V4 {
+                sqrt_price: sqrt_raw,
+                tick,
+                liquidity: liq,
+                fee_zero_for_one: fee_zfo,
+                fee_one_for_zero: fee_ofz,
+            }),
+    )
+}
+
+/// A complete pool/tick snapshot at one canonical block. Partial reads cannot restore confidence.
+pub struct Snapshot {
+    pub pools: Vec<Pool>,
+    pub block: u64,
+    pub block_hash: mev_types::B256,
+}
+
+pub async fn snapshot(
+    rpc: &Rpc,
+    infos: Vec<PoolInfo>,
+    half_window: Option<i32>,
+) -> Result<Snapshot> {
+    let expected = infos.len();
+    let (block_id, block) = mev_rpc::snapshot_block(&rpc.http).await?;
+    let mut pools = load_pools_at(rpc, infos, block_id).await?;
+    anyhow::ensure!(pools.len() == expected, "incomplete pool snapshot");
+    if let Some(half) = half_window {
+        let mut maps = ticks::load_ticks_at(rpc, &pools, half, block_id).await?;
+        for p in &mut pools {
+            if matches!(
+                p.info.kind,
+                PoolKind::UniV3 { .. }
+                    | PoolKind::PancakeV3 { .. }
+                    | PoolKind::UniV4 { .. }
+                    | PoolKind::AlgebraV3
+            ) {
+                p.ticks = Some(std::sync::Arc::new(
+                    maps.remove(&p.info.address).ok_or_else(|| {
+                        anyhow::anyhow!("incomplete tick snapshot for {}", p.info.address)
+                    })?,
+                ));
+            }
+        }
+    }
+    let alloy::eips::BlockId::Hash(hash) = block_id else {
+        anyhow::bail!("snapshot must be pinned to a canonical block hash");
+    };
+    Ok(Snapshot {
+        pools,
+        block,
+        block_hash: hash.block_hash,
+    })
 }
 
 pub async fn refresh(rpc: &Rpc, store: &mut PoolStore) -> Result<()> {

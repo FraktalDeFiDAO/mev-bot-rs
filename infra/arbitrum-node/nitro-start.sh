@@ -9,18 +9,23 @@ readonly DIRECT_ENV_FILE="/etc/arbitrum/nitro.env"
 readonly RUNTIME_ENV_DIR="/run/arbitrum"
 readonly RUNTIME_ENV_FILE="${RUNTIME_ENV_DIR}/nitro.env"
 
+mountpoint -q "$DATA_DIR" || { echo 'Nitro is not starting: persistent data volume is not mounted.' >&2; exit 1; }
+[[ -f "${DATA_DIR}/snapshot-import-complete.json" ]] || { echo 'Verified pruned snapshot import has not completed.' >&2; exit 1; }
+
 rpc_url="${NITRO_PARENT__CHAIN_CONNECTION_URL:-${ETHEREUM_RPC_URL:-}}"
 beacon_url="${NITRO_PARENT__CHAIN_BLOB__CLIENT_BEACON__URL:-${ETHEREUM_BEACON_URL:-}}"
 
 if [[ -z "$rpc_url" || -z "$beacon_url" ]]; then
-  region="$(curl --fail --silent --show-error --max-time 3 \
+  metadata_token="$(curl --fail --silent --show-error --max-time 3 \
     -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" \
     -X PUT http://169.254.169.254/latest/api/token 2>/dev/null || true)"
-  if [[ -n "$region" ]]; then
+  region=""
+  if [[ -n "$metadata_token" ]]; then
     region="$(curl --fail --silent --show-error --max-time 3 \
-      -H "X-aws-ec2-metadata-token: ${region}" \
+      -H "X-aws-ec2-metadata-token: ${metadata_token}" \
       http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || true)"
   fi
+  unset metadata_token
 
   if [[ -z "$rpc_url" && -n "${NITRO_SSM_PARENT_RPC_PARAMETER:-}" && -n "$region" ]]; then
     rpc_url="$(aws ssm get-parameter --region "$region" \

@@ -2,13 +2,15 @@
 
 pub mod bid;
 pub mod gate;
+pub mod ledger;
+pub mod money;
 pub mod persist;
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-use crate::persist::Store;
+use crate::ledger::{Ledger, Reservation};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RiskLimits {
@@ -23,228 +25,258 @@ pub struct RiskLimits {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     KillSwitch,
-    Paused { consecutive_failures: u32 },
+    InvalidInput,
+    Persistence,
+    Unresolved,
+    TipCap {
+        window: &'static str,
+        exposure_microusd: u64,
+        limit_microusd: u64,
+    },
+    Paused {
+        consecutive_failures: u32,
+    },
     InFlight,
-    BelowMinProfit { net_usd: f64 },
-    DailyGasCap { spent_usd: f64 },
+    BelowMinProfit {
+        net_usd: f64,
+    },
+    DailyGasCap {
+        spent_usd: f64,
+    },
 }
 
-/// Share of today's landed profit added to the daily gas budgets.
-const PROFIT_REINVEST_SHARE: f64 = 0.5;
+impl std::fmt::Display for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+impl std::error::Error for Block {}
+
+/// Compatibility boundary for the legacy strategy estimates. The ledger compares integer
+/// micro-dollars; invalid estimates block admission and costs round upward.
+pub fn cost_microusd(usd: f64) -> Result<u64, Block> {
+    if !usd.is_finite() || usd < 0.0 || usd > (u64::MAX / 1_000_000) as f64 {
+        return Err(Block::InvalidInput);
+    }
+    Ok((usd * 1_000_000.0).ceil() as u64)
+}
+
+/// Authorized ceilings round down; liabilities round up.
+pub fn limit_microusd(usd: f64) -> Result<u64, Block> {
+    cost_microusd(usd)?;
+    Ok((usd * 1_000_000.0).floor() as u64)
+}
 
 pub struct RiskGuard {
     limits: RiskLimits,
     kill_file: PathBuf,
-    day: u64,
-    spent_usd: f64,
-    arb_spent_usd: f64,
-    /// Profit landed today: half of it is added to the gas budgets, so a profitable day (a crash's
-    /// liquidation cascade) isn't stopped by the fixed cap while losses stay bounded by it.
-    earned_usd: f64,
-    consecutive_failures: u32,
-    /// Transactions sent and not yet landed, and how many may be.
-    in_flight: u32,
     max_in_flight: u32,
-    /// Where today's spend survives a restart (a crash loop must not reset the daily caps).
-    store: Option<Store>,
-}
-
-/// What of the guard survives a restart. `in_flight` does not: nothing is pending after one.
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct Saved {
-    day: u64,
-    spent_usd: f64,
-    arb_spent_usd: f64,
-    earned_usd: f64,
-    consecutive_failures: u32,
+    ledger: Ledger,
+    tip_caps: ledger::TipCaps,
+    #[cfg(test)]
+    last_check: Option<(f64, bool, u64)>,
+    #[cfg(test)]
+    legacy: std::collections::VecDeque<Reservation>,
 }
 
 impl RiskGuard {
+    pub fn kill_file(&self) -> PathBuf {
+        self.kill_file.clone()
+    }
     pub fn new(limits: RiskLimits, kill_file: PathBuf) -> Self {
         Self {
             limits,
             kill_file,
-            day: 0,
-            spent_usd: 0.0,
-            arb_spent_usd: 0.0,
-            earned_usd: 0.0,
-            consecutive_failures: 0,
-            in_flight: 0,
             max_in_flight: 1,
-            store: None,
+            ledger: Ledger::default(),
+            tip_caps: Default::default(),
+            #[cfg(test)]
+            last_check: None,
+            #[cfg(test)]
+            legacy: Default::default(),
         }
     }
 
-    /// Keep today's spend, profit and failure streak in `path`, and resume from it now (if it is
-    /// from the same UTC day as `now_secs`; an older day starts at zero as a rollover would).
-    /// An unreadable file is ignored; an unwritable one only logs.
     pub fn with_persistence(mut self, path: PathBuf, now_secs: u64) -> Self {
-        let store = Store::new(path);
-        if let Some(s) = store.load::<Saved>()
-            && s.day == now_secs / 86_400
-        {
-            self.day = s.day;
-            self.spent_usd = s.spent_usd;
-            self.arb_spent_usd = s.arb_spent_usd;
-            self.earned_usd = s.earned_usd;
-            self.consecutive_failures = s.consecutive_failures;
-            tracing::info!(
-                spent_usd = s.spent_usd,
-                arb_spent_usd = s.arb_spent_usd,
-                consecutive_failures = s.consecutive_failures,
-                "risk: resumed today's caps from disk"
-            );
-        }
-        self.store = Some(store);
+        self.ledger = Ledger::persistent(path, now_secs);
         self
     }
 
-    fn save(&self) {
-        if let Some(store) = &self.store {
-            store.save(&Saved {
-                day: self.day,
-                spent_usd: self.spent_usd,
-                arb_spent_usd: self.arb_spent_usd,
-                earned_usd: self.earned_usd,
-                consecutive_failures: self.consecutive_failures,
-            });
-        }
+    pub fn with_existing_persistence(
+        mut self,
+        path: PathBuf,
+        now_secs: u64,
+        chain_id: u64,
+        owner: mev_types::Address,
+    ) -> Self {
+        self.ledger = Ledger::persistent_existing(path, now_secs);
+        let _ = self.ledger.require_identity(chain_id, owner);
+        self
     }
 
-    /// Allow up to `n` transactions in flight at once (default 1). The engine keeps concurrent
-    /// arbitrages on disjoint pools, so they don't race each other.
+    pub fn with_tip_caps(mut self, caps: ledger::TipCaps) -> Self {
+        self.tip_caps = caps;
+        self
+    }
+
     pub fn with_max_in_flight(mut self, n: u32) -> Self {
         self.max_in_flight = n.max(1);
         self
     }
 
-    /// Decide whether a trade may be sent. `now_secs` = unix time (for daily rollover).
-    pub fn check(&mut self, net_profit_usd: f64, gas_usd: f64, now_secs: u64) -> Result<(), Block> {
-        self.check_inner(net_profit_usd, gas_usd, now_secs, false)
+    pub fn check(&mut self, net_profit_usd: f64, gas_usd: f64, now: u64) -> Result<(), Block> {
+        self.check_inner(net_profit_usd, gas_usd, now, false)
     }
 
-    /// Like `check`, but allowed while another transaction is in flight: backruns must land in
-    /// the same block as a price update and can't wait for a pending arbitrage's receipt.
-    /// Kill switch, failure pause, profit floor and the daily gas cap still apply.
+    /// Backruns share the global exposure bound; urgency cannot create additional capital.
     pub fn check_concurrent(
         &mut self,
         net_profit_usd: f64,
         gas_usd: f64,
-        now_secs: u64,
+        now: u64,
     ) -> Result<(), Block> {
-        self.check_inner(net_profit_usd, gas_usd, now_secs, true)
+        self.check(net_profit_usd, gas_usd, now)
     }
 
-    fn check_inner(
-        &mut self,
-        net_profit_usd: f64,
-        gas_usd: f64,
-        now_secs: u64,
-        concurrent: bool,
-    ) -> Result<(), Block> {
-        self.roll_day(now_secs);
+    pub fn check_arb(&mut self, net_profit_usd: f64, gas_usd: f64, now: u64) -> Result<(), Block> {
+        self.check_inner(net_profit_usd, gas_usd, now, true)
+    }
+
+    fn check_inner(&mut self, profit: f64, gas: f64, now: u64, arb: bool) -> Result<(), Block> {
+        #[cfg(test)]
+        {
+            self.last_check = None;
+        }
+        let gas_int = cost_microusd(gas)?;
+        let min_profit = cost_microusd(self.limits.min_profit_usd)?;
+        let total = limit_microusd(self.limits.max_gas_usd_per_day)?;
+        let arb_cap = limit_microusd(self.limits.max_arb_gas_usd_per_day)?;
+        if !profit.is_finite() || profit < 0.0 {
+            return Err(Block::InvalidInput);
+        }
         if self.kill_file.exists() {
             return Err(Block::KillSwitch);
         }
-        if self.consecutive_failures >= self.limits.max_consecutive_failures {
-            return Err(Block::Paused {
-                consecutive_failures: self.consecutive_failures,
-            });
+        self.ledger.check(
+            now,
+            gas_int,
+            arb,
+            total,
+            arb_cap,
+            self.max_in_flight,
+            self.limits.max_consecutive_failures,
+        )?;
+        if ((profit * 1_000_000.0).floor() as u64) < min_profit {
+            return Err(Block::BelowMinProfit { net_usd: profit });
         }
-        if self.in_flight >= self.max_in_flight && !concurrent {
-            return Err(Block::InFlight);
-        }
-        if net_profit_usd < self.limits.min_profit_usd {
-            return Err(Block::BelowMinProfit {
-                net_usd: net_profit_usd,
-            });
-        }
-        if self.spent_usd + gas_usd > self.limits.max_gas_usd_per_day + self.reinvested() {
-            return Err(Block::DailyGasCap {
-                spent_usd: self.spent_usd,
-            });
+        #[cfg(test)]
+        {
+            self.last_check = Some((gas, arb, now));
         }
         Ok(())
     }
 
-    /// `check` plus the arbitrage gas sub-budget.
-    pub fn check_arb(
+    pub fn reserve(
         &mut self,
-        net_profit_usd: f64,
-        gas_usd: f64,
-        now_secs: u64,
-    ) -> Result<(), Block> {
-        self.check(net_profit_usd, gas_usd, now_secs)?;
-        if self.arb_spent_usd + gas_usd > self.limits.max_arb_gas_usd_per_day + self.reinvested() {
-            return Err(Block::DailyGasCap {
-                spent_usd: self.arb_spent_usd,
+        profit: f64,
+        bound: f64,
+        arb: bool,
+        now: u64,
+    ) -> Result<Reservation, Block> {
+        self.check_inner(profit, bound, now, arb)?;
+        self.ledger.reserve(now, cost_microusd(bound)?, arb)
+    }
+
+    pub fn reserve_integer(
+        &mut self,
+        profit: u64,
+        bound: u64,
+        tip: u64,
+        arb: bool,
+        now: u64,
+    ) -> Result<Reservation, Block> {
+        if self.kill_file.exists() {
+            return Err(Block::KillSwitch);
+        }
+        self.ledger.check(
+            now,
+            bound,
+            arb,
+            limit_microusd(self.limits.max_gas_usd_per_day)?,
+            limit_microusd(self.limits.max_arb_gas_usd_per_day)?,
+            self.max_in_flight,
+            self.limits.max_consecutive_failures,
+        )?;
+        if profit < cost_microusd(self.limits.min_profit_usd)? {
+            return Err(Block::BelowMinProfit {
+                net_usd: profit as f64 / 1_000_000.0,
             });
         }
-        Ok(())
+        self.ledger.check_tip(now, tip, self.tip_caps)?;
+        self.ledger.reserve_with_tip(now, bound, tip, arb)
     }
 
-    /// Profit landed today (USD), part of which extends the gas budgets.
-    pub fn record_profit(&mut self, usd: f64, now_secs: u64) {
-        self.roll_day(now_secs);
-        if usd > 0.0 {
-            self.earned_usd += usd;
-            self.save();
-        }
+    pub fn unresolved(&self) -> Vec<(Reservation, ledger::Pending)> {
+        self.ledger.unresolved()
     }
 
-    /// Gas budget added by today's profit.
-    fn reinvested(&self) -> f64 {
-        self.earned_usd * PROFIT_REINVEST_SHARE
+    pub fn nonce_window(&self) -> Result<(u64, u64), Block> {
+        self.ledger.nonce_window()
     }
 
-    /// Gas spent on arbitrage (counts toward both the total and the arbitrage budget).
-    pub fn record_arb_gas(&mut self, gas_usd: f64, now_secs: u64) {
-        self.roll_day(now_secs);
-        self.arb_spent_usd += gas_usd;
-        self.save();
+    pub fn arb_spent_today_usd(&self) -> f64 {
+        self.ledger.arb_spent() as f64 / 1_000_000.0
     }
 
+    pub fn settled_spend(&self) -> (u64, u64) {
+        (self.ledger.spent(), self.ledger.arb_spent())
+    }
+
+    /// Legacy bookkeeping only. New execution must use a Reservation passed through signing.
+    #[cfg(test)]
     pub fn mark_sent(&mut self) {
-        self.in_flight += 1;
-    }
-
-    /// Record the outcome of a sent tx.
-    pub fn record(&mut self, success: bool, gas_usd: f64, now_secs: u64) {
-        self.roll_day(now_secs);
-        self.in_flight = self.in_flight.saturating_sub(1);
-        self.spent_usd += gas_usd;
-        if success {
-            self.consecutive_failures = 0
-        } else {
-            self.consecutive_failures += 1
+        let (gas, arb, now) = self.last_check.take().unwrap_or((0.0, false, 0));
+        if let Ok(r) = self
+            .ledger
+            .reserve(now, cost_microusd(gas).unwrap_or(u64::MAX), arb)
+        {
+            self.legacy.push_back(r);
         }
-        self.save();
     }
 
-    /// A race lost on-chain (unsimulated or front-run tx reverted by the executor's profit
-    /// check): costs gas, counted against the daily cap, but not a sign anything is broken, so it
-    /// doesn't advance the failure streak that pauses all sending (seen live: 10 lost arb races
-    /// paused liquidations too).
-    pub fn record_lost_race(&mut self, gas_usd: f64, now_secs: u64) {
-        self.roll_day(now_secs);
-        self.in_flight = self.in_flight.saturating_sub(1);
-        self.spent_usd += gas_usd;
-        self.save();
+    /// Estimated profit never changes the approved daily limits.
+    #[cfg(test)]
+    pub fn record_profit(&mut self, _usd: f64, _now: u64) {}
+
+    #[cfg(test)]
+    pub fn record_arb_gas(&mut self, usd: f64, now: u64) {
+        self.ledger
+            .add_arb_cost(now, cost_microusd(usd).unwrap_or(u64::MAX));
+    }
+
+    #[cfg(test)]
+    pub fn record(&mut self, success: bool, usd: f64, now: u64) {
+        self.record_inner(success, usd, now, false)
+    }
+
+    #[cfg(test)]
+    pub fn record_lost_race(&mut self, usd: f64, now: u64) {
+        self.record_inner(false, usd, now, true)
+    }
+
+    #[cfg(test)]
+    fn record_inner(&mut self, success: bool, usd: f64, now: u64, lost_race: bool) {
+        let cost = cost_microusd(usd).unwrap_or(u64::MAX);
+        if let Some(r) = self.legacy.pop_front() {
+            let _ = r.settle(now, success, cost, lost_race);
+        } else {
+            self.ledger
+                .record_legacy(now, success, cost, false, lost_race);
+        }
     }
 
     pub fn spent_today_usd(&self) -> f64 {
-        self.spent_usd
-    }
-
-    fn roll_day(&mut self, now_secs: u64) {
-        let day = now_secs / 86_400;
-        if day != self.day {
-            self.day = day;
-            self.spent_usd = 0.0;
-            self.arb_spent_usd = 0.0;
-            self.earned_usd = 0.0;
-            self.save();
-        }
+        self.ledger.spent() as f64 / 1_000_000.0
     }
 }
 
@@ -295,6 +327,7 @@ mod tests {
         g.record(false, 0.6, 1_000);
         g.mark_sent();
         g.record(false, 0.5, 1_000); // $1.1 spent, 2 failures: paused and over the cap
+        drop(g);
         let mut g2 = guard().with_persistence(path.clone(), 2_000);
         assert!((g2.spent_today_usd() - 1.1).abs() < 1e-9);
         assert!(matches!(
@@ -302,26 +335,27 @@ mod tests {
             Err(Block::Paused { .. })
         ));
         // The next UTC day starts clean.
+        drop(g2);
         let mut g3 = guard().with_persistence(path.clone(), 90_000);
         assert!(g3.check(1.0, 0.01, 90_000).is_ok());
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn corrupt_state_file_is_ignored() {
+    fn corrupt_state_file_blocks_admission() {
         let path = std::env::temp_dir().join(format!("risk-bad-{}.json", std::process::id()));
         std::fs::write(&path, b"{not json").unwrap();
         let mut g = guard().with_persistence(path.clone(), 0);
-        assert!(g.check(1.0, 0.01, 0).is_ok());
+        assert_eq!(g.check(1.0, 0.01, 0), Err(Block::Persistence));
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn backruns_may_overlap_a_pending_tx_but_keep_other_limits() {
-        let mut g = guard();
+    fn backruns_share_a_bounded_pending_allowance() {
+        let mut g = guard().with_max_in_flight(2);
         g.check(1.0, 0.01, 0).unwrap();
         g.mark_sent();
-        assert!(matches!(g.check(1.0, 0.01, 0), Err(Block::InFlight)));
+        assert!(g.check(1.0, 0.01, 0).is_ok());
         assert!(g.check_concurrent(1.0, 0.01, 0).is_ok());
         assert!(matches!(
             g.check_concurrent(0.05, 0.01, 0),
@@ -431,25 +465,22 @@ mod props {
     }
 
     #[test]
-    fn profit_extends_the_gas_budget_by_half() {
-        let limits = RiskLimits {
-            min_profit_usd: 0.0,
-            max_gas_usd_per_day: 1.0,
-            max_consecutive_failures: u32::MAX,
-            max_arb_gas_usd_per_day: 1.0,
-        };
-        let mut g = RiskGuard::new(limits, PathBuf::from("/nonexistent/kill"));
-        let t = 86_400 * 100;
-        g.record(true, 1.0, t);
+    fn estimates_do_not_expand_approved_budgets() {
+        let mut g = RiskGuard::new(
+            RiskLimits {
+                min_profit_usd: 0.1,
+                max_gas_usd_per_day: 1.0,
+                max_arb_gas_usd_per_day: 1.0,
+                max_consecutive_failures: 10,
+            },
+            PathBuf::from("/nonexistent/STOP"),
+        );
+        g.record(false, 0.8, 0);
+        g.record_profit(2.0, 0);
         assert!(matches!(
-            g.check(1.0, 0.5, t),
+            g.check(1.0, 0.5, 0),
             Err(Block::DailyGasCap { .. })
         ));
-        g.record_profit(2.0, t); // +1.0 of budget
-        assert!(g.check(1.0, 0.5, t).is_ok());
-        assert!(g.check(1.0, 1.5, t).is_err(), "still bounded");
-        // Next day: budget and earnings reset.
-        g.record(true, 1.0, t + 86_400);
-        assert!(g.check(1.0, 0.5, t + 86_400).is_err());
+        assert!(g.check(1.0, 0.1, 90_000).is_ok());
     }
 }

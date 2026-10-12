@@ -28,17 +28,35 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    let _ = dotenvy::dotenv();
+async fn main() {
+    if let Err(e) = run().await {
+        eprintln!("{}", mev_types::redact_secrets(&format!("{e:#}")));
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
+    let args = Args::parse();
+    match args.mode {
+        CliMode::Shadow => {
+            let _ = dotenvy::from_filename(".env.shadow");
+        }
+        CliMode::Live => {
+            let _ = dotenvy::dotenv();
+        }
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with_writer(|| Redacting(std::io::stdout()))
         .init();
-    let args = Args::parse();
     let cfg = ChainConfig::load(&args.config)?;
-    let secrets = Secrets::from_env(&cfg.name.to_uppercase())?;
+    let prefix = cfg.name.to_uppercase();
+    let secrets = match args.mode {
+        CliMode::Shadow => Secrets::read_only(&prefix)?,
+        CliMode::Live => Secrets::from_env(&prefix)?,
+    };
     let mode = match args.mode {
         CliMode::Shadow => Mode::Shadow,
         CliMode::Live => Mode::Live,

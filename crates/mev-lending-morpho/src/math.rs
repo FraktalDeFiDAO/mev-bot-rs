@@ -120,3 +120,140 @@ mod props {
         }
     }
 }
+
+/// Integer-exact Morpho Blue liquidation math (invariant 1): `MathLib` / `SharesMathLib` rounding,
+/// WAD = 1e18. `None` where the contract would revert or overflow.
+pub mod exact {
+    use alloy::primitives::U256;
+
+    const WAD: u128 = 1_000_000_000_000_000_000;
+    const SCALE: u128 = 1_000_000_000_000_000_000_000_000_000_000_000_000; // ORACLE_PRICE_SCALE = 1e36
+    const VIRTUAL_SHARES: u128 = 1_000_000;
+    const VIRTUAL_ASSETS: u128 = 1;
+    const MAX_LIF: u128 = 1_150_000_000_000_000_000;
+    const CURSOR: u128 = 300_000_000_000_000_000;
+
+    fn mul_div_down(a: U256, b: U256, d: U256) -> Option<U256> {
+        a.checked_mul(b)?.checked_div(d)
+    }
+
+    fn mul_div_up(a: U256, b: U256, d: U256) -> Option<U256> {
+        if d.is_zero() {
+            return None;
+        }
+        a.checked_mul(b)?
+            .checked_add(d - U256::from(1u8))?
+            .checked_div(d)
+    }
+
+    fn w_mul_down(a: U256, b: U256) -> Option<U256> {
+        mul_div_down(a, b, U256::from(WAD))
+    }
+
+    fn w_div_up(a: U256, b: U256) -> Option<U256> {
+        mul_div_up(a, U256::from(WAD), b)
+    }
+
+    /// `min(MAX_LIF, WAD / (WAD - CURSOR * (WAD - lltv)))`, rounding down.
+    pub fn incentive_factor(lltv: U256) -> Option<U256> {
+        let wad = U256::from(WAD);
+        let gap = wad.checked_sub(lltv)?;
+        let denom = wad.checked_sub(w_mul_down(U256::from(CURSOR), gap)?)?;
+        let lif = mul_div_down(wad, wad, denom)?;
+        Some(lif.min(U256::from(MAX_LIF)))
+    }
+
+    /// `SharesMathLib.toAssetsUp`.
+    pub fn borrow_assets_up(shares: U256, total_assets: U256, total_shares: U256) -> Option<U256> {
+        mul_div_up(
+            shares,
+            total_assets.checked_add(U256::from(VIRTUAL_ASSETS))?,
+            total_shares.checked_add(U256::from(VIRTUAL_SHARES))?,
+        )
+    }
+
+    /// `Morpho._isHealthy`.
+    pub fn is_healthy(collateral: U256, borrowed: U256, price: U256, lltv: U256) -> Option<bool> {
+        let max_borrow = w_mul_down(mul_div_down(collateral, price, U256::from(SCALE))?, lltv)?;
+        Some(max_borrow >= borrowed)
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Size {
+        pub seized: U256,
+        /// Loan assets the liquidation costs (`seizedAssetsQuoted / LIF`, rounded up).
+        pub repaid: U256,
+    }
+
+    /// Largest liquidation: seize what the debt allows, capped by the collateral, minus a 0.1% haircut
+    /// so share rounding cannot push repayment above the debt.
+    pub fn size(collateral: U256, borrowed: U256, price: U256, lltv: U256) -> Option<Size> {
+        if collateral.is_zero() || borrowed.is_zero() || price.is_zero() {
+            return None;
+        }
+        let lif = incentive_factor(lltv)?;
+        let by_debt = mul_div_down(w_mul_down(borrowed, lif)?, U256::from(SCALE), price)?;
+        let seized = collateral.min(by_debt).checked_mul(U256::from(999u16))? / U256::from(1000u16);
+        if seized.is_zero() {
+            return None;
+        }
+        let quoted = mul_div_up(seized, price, U256::from(SCALE))?;
+        Some(Size {
+            seized,
+            repaid: w_div_up(quoted, lif)?,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn u(n: u128) -> U256 {
+            U256::from(n)
+        }
+
+        #[test]
+        fn the_incentive_factor_is_capped_and_matches_the_formula() {
+            // lltv 0.86: 1 / (1 - 0.3*0.14) = 1.043841336...
+            assert_eq!(
+                incentive_factor(u(860_000_000_000_000_000)),
+                Some(u(1_043_841_336_116_910_229))
+            );
+            assert_eq!(incentive_factor(U256::ZERO), Some(u(MAX_LIF)));
+            assert_eq!(incentive_factor(u(WAD + 1)), None);
+        }
+
+        #[test]
+        fn health_uses_the_contract_rounding_at_the_boundary() {
+            let price = u(2 * 10u128.pow(27)); // 1 collateral (18 dec) = $2000 of a 6-dec loan token
+            let lltv = u(860_000_000_000_000_000);
+            assert_eq!(
+                is_healthy(u(10u128.pow(18)), u(1_720_000_000), price, lltv),
+                Some(true)
+            );
+            assert_eq!(
+                is_healthy(u(10u128.pow(18)), u(1_720_000_001), price, lltv),
+                Some(false)
+            );
+        }
+
+        #[test]
+        fn shares_round_up_with_virtual_offsets() {
+            assert_eq!(
+                borrow_assets_up(u(1_000_000), u(1_000), u(1_000_000_000)),
+                Some(u(1))
+            );
+        }
+
+        #[test]
+        fn size_never_seizes_more_than_exists_or_repays_more_than_the_debt_allows() {
+            let price = u(2 * 10u128.pow(27));
+            let lltv = u(860_000_000_000_000_000);
+            let s = size(u(10 * 10u128.pow(18)), u(1_750_000_000), price, lltv).unwrap();
+            assert!(s.repaid <= u(1_750_000_000));
+            let t = size(u(5 * 10u128.pow(17)), u(1_750_000_000), price, lltv).unwrap();
+            assert_eq!(t.seized, u(5 * 10u128.pow(17)) * u(999) / u(1000));
+            assert_eq!(size(U256::ZERO, u(1), price, lltv), None);
+        }
+    }
+}

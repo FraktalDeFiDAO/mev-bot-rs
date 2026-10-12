@@ -46,7 +46,7 @@ pub struct Counters {
     pub bids_won: u64,
     pub bids_lost: u64,
     /// Priority-fee spend committed at placement (USD) and the sum of bid/net fractions.
-    pub tip_usd: f64,
+    pub estimated_tip_usd: f64,
     pub bid_fraction_sum: f64,
     /// Sends accepted within / after one PGA round (125 ms) of their trigger.
     pub round_within: u64,

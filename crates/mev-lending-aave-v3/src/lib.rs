@@ -6,6 +6,7 @@
 //!   `liquidationCall(collateral, debt, user, type(uint256).max, false)` with an exact approval.
 //! - Price feeds: Aave oracle sources resolved to Chainlink aggregators (sequencer triggers).
 
+pub mod exact;
 pub mod math;
 
 use std::{collections::HashMap, path::PathBuf, sync::Mutex, time::Duration};
@@ -40,7 +41,8 @@ pub const ID: ProtocolId = "aave-v3";
 /// getUserAccountData walks every reserve + oracle: keep batches small.
 const ACCOUNT_DATA_CHUNK: usize = 50;
 /// Flash this much more than the user's debt: Aave rounds variable debt up; excess is returned.
-const FLASH_BUFFER: f64 = 1.002;
+const FLASH_BUFFER_NUM: u64 = 1002;
+const FLASH_BUFFER_DEN: u64 = 1000;
 /// Sweeps fetch reserve bitmaps for accounts below this health factor (the runner's at-risk set).
 const EXPOSURE_HF: f64 = 1.10;
 /// Reserve ids can exceed the live reserve count after reserves are dropped.
@@ -262,6 +264,7 @@ impl AaveV3Adapter {
                     protocol_fee_bps: u32::try_from(fee).unwrap_or(0),
                     liquidation_threshold_bps: u32::try_from(c.liquidationThreshold).unwrap_or(0),
                     price_usd: f64::from(px) / 1e8,
+                    price_raw: px,
                 })
             })
             .collect())
@@ -320,8 +323,14 @@ impl AaveV3Adapter {
             };
             let coll = f64::from(d.currentATokenBalance);
             let debt = f64::from(d.currentVariableDebt) + f64::from(d.currentStableDebt);
+            if let Some(exact) = d.currentVariableDebt.checked_add(d.currentStableDebt)
+                && !exact.is_zero()
+            {
+                pos.debt_exact.push((*a, exact));
+            }
             if coll > 0.0 && d.usageAsCollateralEnabled {
                 pos.collateral.push((*a, coll));
+                pos.collateral_exact.push((*a, d.currentATokenBalance));
             }
             if debt > 0.0 {
                 pos.debt.push((*a, debt));
@@ -363,14 +372,13 @@ impl AaveV3Adapter {
     }
 
     /// Executor plan for liquidating `pos` as sized by `p`.
-    fn build_plan(&self, account: AccountRef, pos: &Position, p: &LiquidationPlan) -> Plan {
+    fn build_plan(&self, account: AccountRef, pos: &Position, p: &LiquidationPlan) -> Option<Plan> {
         let debt_raw = pos
-            .debt
+            .debt_exact
             .iter()
             .find(|(a, _)| *a == p.debt)
-            .map(|(_, d)| *d)
-            .unwrap_or(0.0);
-        let flash = U256::from((debt_raw * FLASH_BUFFER) as u128 + 1);
+            .map(|(_, d)| *d)?;
+        let flash = flash_amount(debt_raw)?;
         let data = liquidationCallCall {
             collateralAsset: p.collateral,
             debtAsset: p.debt,
@@ -379,12 +387,13 @@ impl AaveV3Adapter {
             receiveAToken: false,
         }
         .abi_encode();
-        Plan {
+        Some(Plan {
             protocol: ID,
             account,
             debt_asset: p.debt,
             collateral_asset: p.collateral,
             flash_amount: flash,
+            dependencies: vec![],
             expected_collateral: p.collateral_out,
             bonus_usd: p.bonus_usd,
             calls: vec![ProtocolCall {
@@ -393,8 +402,15 @@ impl AaveV3Adapter {
                 approve_spender: self.cfg.pool,
                 approve_amount: flash,
             }],
-        }
+        })
     }
+}
+
+/// Flash this much more than the user's exact debt (integer arithmetic; `None` on overflow).
+fn flash_amount(debt: U256) -> Option<U256> {
+    debt.checked_mul(U256::from(FLASH_BUFFER_NUM))?
+        .checked_div(U256::from(FLASH_BUFFER_DEN))?
+        .checked_add(U256::from(1u8))
 }
 
 #[async_trait]
@@ -464,7 +480,7 @@ impl LiquidationAdapter for AaveV3Adapter {
     async fn plan(&self, h: &Health, _executor: Address) -> Result<Option<Plan>> {
         let reserves = self.reserves_info().await?;
         let pos = self.position(h.account.account, h.health_factor).await?;
-        Ok(math::plan(&pos, &reserves).map(|p| self.build_plan(h.account, &pos, &p)))
+        Ok(math::plan(&pos, &reserves).and_then(|p| self.build_plan(h.account, &pos, &p)))
     }
 
     fn predict(&self, feed: Address, answer: f64, _executor: Address) -> Vec<Plan> {
@@ -481,7 +497,7 @@ impl LiquidationAdapter for AaveV3Adapter {
         } = &mut *snap;
         math::predict(reserves, cached, assets, answer / old)
             .into_iter()
-            .map(|(pos, p)| self.build_plan(self.account(pos.user), &pos, &p))
+            .filter_map(|(pos, p)| self.build_plan(self.account(pos.user), &pos, &p))
             .collect()
     }
 
@@ -583,5 +599,19 @@ mod exposure_tests {
         assert!(!(user & reserve_bits(3)).is_zero());
         assert!(!(user & reserve_bits(0)).is_zero());
         assert!((user & reserve_bits(1)).is_zero());
+    }
+}
+
+#[cfg(test)]
+mod flash_amount_tests {
+    use super::*;
+
+    #[test]
+    fn the_flash_amount_is_exact_above_f64_precision() {
+        // 2^60 + 1 is not representable in f64; the integer buffer keeps every unit.
+        let debt = U256::from((1u128 << 60) + 1);
+        let want = debt * U256::from(1002u64) / U256::from(1000u64) + U256::from(1u8);
+        assert_eq!(flash_amount(debt), Some(want));
+        assert_eq!(flash_amount(U256::MAX), None);
     }
 }

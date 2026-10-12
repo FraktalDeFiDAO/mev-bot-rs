@@ -3126,10 +3126,12 @@ dependencies = [
  "mev-discovery",
  "mev-engine",
  "mev-ingest",
+ "mev-risk",
  "mev-rpc",
  "mev-sequencer",
  "mev-state",
  "mev-types",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -3153,7 +3155,6 @@ name = "mev-bindings"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "mev-lending",
  "mev-types",
 ]
 
@@ -3322,6 +3323,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
+ "mev-types",
  "serde",
 ]
 
@@ -3480,6 +3482,7 @@ dependencies = [
  "mev-lending",
  "mev-oracle",
  "mev-sequencer",
+ "mev-types",
  "tokio",
  "tracing",
 ]
@@ -3706,6 +3709,7 @@ name = "mev-risk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "mev-types",
  "proptest",
  "serde",
  "serde_json",

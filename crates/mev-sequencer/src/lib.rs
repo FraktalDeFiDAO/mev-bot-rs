@@ -259,6 +259,8 @@ impl SequenceTracker {
 /// Counters for the feed connection since the last summary.
 #[derive(Debug, Default)]
 pub struct FeedStats {
+    /// Never reset by summaries. Any continuity loss invalidates in-flight decisions.
+    pub confidence_epoch: std::sync::atomic::AtomicU64,
     pub messages: std::sync::atomic::AtomicU64,
     /// Times a hole was seen in the sequence numbers.
     pub gaps: std::sync::atomic::AtomicU64,
@@ -310,6 +312,9 @@ pub async fn run_tracked(
             Ok(()) => return, // receiver dropped
             Err(e) => {
                 stats.reconnects.fetch_add(1, Relaxed);
+                stats
+                    .confidence_epoch
+                    .fetch_add(1, std::sync::atomic::Ordering::Release);
                 // A connection that stayed up a while was healthy: start backoff over.
                 if started.elapsed() > Duration::from_secs(60) {
                     backoff.reset();
@@ -379,6 +384,9 @@ async fn stream_once(
                 }
                 SeqObservation::Gap { missing } => {
                     stats.gaps.fetch_add(1, Relaxed);
+                    stats
+                        .confidence_epoch
+                        .fetch_add(1, std::sync::atomic::Ordering::Release);
                     stats
                         .missed
                         .fetch_add(missing.end() - missing.start() + 1, Relaxed);
@@ -666,12 +674,19 @@ mod tests {
         );
         use std::sync::atomic::Ordering::Relaxed;
         assert_eq!(stats.gaps.load(Relaxed), 1);
+        assert_eq!(stats.confidence_epoch.load(Relaxed), 1);
         assert_eq!(stats.missed.load(Relaxed), 1, "only number 12 was skipped");
         assert_eq!(stats.stale.load(Relaxed), 1, "the replayed 13");
         assert_eq!(
             stats.messages.load(Relaxed),
             4,
             "10, 11, 13 and 14 counted; the replay is not"
+        );
+        stats.take_summary();
+        assert_eq!(
+            stats.confidence_epoch.load(Relaxed),
+            1,
+            "summaries cannot restore confidence"
         );
         assert_eq!(tracker.last(), Some(14));
         // The first connection asked for nothing; the second asked to start right after the last number seen (13).

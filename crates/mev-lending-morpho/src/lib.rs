@@ -71,6 +71,10 @@ struct MarketState {
     total_borrow_shares: f64,
     loan_usd: f64,
     loan_decimals: u8,
+    /// The same oracle price and market totals as exact integers; amounts sent on-chain use these.
+    price_raw: U256,
+    total_borrow_assets_raw: U256,
+    total_borrow_shares_raw: U256,
 }
 
 pub struct MorphoAdapter {
@@ -284,6 +288,9 @@ impl MorphoAdapter {
                         total_borrow_shares: m.totalBorrowShares as f64,
                         loan_usd: usd,
                         loan_decimals,
+                        price_raw: price,
+                        total_borrow_assets_raw: U256::from(m.totalBorrowAssets),
+                        total_borrow_shares_raw: U256::from(m.totalBorrowShares),
                     },
                 ))
             })
@@ -450,16 +457,30 @@ impl LiquidationAdapter for MorphoAdapter {
         let Some(pos) = decode::<IMorpho::positionCall>(&res[0]) else {
             return Ok(None);
         };
-        let borrowed = math::borrow_assets(
-            pos.borrowShares as f64,
-            s.total_borrow_assets,
-            s.total_borrow_shares,
-        );
-        let lltv = f64::from(pm.lltv) / 1e18;
-        if math::health_factor(pos.collateral as f64, borrowed, s.price, lltv) >= 1.0 {
+        // Health and sizing from the exact integer reads (the floats above only nominated this account).
+        let collateral = U256::from(pos.collateral);
+        let Some(borrowed) = math::exact::borrow_assets_up(
+            U256::from(pos.borrowShares),
+            s.total_borrow_assets_raw,
+            s.total_borrow_shares_raw,
+        ) else {
+            return Ok(None);
+        };
+        if math::exact::is_healthy(collateral, borrowed, s.price_raw, pm.lltv) != Some(false) {
             return Ok(None);
         }
-        Ok(self.build_plan(h.account, &pm, s, pos.collateral as f64, borrowed))
+        let Some(size) = math::exact::size(collateral, borrowed, s.price_raw, pm.lltv) else {
+            return Ok(None);
+        };
+        let borrowed_f = f64::from(borrowed);
+        Ok(self.build_plan(
+            h.account,
+            &pm,
+            s,
+            f64::from(collateral),
+            borrowed_f,
+            Some(size),
+        ))
     }
 
     fn predict(&self, feed: Address, answer: f64, _executor: Address) -> Vec<Plan> {
@@ -494,7 +515,7 @@ impl LiquidationAdapter for MorphoAdapter {
                 if hf_before < PREDICT_HF_MAX || hf_after >= PREDICT_HF_MAX {
                     continue; // already the regular re-poll's job, or still healthy
                 }
-                plans.extend(self.build_plan(*acct, &pm, s, *collateral, *borrowed));
+                plans.extend(self.build_plan(*acct, &pm, s, *collateral, *borrowed, None));
             }
         }
         plans
@@ -567,11 +588,21 @@ impl MorphoAdapter {
         s: &MarketState,
         collateral: f64,
         borrowed: f64,
+        exact: Option<math::exact::Size>,
     ) -> Option<Plan> {
         let lltv = f64::from(pm.lltv) / 1e18;
         let size = math::size(collateral, borrowed, s.price, lltv)?;
+        // Amounts that reach calldata come from the integer size when the caller has exact reads
+        // (the `plan` path); the speculative `predict` path only has estimates and keeps its haircut.
+        let (seized, repaid) = match exact {
+            Some(x) => (x.seized, x.repaid),
+            None => (
+                U256::from(size.seized as u128),
+                U256::from(size.repaid as u128),
+            ),
+        };
         // Flash 1% over the computed repayment (rounding / interest accrual); excess is returned.
-        let flash = U256::from((size.repaid * 1.01) as u128 + 1);
+        let flash = repaid.checked_mul(U256::from(101u8))? / U256::from(100u8) + U256::from(1u8);
         let data = IMorpho::liquidateCall {
             marketParams: IMorpho::MarketParams {
                 loanToken: pm.loan,
@@ -581,7 +612,7 @@ impl MorphoAdapter {
                 lltv: pm.lltv,
             },
             borrower: account.account,
-            seizedAssets: U256::from(size.seized as u128),
+            seizedAssets: seized,
             repaidShares: U256::ZERO,
             data: Default::default(),
         }
@@ -592,7 +623,8 @@ impl MorphoAdapter {
             debt_asset: pm.loan,
             collateral_asset: pm.collateral,
             flash_amount: flash,
-            expected_collateral: size.seized,
+            dependencies: vec![],
+            expected_collateral: f64::from(seized),
             bonus_usd: loan_usd(size.bonus, s),
             calls: vec![ProtocolCall {
                 target: self.cfg.morpho,
@@ -703,6 +735,9 @@ mod decimals_tests {
             total_borrow_shares: 0.0,
             loan_usd,
             loan_decimals,
+            price_raw: U256::ZERO,
+            total_borrow_assets_raw: U256::ZERO,
+            total_borrow_shares_raw: U256::ZERO,
         }
     }
 

@@ -53,9 +53,8 @@ case "${1:-}" in
     echo "deployed AtlasSolver: $ADDR  (next: allow, cap, float, bond)" ;;
   allow)
     need_solver
-    for t in "$AAVE_POOL"; do   # extend with the other protocol targets the executor allows
-      send "$SOLVER" 'setTarget(address,bool)' "$t" true; echo "allowed $t"
-    done ;;
+    send "$SOLVER" 'setTarget(address,bool)' "$AAVE_POOL" true
+    echo "allowed $AAVE_POOL" ;;
   bond)
     need_solver; AMT=${2:?amount in ETH}
     confirm "Bond $AMT ETH from $OWNER on Atlas (it pays solver gas; unbond has an escrow delay)?"

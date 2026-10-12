@@ -276,6 +276,7 @@ struct Parser {
     toks: Vec<(usize, Tok)>,
     at: usize,
     end: usize,
+    depth: usize,
 }
 
 impl Parser {
@@ -326,8 +327,14 @@ impl Parser {
 
     fn not(&mut self) -> Result<Expr, ParseError> {
         if self.eat(&Tok::Not) {
+            if self.depth >= 64 {
+                return self.err("expression nesting exceeds 64 levels");
+            }
+            self.depth += 1;
+            let arg = self.not();
+            self.depth -= 1;
             return Ok(Expr::Not {
-                arg: Box::new(self.not()?),
+                arg: Box::new(arg?),
             });
         }
         self.atom()
@@ -357,7 +364,13 @@ impl Parser {
 
     fn atom(&mut self) -> Result<Expr, ParseError> {
         if self.eat(&Tok::LParen) {
-            let e = self.or()?;
+            if self.depth >= 64 {
+                return self.err("expression nesting exceeds 64 levels");
+            }
+            self.depth += 1;
+            let e = self.or();
+            self.depth -= 1;
+            let e = e?;
             if !self.eat(&Tok::RParen) {
                 return self.err("expected ')'");
             }
@@ -424,7 +437,19 @@ impl Parser {
 
 /// Parse rule text into an expression.
 pub fn parse(text: &str) -> Result<Expr, ParseError> {
+    if text.len() > 65_536 {
+        return Err(ParseError {
+            pos: 1,
+            message: "expression exceeds 64 KiB".into(),
+        });
+    }
     let toks = lex(text)?;
+    if toks.len() > 2_048 {
+        return Err(ParseError {
+            pos: 1,
+            message: "expression exceeds 2048 tokens".into(),
+        });
+    }
     if toks.is_empty() {
         return Err(ParseError {
             pos: 1,
@@ -435,6 +460,7 @@ pub fn parse(text: &str) -> Result<Expr, ParseError> {
         toks,
         at: 0,
         end: text.chars().count(),
+        depth: 0,
     };
     let e = p.or()?;
     if p.at != p.toks.len() {
@@ -447,6 +473,12 @@ pub fn parse(text: &str) -> Result<Expr, ParseError> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn excessive_expression_nesting_is_rejected() {
+        assert!(parse(&("not ".repeat(129) + "true")).is_err());
+        assert!(parse(&("(".repeat(129) + "true" + &")".repeat(129))).is_err());
+    }
 
     fn p(text: &str) -> Expr {
         parse(text).unwrap_or_else(|e| panic!("{text}: {e}"))

@@ -23,7 +23,7 @@ jobs:
       rust: ${{ steps.detect.outputs.rust }}
       contracts: ${{ steps.detect.outputs.contracts }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - id: detect
         run: |
           echo "rust=$([ -f Cargo.toml ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
@@ -34,14 +34,16 @@ jobs:
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: 1.99.0
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      - run: python3 -m unittest discover -s scripts/tests -v
 
   contracts:
     needs: changes
@@ -51,16 +53,18 @@ jobs:
       run:
         working-directory: contracts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           submodules: recursive
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+        with:
+          version: v1.8.4
       - run: forge fmt --check
       - run: forge build --sizes
       # Network-free: unit, fuzz, invariant (mocks).
-      - run: forge test --match-path test/ArbExecutorUnit.t.sol
+      - run: forge test --no-match-path 'test/{ArbExecutor,UniswapV4,FastFeedTicketVault}.t.sol'
       # Fork tests against live Arbitrum state (public RPC).
-      - run: forge test --match-path test/ArbExecutor.t.sol
+      - run: forge test --match-path 'test/{ArbExecutor,UniswapV4,FastFeedTicketVault}.t.sol'
         env:
           ARBITRUM_HTTP_URL: https://arb1.arbitrum.io/rpc
 
@@ -70,18 +74,30 @@ jobs:
       contents: read
       pull-requests: read  # gitleaks lists the PR's commits
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: scripts/test-seqscope-ui.sh
+        env:
+          CHROMIUM: google-chrome
 
   # Single required status check for branch protection: passes when every
   # job above passed or was skipped because its part of the repo doesn't exist yet.
   ci-ok:
     if: always()
-    needs: [rust, contracts, secrets]
+    needs: [rust, contracts, secrets, browser]
     runs-on: ubuntu-latest
     steps:
       - run: |

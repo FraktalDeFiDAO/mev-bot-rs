@@ -2,9 +2,10 @@
 
 use std::collections::HashMap;
 
+use alloy::primitives::U256;
 use alloy::{rpc::types::Log, sol_types::SolEvent};
 use mev_bindings::{IPancakeV3Pool, IPoolManager, IUniswapV2Pair, IUniswapV3Pool};
-use mev_dex::{Pool, PoolState, sqrt_price_from_x96};
+use mev_dex::{ExactState, Pool, PoolState, sqrt_price_from_x96};
 use mev_types::{Address, B256, PoolKind};
 
 /// A pool whose presim-applied (tentative) state never got confirmed by a real log and was rolled back.
@@ -26,6 +27,7 @@ pub struct RefreshOutcome {
     pub skipped: usize,
     /// Applied pools whose fresh state differed from what we held: the chain won.
     pub overwrites: Vec<Overwrite>,
+    pub tick_changes: Vec<Address>,
 }
 
 /// One cached state replaced by the chain's (becomes a `StateCorrection` record).
@@ -34,7 +36,17 @@ pub struct Overwrite {
     pub pool: Address,
     pub predicted: PoolState,
     pub actual: PoolState,
+    pub predicted_exact: Option<ExactState>,
+    pub actual_exact: Option<ExactState>,
 }
+
+/// What a pool held before a presim state was applied: f64 state, tick table, exact state, and when.
+type Confirmed = (
+    PoolState,
+    Option<std::sync::Arc<mev_dex::TickMap>>,
+    Option<ExactState>,
+    std::time::Instant,
+);
 
 #[derive(Default, Clone)]
 pub struct PoolStore {
@@ -42,6 +54,7 @@ pub struct PoolStore {
     /// Bumped each time a pool's state or tick map actually changes: an opportunity records the
     /// versions it was computed from and is dropped if any moved (invariant 3).
     versions: HashMap<Address, u64>,
+    revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
     by_pair: HashMap<(Address, Address), Vec<Address>>,
     /// Every token of a stored pool (so calldata can be scanned for the tokens we watch).
     tokens: std::collections::HashSet<Address>,
@@ -52,14 +65,7 @@ pub struct PoolStore {
     /// table from before it and when it was last applied. A real block log, a resync or a replacement confirms the
     /// pool and clears the entry; `expire_tentative` rolls back what nothing confirmed (a transaction that reverted
     /// or never landed leaves no log).
-    tentative: HashMap<
-        Address,
-        (
-            PoolState,
-            Option<std::sync::Arc<mev_dex::TickMap>>,
-            std::time::Instant,
-        ),
-    >,
+    tentative: HashMap<Address, Confirmed>,
 }
 
 /// Relative tolerance below which two states are the same pool state (they differ only by floating-point
@@ -96,6 +102,34 @@ pub fn materially_different(a: &PoolState, b: &PoolState) -> bool {
     }
 }
 
+/// New exact state after a V3-style `Swap`: an Algebra pool keeps its fee bounds (Algebra's `Swap` event has the same
+/// signature as Uniswap's), anything else becomes a plain V3 state.
+fn v3_swap_state(
+    prev: Option<ExactState>,
+    sqrt_price: U256,
+    tick: i32,
+    liquidity: u128,
+) -> ExactState {
+    match prev {
+        Some(ExactState::Algebra {
+            max_fee_zero_for_one,
+            max_fee_one_for_zero,
+            ..
+        }) => ExactState::Algebra {
+            sqrt_price,
+            tick,
+            liquidity,
+            max_fee_zero_for_one,
+            max_fee_one_for_zero,
+        },
+        _ => ExactState::V3 {
+            sqrt_price,
+            tick,
+            liquidity,
+        },
+    }
+}
+
 fn pair_key(a: Address, b: Address) -> (Address, Address) {
     if a < b { (a, b) } else { (b, a) }
 }
@@ -117,6 +151,16 @@ impl PoolStore {
 
     fn bump(&mut self, addr: Address) {
         *self.versions.entry(addr).or_insert(0) += 1;
+        self.revision
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// A shared revision for the final asynchronous signing and broadcast check.
+    pub fn submission_revision(&self) -> (std::sync::Arc<std::sync::atomic::AtomicU64>, u64) {
+        (
+            self.revision.clone(),
+            self.revision.load(std::sync::atomic::Ordering::Acquire),
+        )
     }
 
     /// The pool's state version (0 if unknown).
@@ -137,6 +181,24 @@ impl PoolStore {
         fresh: Vec<Pool>,
         read_at: &HashMap<Address, u64>,
     ) -> RefreshOutcome {
+        self.apply_refresh_inner(fresh, read_at, true)
+    }
+
+    /// State and ticks read at one block are applied together or rejected together.
+    pub fn apply_coherent_refresh(
+        &mut self,
+        fresh: Vec<Pool>,
+        read_at: &HashMap<Address, u64>,
+    ) -> RefreshOutcome {
+        self.apply_refresh_inner(fresh, read_at, false)
+    }
+
+    fn apply_refresh_inner(
+        &mut self,
+        fresh: Vec<Pool>,
+        read_at: &HashMap<Address, u64>,
+        preserve_ticks: bool,
+    ) -> RefreshOutcome {
         let mut out = RefreshOutcome::default();
         for mut p in fresh {
             let addr = p.info.address;
@@ -147,12 +209,19 @@ impl PoolStore {
                 out.skipped += 1;
                 continue;
             }
-            p.ticks = old.ticks.clone();
-            if materially_different(&old.state, &p.state) {
+            if preserve_ticks {
+                p.ticks = old.ticks.clone();
+            }
+            if p.ticks != old.ticks {
+                out.tick_changes.push(addr);
+            }
+            if materially_different(&old.state, &p.state) || old.exact != p.exact {
                 out.overwrites.push(Overwrite {
                     pool: addr,
                     predicted: old.state.clone(),
                     actual: p.state.clone(),
+                    predicted_exact: old.exact.clone(),
+                    actual_exact: p.exact.clone(),
                 });
             }
             self.replace(p);
@@ -222,7 +291,11 @@ impl PoolStore {
         let addr = pool.info.address;
         self.tentative.remove(&addr);
         if let Some(p) = self.pools.get_mut(&addr) {
-            let changed = p.state != pool.state || p.fee0 != pool.fee0 || p.fee1 != pool.fee1;
+            let changed = p.state != pool.state
+                || p.fee0 != pool.fee0
+                || p.fee1 != pool.fee1
+                || p.exact != pool.exact
+                || p.ticks != pool.ticks;
             *p = pool;
             if changed {
                 self.bump(addr);
@@ -244,8 +317,9 @@ impl PoolStore {
     pub fn set_state(&mut self, addr: &Address, state: PoolState) {
         self.tentative.remove(addr);
         if let Some(p) = self.pools.get_mut(addr) {
-            let changed = p.state != state;
+            let changed = p.state != state || p.exact.is_some();
             p.state = state;
+            p.exact = None; // an f64 state cannot vouch for exact integers
             if changed {
                 self.bump(*addr);
             }
@@ -284,6 +358,55 @@ impl PoolStore {
         };
         let delta = if add { amount as f64 } else { -(amount as f64) };
         let tick = ((sqrt_price * sqrt_price).ln() / 1.0001f64.ln()).floor() as i32;
+        let exact_delta = i128::try_from(amount)
+            .ok()
+            .map(|a| if add { a } else { -a });
+        pool.exact = match (pool.exact.take(), exact_delta) {
+            (Some(prev @ (ExactState::V3 { .. } | ExactState::Algebra { .. })), Some(d)) => {
+                let (t, liquidity) = match &prev {
+                    ExactState::V3 {
+                        tick, liquidity, ..
+                    }
+                    | ExactState::Algebra {
+                        tick, liquidity, ..
+                    } => (*tick, *liquidity),
+                    _ => unreachable!(),
+                };
+                let l = if lo <= t && t < hi {
+                    if d < 0 {
+                        liquidity.checked_sub(d.unsigned_abs())
+                    } else {
+                        liquidity.checked_add(d as u128)
+                    }
+                } else {
+                    Some(liquidity)
+                };
+                l.map(|liquidity| match prev {
+                    ExactState::Algebra {
+                        sqrt_price,
+                        tick,
+                        max_fee_zero_for_one,
+                        max_fee_one_for_zero,
+                        ..
+                    } => ExactState::Algebra {
+                        sqrt_price,
+                        tick,
+                        liquidity,
+                        max_fee_zero_for_one,
+                        max_fee_one_for_zero,
+                    },
+                    ExactState::V3 {
+                        sqrt_price, tick, ..
+                    } => ExactState::V3 {
+                        sqrt_price,
+                        tick,
+                        liquidity,
+                    },
+                    other => other,
+                })
+            }
+            _ => None,
+        };
         if lo <= tick && tick < hi {
             pool.state = PoolState::V3 {
                 sqrt_price,
@@ -300,6 +423,27 @@ impl PoolStore {
                     Ok(i) => map.ticks[i].1 += d,
                     Err(i) => map.ticks.insert(i, (t, d)),
                 }
+            }
+            // The same edit on the exact table; an overflow or missing amount leaves nothing exact.
+            if let Some(e) = exact_delta {
+                for (t, d) in [(lo, Some(e)), (hi, e.checked_neg())] {
+                    if t < map.lo || t > map.hi {
+                        continue;
+                    }
+                    let Some(d) = d else {
+                        pool.exact = None;
+                        break;
+                    };
+                    match map.exact.binary_search_by_key(&t, |(k, _)| *k) {
+                        Ok(i) => match map.exact[i].1.checked_add(d) {
+                            Some(v) => map.exact[i].1 = v,
+                            None => pool.exact = None,
+                        },
+                        Err(i) => map.exact.insert(i, (t, d)),
+                    }
+                }
+            } else {
+                pool.exact = None;
             }
             pool.ticks = Some(std::sync::Arc::new(map));
         }
@@ -339,14 +483,87 @@ impl PoolStore {
         };
         let tick = (2.0 * sqrt.ln() / 1.0001f64.ln()).floor();
         let (lo, hi) = (ev.tickLower.as_i32() as f64, ev.tickUpper.as_i32() as f64);
-        if !(lo <= tick && tick < hi) {
-            return None; // outside the active range: depth at the current price is unchanged
-        }
         let delta: f64 = ev.liquidityDelta.to_string().parse().ok()?;
-        pool.state = PoolState::V3 {
-            sqrt_price,
-            liquidity: (liquidity + delta).max(0.0),
+        if delta == 0.0 {
+            return None;
+        }
+        let exact_delta = i128::try_from(ev.liquidityDelta).ok();
+        pool.exact = match (pool.exact.take(), exact_delta) {
+            (
+                Some(ExactState::V4 {
+                    sqrt_price,
+                    tick: t,
+                    liquidity,
+                    fee_zero_for_one,
+                    fee_one_for_zero,
+                }),
+                Some(d),
+            ) => {
+                let in_range = ev.tickLower.as_i32() <= t && t < ev.tickUpper.as_i32();
+                let l = if !in_range {
+                    Some(liquidity)
+                } else if d < 0 {
+                    liquidity.checked_sub(d.unsigned_abs())
+                } else {
+                    liquidity.checked_add(d as u128)
+                };
+                l.map(|liquidity| ExactState::V4 {
+                    sqrt_price,
+                    tick: t,
+                    liquidity,
+                    fee_zero_for_one,
+                    fee_one_for_zero,
+                })
+            }
+            _ => None,
         };
+        if lo <= tick && tick < hi {
+            pool.state = PoolState::V3 {
+                sqrt_price,
+                liquidity: (liquidity + delta).max(0.0),
+            };
+        }
+        if let Some(map) = pool.ticks.as_deref() {
+            let mut map = map.clone();
+            let (low, high) = if flipped {
+                (-ev.tickUpper.as_i32(), -ev.tickLower.as_i32())
+            } else {
+                (ev.tickLower.as_i32(), ev.tickUpper.as_i32())
+            };
+            // The exact table follows the same mirrored coordinates as the f64 one.
+            match exact_delta {
+                Some(e) => {
+                    for (t, d) in [(low, Some(e)), (high, e.checked_neg())] {
+                        if t < map.lo || t > map.hi {
+                            continue;
+                        }
+                        let Some(d) = d else {
+                            pool.exact = None;
+                            break;
+                        };
+                        match map.exact.binary_search_by_key(&t, |(k, _)| *k) {
+                            Ok(i) => match map.exact[i].1.checked_add(d) {
+                                Some(v) => map.exact[i].1 = v,
+                                None => pool.exact = None,
+                            },
+                            Err(i) => map.exact.insert(i, (t, d)),
+                        }
+                    }
+                }
+                None => pool.exact = None,
+            }
+            for (t, d) in [(low, delta), (high, -delta)] {
+                if t < map.lo || t > map.hi {
+                    continue;
+                }
+                match map.ticks.binary_search_by_key(&t, |(k, _)| *k) {
+                    Ok(i) => map.ticks[i].1 += d,
+                    Err(i) => map.ticks.insert(i, (t, d)),
+                }
+            }
+            pool.ticks = Some(std::sync::Arc::new(map));
+        }
+        self.bump(addr);
         Some(addr)
     }
 
@@ -370,6 +587,24 @@ impl PoolStore {
         if sqrt <= 0.0 {
             return None;
         }
+        // Exact state is in the pool's own orientation, so the event's integers go in as they are; the
+        // charged fee replaces the one for the direction the swap travelled.
+        let zero_for_one = ev.amount0.is_negative();
+        let fee = ev.fee.to::<u32>();
+        pool.exact = match pool.exact.take() {
+            Some(ExactState::V4 {
+                fee_zero_for_one,
+                fee_one_for_zero,
+                ..
+            }) => Some(ExactState::V4 {
+                sqrt_price: U256::from(ev.sqrtPriceX96),
+                tick: ev.tick.as_i32(),
+                liquidity: ev.liquidity,
+                fee_zero_for_one: if zero_for_one { fee } else { fee_zero_for_one },
+                fee_one_for_zero: if zero_for_one { fee_one_for_zero } else { fee },
+            }),
+            _ => None,
+        };
         pool.state = PoolState::V3 {
             // Flipped pools store the mirrored price (token order reversed).
             sqrt_price: if flipped { 1.0 / sqrt } else { sqrt },
@@ -418,12 +653,12 @@ impl PoolStore {
         let snapshot = self
             .pools
             .get(&target)
-            .map(|p| (p.state.clone(), p.ticks.clone()))?;
+            .map(|p| (p.state.clone(), p.ticks.clone(), p.exact.clone()))?;
         let updated = self.apply_log_core(log)?;
         self.tentative
             .entry(updated)
-            .and_modify(|e| e.2 = now)
-            .or_insert((snapshot.0, snapshot.1, now));
+            .and_modify(|e| e.3 = now)
+            .or_insert((snapshot.0, snapshot.1, snapshot.2, now));
         Some(updated)
     }
 
@@ -438,12 +673,12 @@ impl PoolStore {
         let due: Vec<Address> = self
             .tentative
             .iter()
-            .filter(|(_, (_, _, at))| now.saturating_duration_since(*at) >= ttl)
+            .filter(|(_, (_, _, _, at))| now.saturating_duration_since(*at) >= ttl)
             .map(|(a, _)| *a)
             .collect();
         let mut out = Vec::new();
         for a in due {
-            let Some((state, ticks, _)) = self.tentative.remove(&a) else {
+            let Some((state, ticks, exact, _)) = self.tentative.remove(&a) else {
                 continue;
             };
             let Some(p) = self.pools.get_mut(&a) else {
@@ -452,6 +687,7 @@ impl PoolStore {
             let tentative = if restore {
                 let t = std::mem::replace(&mut p.state, state.clone());
                 p.ticks = ticks;
+                p.exact = exact;
                 self.bump(a);
                 t
             } else {
@@ -473,12 +709,29 @@ impl PoolStore {
 
     /// Shared by real and tentative application: the pool's version moves only when its state actually changed.
     fn apply_log_core(&mut self, log: &Log) -> Option<Address> {
-        let before = self
-            .log_pool(log)
-            .and_then(|a| self.pools.get(&a).map(|p| (a, p.state.clone())));
+        let before = self.log_pool(log).and_then(|a| {
+            self.pools.get(&a).map(|p| {
+                (
+                    a,
+                    p.state.clone(),
+                    p.exact.clone(),
+                    p.ticks.clone(),
+                    p.fee0,
+                    p.fee1,
+                )
+            })
+        });
         let updated = self.apply_log_inner(log);
-        if let (Some(a), Some((b, old))) = (updated, before) {
-            if a != b || self.pools.get(&a).is_some_and(|p| p.state != old) {
+        if let (Some(a), Some((b, old, exact, ticks, fee0, fee1))) = (updated, before) {
+            if a != b
+                || self.pools.get(&a).is_some_and(|p| {
+                    p.state != old
+                        || p.exact != exact
+                        || p.ticks != ticks
+                        || p.fee0 != fee0
+                        || p.fee1 != fee1
+                })
+            {
                 self.bump(a);
             }
         } else if let Some(a) = updated {
@@ -509,6 +762,17 @@ impl PoolStore {
                 reserve0: f64::from(ev.reserve0),
                 reserve1: f64::from(ev.reserve1),
             };
+            let (reserve0, reserve1) = (U256::from(ev.reserve0), U256::from(ev.reserve1));
+            pool.exact = Some(match pool.exact {
+                // A Camelot pair keeps its per-direction fees across reserve updates.
+                Some(ExactState::V2Fee { fee0, fee1, .. }) => ExactState::V2Fee {
+                    reserve0,
+                    reserve1,
+                    fee0,
+                    fee1,
+                },
+                _ => ExactState::V2 { reserve0, reserve1 },
+            });
             Some(addr)
         } else if topic0 == IPancakeV3Pool::Swap::SIGNATURE_HASH {
             let ev = IPancakeV3Pool::Swap::decode_log_data(log.data()).ok()?;
@@ -516,6 +780,12 @@ impl PoolStore {
                 sqrt_price: sqrt_price_from_x96(f64::from(ev.sqrtPriceX96)),
                 liquidity: ev.liquidity as f64,
             };
+            pool.exact = Some(v3_swap_state(
+                pool.exact.take(),
+                U256::from(ev.sqrtPriceX96),
+                ev.tick.as_i32(),
+                ev.liquidity,
+            ));
             Some(addr)
         } else if topic0 == IUniswapV3Pool::Swap::SIGNATURE_HASH {
             let ev = IUniswapV3Pool::Swap::decode_log_data(log.data()).ok()?;
@@ -523,6 +793,12 @@ impl PoolStore {
                 sqrt_price: sqrt_price_from_x96(f64::from(ev.sqrtPriceX96)),
                 liquidity: ev.liquidity as f64,
             };
+            pool.exact = Some(v3_swap_state(
+                pool.exact.take(),
+                U256::from(ev.sqrtPriceX96),
+                ev.tick.as_i32(),
+                ev.liquidity,
+            ));
             Some(addr)
         } else {
             None
@@ -549,6 +825,36 @@ impl PoolStore {
         let to_native = self.rate(token, native)?;
         let native_usd = self.rate(native, usd_token)?;
         Some(to_native * native_usd * usd_unit)
+    }
+
+    /// Micro-USD per raw token unit using the configured USD token's one-dollar unit.
+    pub fn usd_price_integer(
+        &self,
+        token: Address,
+        usd: Address,
+        decimals: u8,
+        native: Address,
+    ) -> Option<mev_types::price::Ratio> {
+        use alloy::primitives::{U256, U512};
+        use mev_types::price::Ratio;
+        let scale = U256::from(10u8).checked_pow(U256::from(decimals))?;
+        let usd_unit = Ratio::new(U512::from(1_000_000u64), U512::from(scale))?;
+        if token == usd {
+            return Some(usd_unit);
+        }
+        let rate = |a, b| {
+            self.pools_for(a, b)
+                .into_iter()
+                .filter_map(|p| p.integer_rate(a))
+                .max_by_key(|(_, depth)| *depth)
+                .map(|(r, _)| r)
+        };
+        if let Some(direct) = rate(token, usd) {
+            return direct.multiply(&usd_unit);
+        }
+        rate(token, native)?
+            .multiply(&rate(native, usd)?)?
+            .multiply(&usd_unit)
     }
 
     /// Mid rate token -> other (raw units) from the deepest pool for the pair.
@@ -952,6 +1258,64 @@ mod tests {
     }
 
     #[test]
+    fn out_of_range_v4_liquidity_changes_update_both_tick_boundaries_and_versions() {
+        for flipped in [false, true] {
+            let mut store = PoolStore::default();
+            let mut p = v4_pool(flipped);
+            let addr = p.info.address;
+            p.ticks = Some(std::sync::Arc::new(mev_dex::TickMap {
+                exact: Vec::new(),
+                ticks: vec![],
+                lo: -100,
+                hi: 100,
+                hint: Some((1.0, 0)),
+            }));
+            store.insert(p);
+            let before = store.version(&addr);
+            store
+                .apply_log(&v4_liquidity_log(B256::repeat_byte(0x44), 10, 20, 500))
+                .unwrap();
+            let p = store.get(&addr).unwrap();
+            assert!(matches!(p.state, PoolState::V3 { liquidity: 1.0, .. }));
+            let expected = if flipped {
+                vec![(-20, 500.0), (-10, -500.0)]
+            } else {
+                vec![(10, 500.0), (20, -500.0)]
+            };
+            assert_eq!(p.ticks.as_ref().unwrap().ticks, expected);
+            assert!(store.version(&addr) > before);
+        }
+    }
+
+    #[test]
+    fn stale_coherent_snapshot_cannot_replace_newer_price_or_ticks() {
+        let mut store = PoolStore::default();
+        let original = v4_pool(false);
+        let addr = original.info.address;
+        store.insert(original.clone());
+        let versions = store.versions_snapshot();
+        let mut snapshot = original.clone();
+        snapshot.ticks = Some(std::sync::Arc::new(mev_dex::TickMap {
+            exact: Vec::new(),
+            ticks: vec![(1, 9.0)],
+            lo: -10,
+            hi: 10,
+            hint: Some((1.0, 0)),
+        }));
+        let mut newer = original;
+        newer.state = PoolState::V3 {
+            sqrt_price: 2.0,
+            liquidity: 20.0,
+        };
+        store.insert(newer.clone());
+        let out = store.apply_coherent_refresh(vec![snapshot], &versions);
+        assert_eq!(out.skipped, 1);
+        assert_eq!(store.get(&addr).unwrap().state, newer.state);
+        assert!(store.get(&addr).unwrap().ticks.is_none());
+        assert!(out.tick_changes.is_empty());
+    }
+
+    #[test]
     fn liquidity_changes_apply_only_when_the_current_tick_is_inside_the_range() {
         let mut s = PoolStore::default();
         let p = v4_pool(false); // sqrt price 1.0 = tick 0, liquidity 1.0
@@ -967,7 +1331,10 @@ mod tests {
         };
         assert_eq!(liquidity, 1_001.0);
         // A range above the current tick does not touch the active depth.
-        assert_eq!(s.apply_log(&v4_liquidity_log(id, 10, 20, 5_000)), None);
+        assert_eq!(
+            s.apply_log(&v4_liquidity_log(id, 10, 20, 5_000)),
+            Some(addr)
+        );
         // Removal (negative delta) shrinks it, and never below zero.
         s.apply_log(&v4_liquidity_log(id, 0, 10, -400));
         let PoolState::V3 { liquidity, .. } = s.get(&addr).unwrap().state else {
@@ -998,7 +1365,7 @@ mod tests {
         };
         let (addr, id) = (p.info.address, B256::repeat_byte(0x44));
         s.insert(p);
-        assert_eq!(s.apply_log(&v4_liquidity_log(id, 5, 10, 50)), None);
+        assert_eq!(s.apply_log(&v4_liquidity_log(id, 5, 10, 50)), Some(addr));
         assert_eq!(s.apply_log(&v4_liquidity_log(id, 0, 5, 50)), Some(addr));
         let PoolState::V3 { liquidity, .. } = s.get(&addr).unwrap().state else {
             panic!()
@@ -1200,6 +1567,7 @@ mod tests {
             },
         )
         .with_ticks(mev_dex::TickMap {
+            exact: Vec::new(),
             ticks: vec![(-10, 100.0), (10, -100.0)],
             lo: -50,
             hi: 50,
@@ -1275,6 +1643,73 @@ mod tests {
             },
         ));
         (s, Address::with_last_byte(addr_byte))
+    }
+
+    #[test]
+    fn raw_integer_corrections_are_recorded_even_when_display_floats_match() {
+        let mut s = PoolStore::default();
+        let addr = Address::with_last_byte(7);
+        let raw = U256::from(9_007_199_254_740_992u64);
+        let mut p = pool(
+            7,
+            PoolKind::UniV2 { fee_bps: 30 },
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 9_007_199_254_740_992.0,
+                reserve1: 100.0,
+            },
+        );
+        p.exact = Some(ExactState::V2 {
+            reserve0: raw,
+            reserve1: U256::from(100u8),
+        });
+        s.insert(p.clone());
+        let versions = s.versions_snapshot();
+        p.exact = Some(ExactState::V2 {
+            reserve0: raw + U256::from(1u8),
+            reserve1: U256::from(100u8),
+        });
+        let out = s.apply_coherent_refresh(vec![p], &versions);
+        assert_eq!(out.overwrites.len(), 1);
+        assert_eq!(out.overwrites[0].predicted, out.overwrites[0].actual);
+        assert_ne!(
+            out.overwrites[0].predicted_exact,
+            out.overwrites[0].actual_exact
+        );
+        assert!(s.version(&addr) > versions[&addr]);
+    }
+
+    #[test]
+    fn usd_costs_and_token_floors_use_raw_reserves_without_float_conversion() {
+        let mut s = PoolStore::default();
+        let p = pool(
+            7,
+            PoolKind::UniV2 { fee_bps: 30 },
+            A,
+            B,
+            PoolState::V2 {
+                reserve0: 1e18,
+                reserve1: 3e9,
+            },
+        );
+        s.insert(p.with_exact(ExactState::V2 {
+            reserve0: U256::from(10u128.pow(18)),
+            reserve1: U256::from(3_000_000_000u64),
+        }));
+        let price = s.usd_price_integer(A, B, 6, A).unwrap();
+        assert_eq!(
+            price.microusd(U256::from(10u128.pow(18)), true),
+            Some(3_000_000_000)
+        );
+        assert_eq!(
+            price.raw_for_cost(20_000),
+            Some(U256::from(6_666_666_666_667u64))
+        );
+        assert!(
+            s.usd_price_integer(Address::with_last_byte(99), B, 6, A)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1504,6 +1939,286 @@ mod tests {
             s.version(&addr),
             v0,
             "and the opportunity versions do not move"
+        );
+    }
+
+    fn exact_v3_store() -> (PoolStore, Address) {
+        let mut s = PoolStore::default();
+        let addr = Address::with_last_byte(1);
+        let p = pool(
+            1,
+            PoolKind::UniV3 { fee: 500 },
+            A,
+            B,
+            PoolState::V3 {
+                sqrt_price: 1.0,
+                liquidity: 1_000.0,
+            },
+        )
+        .with_exact(ExactState::V3 {
+            sqrt_price: U256::from(1u8) << 96,
+            tick: 0,
+            liquidity: 1_000,
+        })
+        .with_ticks(mev_dex::TickMap {
+            ticks: vec![],
+            exact: vec![],
+            lo: -100,
+            hi: 100,
+            hint: None,
+        });
+        s.insert(p);
+        (s, addr)
+    }
+
+    #[test]
+    fn exact_state_follows_the_events_that_move_the_pool() {
+        let (mut s, addr) = exact_v3_store();
+        s.apply_log(&v3_liquidity_log(addr, true, -10, 10, 400));
+        let p = s.get(&addr).unwrap();
+        assert_eq!(
+            p.exact,
+            Some(ExactState::V3 {
+                sqrt_price: U256::from(1u8) << 96,
+                tick: 0,
+                liquidity: 1_400
+            })
+        );
+        assert_eq!(
+            p.ticks.as_ref().unwrap().exact,
+            vec![(-10, 400), (10, -400)]
+        );
+        // Burning more than the pool holds cannot be represented: exact state is dropped, not clamped.
+        s.apply_log(&v3_liquidity_log(addr, false, -10, 10, 1_000_000));
+        assert_eq!(s.get(&addr).unwrap().exact, None);
+    }
+
+    #[test]
+    fn a_float_state_write_and_a_rollback_keep_exact_state_honest() {
+        let (mut s, addr) = exact_v3_store();
+        let before = s.get(&addr).unwrap().exact.clone();
+        assert!(before.is_some());
+        let t0 = std::time::Instant::now();
+        s.apply_log_tentative(&v3_liquidity_log(addr, true, -10, 10, 400), t0);
+        assert_ne!(s.get(&addr).unwrap().exact, before);
+        let ttl = std::time::Duration::from_secs(1);
+        s.expire_tentative(t0 + ttl, ttl, true);
+        assert_eq!(
+            s.get(&addr).unwrap().exact,
+            before,
+            "rolled back with the f64 state"
+        );
+        s.set_state(
+            &addr,
+            PoolState::V3 {
+                sqrt_price: 1.1,
+                liquidity: 5.0,
+            },
+        );
+        assert_eq!(
+            s.get(&addr).unwrap().exact,
+            None,
+            "an f64 write cannot vouch for integers"
+        );
+    }
+
+    #[test]
+    fn a_sync_event_sets_exact_reserves() {
+        let (mut s, addr) = v2_store(5);
+        s.apply_log(&sync_log(addr, 150, 250));
+        assert_eq!(
+            s.get(&addr).unwrap().exact,
+            Some(ExactState::V2 {
+                reserve0: U256::from(150u8),
+                reserve1: U256::from(250u8)
+            })
+        );
+    }
+
+    #[test]
+    fn a_chain_read_replaces_exact_state_and_a_superseded_read_cannot() {
+        let (mut s, addr) = exact_v3_store();
+        let read_at = s.versions_snapshot();
+        let template = s.get(&addr).unwrap().clone();
+        let fresh = |liq: u128| {
+            let mut p = template.clone();
+            p.state = PoolState::V3 {
+                sqrt_price: 1.0,
+                liquidity: liq as f64,
+            };
+            p.exact = Some(ExactState::V3 {
+                sqrt_price: U256::from(1u8) << 96,
+                tick: 0,
+                liquidity: liq,
+            });
+            p
+        };
+        // An event lands after the read began: the (older) read must not overwrite it.
+        s.apply_log(&v3_liquidity_log(addr, true, -10, 10, 400));
+        let out = s.apply_coherent_refresh(vec![fresh(7)], &read_at);
+        assert_eq!(out.skipped, 1);
+        assert!(matches!(
+            s.get(&addr).unwrap().exact,
+            Some(ExactState::V3 {
+                liquidity: 1_400,
+                ..
+            })
+        ));
+        // A read taken after the event is the chain's word and replaces both models together.
+        let read_at = s.versions_snapshot();
+        let out = s.apply_coherent_refresh(vec![fresh(9)], &read_at);
+        assert_eq!(out.applied, 1);
+        assert!(matches!(
+            s.get(&addr).unwrap().exact,
+            Some(ExactState::V3 { liquidity: 9, .. })
+        ));
+    }
+
+    #[test]
+    fn a_sync_keeps_a_camelot_pairs_directional_fees() {
+        let (mut s, addr) = v2_store(6);
+        let p = s.get(&addr).unwrap().clone().with_exact(ExactState::V2Fee {
+            reserve0: U256::from(1u8),
+            reserve1: U256::from(1u8),
+            fee0: 300,
+            fee1: 500,
+        });
+        s.replace(p);
+        s.apply_log(&sync_log(addr, 150, 250));
+        assert_eq!(
+            s.get(&addr).unwrap().exact,
+            Some(ExactState::V2Fee {
+                reserve0: U256::from(150u8),
+                reserve1: U256::from(250u8),
+                fee0: 300,
+                fee1: 500
+            })
+        );
+    }
+
+    fn v4_exact_pool(flipped: bool) -> Pool {
+        let mut p = v4_pool(flipped).with_exact(ExactState::V4 {
+            sqrt_price: U256::from(1u8) << 96,
+            tick: 0,
+            liquidity: 1_000,
+            fee_zero_for_one: 625,
+            fee_one_for_zero: 625,
+        });
+        p.ticks = Some(std::sync::Arc::new(mev_dex::TickMap {
+            ticks: vec![],
+            exact: vec![],
+            lo: -100,
+            hi: 100,
+            hint: None,
+        }));
+        p
+    }
+
+    #[test]
+    fn v4_swap_and_liquidity_events_keep_the_exact_state_in_the_pools_own_orientation() {
+        for flipped in [false, true] {
+            let mut s = PoolStore::default();
+            let p = v4_exact_pool(flipped);
+            let (addr, id) = (p.info.address, B256::repeat_byte(0x44));
+            s.insert(p);
+            // currency0 paid (amount0 < 0): zeroForOne, fee 700 for that direction only.
+            s.apply_log(&v4_swap_log(id, Address::with_last_byte(0x77), -100, 700));
+            assert_eq!(
+                s.get(&addr).unwrap().exact,
+                Some(ExactState::V4 {
+                    sqrt_price: U256::from(2u8) << 96,
+                    tick: 0,
+                    liquidity: 5_000,
+                    fee_zero_for_one: 700,
+                    fee_one_for_zero: 625
+                }),
+                "flipped {flipped}: exact state is never mirrored"
+            );
+            // A position over the current tick adds its liquidity; its two ticks enter the (mirrored when flipped) table.
+            s.apply_log(&v4_liquidity_log(id, -10, 10, 400));
+            let p = s.get(&addr).unwrap();
+            assert!(
+                matches!(
+                    p.exact,
+                    Some(ExactState::V4 {
+                        liquidity: 5_400,
+                        ..
+                    })
+                ),
+                "flipped {flipped}"
+            );
+            let exact_ticks = &p.ticks.as_ref().unwrap().exact;
+            if flipped {
+                assert_eq!(
+                    exact_ticks,
+                    &vec![(-10, 400), (10, -400)].into_iter().collect::<Vec<_>>(),
+                    "mirrored coordinates"
+                );
+            } else {
+                assert_eq!(exact_ticks, &vec![(-10, 400), (10, -400)]);
+            }
+        }
+    }
+
+    #[test]
+    fn an_algebra_pool_keeps_its_fee_bounds_through_swaps_and_liquidity_events() {
+        let mut s = PoolStore::default();
+        let addr = Address::with_last_byte(1);
+        let mut p = pool(
+            1,
+            PoolKind::AlgebraV3,
+            A,
+            B,
+            PoolState::V3 {
+                sqrt_price: 1.0,
+                liquidity: 1_000.0,
+            },
+        )
+        .with_exact(ExactState::Algebra {
+            sqrt_price: U256::from(1u8) << 96,
+            tick: 0,
+            liquidity: 1_000,
+            max_fee_zero_for_one: 700,
+            max_fee_one_for_zero: 750,
+        });
+        p.ticks = Some(std::sync::Arc::new(mev_dex::TickMap {
+            ticks: vec![],
+            exact: vec![],
+            lo: -100,
+            hi: 100,
+            hint: None,
+        }));
+        s.insert(p);
+        s.apply_log(&v3_liquidity_log(addr, true, -10, 10, 400));
+        assert!(matches!(
+            s.get(&addr).unwrap().exact,
+            Some(ExactState::Algebra {
+                liquidity: 1_400,
+                max_fee_zero_for_one: 700,
+                max_fee_one_for_zero: 750,
+                ..
+            })
+        ));
+        // The Algebra Swap event has Uniswap's signature; the V3 handler must not erase the bounds.
+        let ev = IUniswapV3Pool::Swap {
+            sender: Address::with_last_byte(1),
+            recipient: Address::with_last_byte(2),
+            amount0: I256::try_from(-5i64).unwrap(),
+            amount1: I256::try_from(5i64).unwrap(),
+            sqrtPriceX96: U160::from(2u128 << 96),
+            liquidity: 900,
+            tick: I24::try_from(7).unwrap(),
+        };
+        s.apply_log(&rpc_log(addr, ev.encode_log_data()));
+        assert_eq!(
+            s.get(&addr).unwrap().exact,
+            Some(ExactState::Algebra {
+                sqrt_price: U256::from(2u8) << 96,
+                tick: 7,
+                liquidity: 900,
+                max_fee_zero_for_one: 700,
+                max_fee_one_for_zero: 750
+            })
         );
     }
 }

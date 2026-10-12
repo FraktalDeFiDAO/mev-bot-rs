@@ -561,8 +561,33 @@ impl ChainConfig {
     pub fn load(path: &Path) -> Result<Self> {
         let raw =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        fn validate_numbers(value: &toml::Value, field: &str) -> Result<()> {
+            match value {
+                toml::Value::Float(v) if !v.is_finite() || *v < 0.0 => {
+                    anyhow::bail!("{field} must be finite and nonnegative");
+                }
+                toml::Value::Integer(v) if *v < 0 => anyhow::bail!("{field} must be nonnegative"),
+                toml::Value::Table(t) => {
+                    for (k, v) in t {
+                        validate_numbers(v, &format!("{field}.{k}"))?;
+                    }
+                }
+                toml::Value::Array(a) => {
+                    for v in a {
+                        validate_numbers(v, field)?;
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        validate_numbers(&toml::from_str::<toml::Value>(&raw)?, "config")?;
         let cfg: ChainConfig =
             toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+        anyhow::ensure!(
+            !cfg.atlas.bid,
+            "atlas.bid requires verified escrow liability and charge settlement; bidding is unavailable"
+        );
         for [a, b] in &cfg.pairs {
             cfg.token(a)?;
             cfg.token(b)?;
@@ -659,6 +684,15 @@ impl std::fmt::Debug for Secrets {
 
 impl Secrets {
     pub fn from_env(prefix: &str) -> Result<Self> {
+        Self::load_env(prefix, true)
+    }
+
+    /// Shadow execution never reads the production signing key.
+    pub fn read_only(prefix: &str) -> Result<Self> {
+        Self::load_env(prefix, false)
+    }
+
+    fn load_env(prefix: &str, signing: bool) -> Result<Self> {
         let var = |k: &str| std::env::var(format!("{prefix}_{k}")).or_else(|_| std::env::var(k));
         let addr = |k: &str| -> Result<Option<Address>> {
             match std::env::var(k) {
@@ -673,8 +707,9 @@ impl Secrets {
         Ok(Self {
             http_url: var("HTTP_URL").with_context(|| format!("{prefix}_HTTP_URL not set"))?,
             ws_url: var("WS_URL").with_context(|| format!("{prefix}_WS_URL not set"))?,
-            private_key: std::env::var("PRIVATE_KEY")
-                .ok()
+            private_key: signing
+                .then(|| std::env::var("PRIVATE_KEY").ok())
+                .flatten()
                 .filter(|k| !k.trim().is_empty()),
             profit_receiver: addr("PROFIT_RECEIVER")?,
             executor: addr("EXECUTOR_ADDRESS")?,
@@ -781,6 +816,22 @@ mod tests {
     }
 
     #[test]
+    fn atlas_bid_configuration_is_rejected_until_settlement_is_verified() {
+        let path = std::env::temp_dir().join(format!("atlas-config-{}.toml", std::process::id()));
+        let raw = std::fs::read_to_string(repo_config())
+            .unwrap()
+            .replace("bid = false", "bid = true");
+        std::fs::write(&path, raw).unwrap();
+        assert!(
+            ChainConfig::load(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("escrow")
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn unknown_token_in_pairs_is_rejected() {
         let raw = std::fs::read_to_string(repo_config()).unwrap();
         let bad = raw.replacen("[\"WETH\", \"USDC\"]", "[\"WETH\", \"NOPE\"]", 1);
@@ -792,6 +843,18 @@ mod tests {
             err.contains("NOPE"),
             "error should name the bad symbol: {err}"
         );
+    }
+
+    #[test]
+    fn nonfinite_and_negative_money_configuration_is_rejected() {
+        let raw = std::fs::read_to_string(repo_config()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("invalid-numbers.toml");
+        for value in ["nan", "inf", "-inf", "-1", "-0.1"] {
+            std::fs::write(&p, format!("{raw}\n[audit-invalid]\namount = {value}\n")).unwrap();
+            let error = ChainConfig::load(&p).unwrap_err().to_string();
+            assert!(error.contains("nonnegative"), "{value}: {error}");
+        }
     }
 
     #[test]

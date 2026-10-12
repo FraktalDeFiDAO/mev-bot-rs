@@ -59,6 +59,7 @@ impl Default for GateConfig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Verdict {
+    Persistence,
     Go,
     /// Still inside the free tries (or the gate is off).
     Explore,
@@ -158,10 +159,11 @@ impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
         }
     }
 
-    /// The global win rate, floored.
-    fn prior(&self, cfg: &GateConfig) -> f64 {
-        let raw = (self.global_wins as f64 + 0.5) / (self.global_attempts as f64 + 10.0);
-        raw.max(cfg.prior_floor)
+    /// The global win rate, floored, in parts per million (rounded down: a smaller prior is the cautious one).
+    fn prior_ppm(&self, cfg: &GateConfig) -> u128 {
+        let raw = (2 * u128::from(self.global_wins) + 1) * 1_000_000
+            / (2 * u128::from(self.global_attempts) + 20);
+        raw.max((cfg.prior_floor.clamp(0.0, 1.0) * 1_000_000.0).floor() as u128)
     }
 
     /// Should a send on `route` go out? `net_usd` is the expected profit if it wins, `cost_usd`
@@ -174,6 +176,12 @@ impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
         cost_usd: f64,
         now: u64,
     ) -> Verdict {
+        if self.store.as_ref().is_some_and(|s| !s.healthy()) {
+            return Verdict::Persistence;
+        }
+        if !net_usd.is_finite() || !cost_usd.is_finite() || cost_usd < 0.0 {
+            return Verdict::Persistence;
+        }
         if !cfg.enabled {
             return Verdict::Explore;
         }
@@ -192,9 +200,12 @@ impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
             // One probe: if it loses too, the stop holds for another period.
             self.last_probe = now;
             self.save();
+            if self.store.as_ref().is_some_and(|s| !s.healthy()) {
+                return Verdict::Persistence;
+            }
             return Verdict::Explore;
         }
-        let prior = self.prior(cfg);
+        let prior_ppm = self.prior_ppm(cfg);
         let Some(s) = self.routes.get(&route) else {
             return Verdict::Explore;
         };
@@ -215,15 +226,31 @@ impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
         if s.attempts < cfg.min_attempts {
             return Verdict::Explore;
         }
-        let p =
-            (s.wins as f64 + prior * cfg.prior_strength) / (s.attempts as f64 + cfg.prior_strength);
-        let ev = p * net_usd - (1.0 - p) * cost_usd;
-        if ev > 0.0 {
+        // p = (wins + prior * strength) / (attempts + strength), kept as an exact fraction
+        // (ppm x milli-attempts). EV > 0  <=>  p * net > (1 - p) * cost  <=>  p_num * (net + cost) > cost * p_den.
+        let strength_milli = (cfg.prior_strength.max(0.0) * 1000.0).floor() as u128;
+        let p_num = u128::from(s.wins) * 1_000_000 * 1000 + prior_ppm * strength_milli;
+        let p_den = (u128::from(s.attempts) * 1000 + strength_milli) * 1_000_000;
+        let (Ok(cost), Ok(net)) = (
+            crate::cost_microusd(cost_usd),
+            crate::limit_microusd(net_usd.max(0.0)),
+        ) else {
+            return Verdict::Persistence;
+        };
+        let (cost, net) = (u128::from(cost), u128::from(net));
+        let p = p_num as f64 / p_den.max(1) as f64;
+        let go = net > 0
+            && p_den > 0
+            && p_num
+                .checked_mul(net + cost)
+                .zip(cost.checked_mul(p_den))
+                .is_some_and(|(l, r)| l > r);
+        if go {
             Verdict::Go
         } else {
             Verdict::NegativeEv {
                 p_win: p,
-                ev_usd: ev,
+                ev_usd: p * net_usd - (1.0 - p) * cost_usd,
             }
         }
     }
@@ -233,17 +260,24 @@ impl<K: std::hash::Hash + Eq + Copy> RouteGate<K> {
         let s = self.routes.entry(route).or_default();
         s.attempts += 1;
         s.last_result = now;
+        if won {
+            s.wins += 1;
+            s.losses_in_row = 0;
+        } else {
+            s.losses_in_row += 1;
+            s.last_loss = now;
+        }
+        self.record_global(won, now);
+    }
+
+    /// Recovered transactions may lack route metadata, but their result still counts globally.
+    pub fn record_global(&mut self, won: bool, now: u64) {
         if self.global_attempts == 0 {
             self.global_since = now;
         }
         self.global_attempts += 1;
         if won {
-            s.wins += 1;
-            s.losses_in_row = 0;
             self.global_wins += 1;
-        } else {
-            s.losses_in_row += 1;
-            s.last_loss = now;
         }
         self.save();
     }
@@ -401,12 +435,14 @@ mod tests {
         for route in 0..3 {
             a.record(route, false, 10);
         }
+        drop(a);
         let mut b: RouteGate<u32> = RouteGate::new().with_persistence(path.clone(), &c, 20);
         assert!(matches!(
             b.check(&c, 7, 1.0, 0.1, 20),
             Verdict::GlobalStop { .. }
         ));
         // A record from a previous window is not resumed.
+        drop(b);
         let b2: RouteGate<u32> =
             RouteGate::new().with_persistence(path.clone(), &c, 10 + c.memory_secs + 1);
         assert!(b2.is_empty());

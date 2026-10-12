@@ -80,10 +80,30 @@ impl Rpc {
         Err(last_err.unwrap())
     }
 
+    pub async fn multicall_at(
+        &self,
+        calls: &[(Address, Bytes)],
+        block: alloy::eips::BlockId,
+    ) -> Result<Vec<Option<Bytes>>> {
+        multicall_at(&self.http, calls, 200, block).await
+    }
+
     /// Batch many read calls into Multicall3 `aggregate3` requests. `None` = that call failed.
     pub async fn multicall(&self, calls: &[(Address, Bytes)]) -> Result<Vec<Option<Bytes>>> {
         multicall(&self.http, calls, 200).await
     }
+}
+
+/// EIP-1898 keeps every round and chunk on the same canonical state.
+pub async fn snapshot_block(provider: &DynProvider) -> Result<(alloy::eips::BlockId, u64)> {
+    let block = provider
+        .get_block_by_number(alloy::eips::BlockNumberOrTag::Latest)
+        .await?
+        .context("latest block unavailable")?;
+    Ok((
+        alloy::eips::BlockId::hash_canonical(block.header.hash),
+        block.header.number,
+    ))
 }
 
 /// Chunks in flight at once. With a rotating provider each lands on a different endpoint.
@@ -95,6 +115,15 @@ pub async fn multicall(
     provider: &DynProvider,
     calls: &[(Address, Bytes)],
     chunk: usize,
+) -> Result<Vec<Option<Bytes>>> {
+    multicall_at(provider, calls, chunk, alloy::eips::BlockId::latest()).await
+}
+
+pub async fn multicall_at(
+    provider: &DynProvider,
+    calls: &[(Address, Bytes)],
+    chunk: usize,
+    block: alloy::eips::BlockId,
 ) -> Result<Vec<Option<Bytes>>> {
     use futures::{StreamExt, TryStreamExt};
     let mc = IMulticall3::new(MULTICALL3, provider);
@@ -115,6 +144,7 @@ pub async fn multicall(
             let mc = &mc;
             async move {
                 mc.aggregate3(batch)
+                    .block(block)
                     .call()
                     .await
                     .context("multicall failed")

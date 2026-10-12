@@ -11,6 +11,8 @@ struct State {
     next: u64,
     /// Released nonces below `next`, lowest handed out first.
     free: BTreeSet<u64>,
+    held: BTreeSet<u64>,
+    floor: u64,
 }
 
 #[derive(Debug)]
@@ -21,6 +23,8 @@ impl NonceManager {
         Self(Mutex::new(State {
             next: start,
             free: BTreeSet::new(),
+            held: BTreeSet::new(),
+            floor: start,
         }))
     }
 
@@ -28,17 +32,19 @@ impl NonceManager {
     pub fn take(&self) -> u64 {
         let mut s = self.0.lock().unwrap();
         if let Some(n) = s.free.pop_first() {
+            s.held.insert(n);
             return n;
         }
         let n = s.next;
         s.next += 1;
+        s.held.insert(n);
         n
     }
 
     /// `n` was never accepted by any endpoint: make it available again.
     pub fn release(&self, n: u64) {
         let mut s = self.0.lock().unwrap();
-        if n >= s.next {
+        if n < s.floor || !s.held.remove(&n) {
             return;
         }
         s.free.insert(n);
@@ -56,8 +62,21 @@ impl NonceManager {
     /// count and forget every released nonce.
     pub fn reset(&self, chain_pending: u64) {
         let mut s = self.0.lock().unwrap();
-        s.next = chain_pending;
-        s.free.clear();
+        // A lagging endpoint cannot revoke a reservation owned by another send task.
+        s.floor = s.floor.max(chain_pending);
+        let floor = s.floor;
+        s.held.retain(|n| *n >= floor);
+        s.free.retain(|n| *n >= floor);
+        s.next = s.next.max(floor);
+    }
+
+    pub fn hold(&self, nonce: u64) {
+        let mut s = self.0.lock().unwrap();
+        if nonce >= s.floor {
+            s.free.remove(&nonce);
+            s.held.insert(nonce);
+            s.next = s.next.max(nonce.saturating_add(1));
+        }
     }
 
     #[cfg(test)]
@@ -71,6 +90,14 @@ impl NonceManager {
 mod tests {
     use super::*;
     use std::{collections::HashSet, sync::Arc};
+
+    #[test]
+    fn a_stale_chain_refresh_preserves_held_nonces() {
+        let m = NonceManager::new(7);
+        let held = m.take();
+        m.reset(7);
+        assert_ne!(m.take(), held);
+    }
 
     #[test]
     fn hands_out_consecutive_nonces() {

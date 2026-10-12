@@ -11,6 +11,22 @@ use seqscope_store::{Query, Reader, SCHEMA_VERSION, Writer, WriterConfig, disk_b
 
 static N: AtomicU32 = AtomicU32::new(0);
 
+#[test]
+fn sql_limits_bound_values_work_and_leave_the_connection_usable() {
+    let db = Db::new();
+    drop(rusqlite::Connection::open(&db.0).unwrap());
+    let r = Reader::open(&db.0).unwrap();
+    assert!(r.sql("SELECT hex(zeroblob(3000000))", 1).is_err());
+    assert!(
+        r.sql(
+            "WITH RECURSIVE t(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM t) SELECT sum(x) FROM t",
+            1
+        )
+        .is_err()
+    );
+    assert_eq!(r.sql("SELECT 1", 1).unwrap().rows[0][0], 1);
+}
+
 /// A fresh database path that is removed when dropped.
 struct Db(PathBuf);
 impl Db {

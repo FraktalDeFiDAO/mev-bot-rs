@@ -392,6 +392,12 @@ impl Reader {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA query_only=ON;")?;
+        use rusqlite::limits::Limit;
+        conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, 1_048_576)?;
+        conn.set_limit(Limit::SQLITE_LIMIT_SQL_LENGTH, 65_536)?;
+        conn.set_limit(Limit::SQLITE_LIMIT_COLUMN, 128)?;
+        conn.set_limit(Limit::SQLITE_LIMIT_EXPR_DEPTH, 64)?;
+        conn.set_limit(Limit::SQLITE_LIMIT_ATTACHED, 0)?;
         Ok(Reader { conn })
     }
 
@@ -491,28 +497,53 @@ impl Reader {
 
     /// Free-form SQL, read-only (the connection refuses writes). Use the `v_rows` view for text addresses.
     pub fn sql(&self, sql: &str, max_rows: usize) -> Result<SqlResult> {
+        if sql.len() > 65_536 {
+            return Err(StoreError::Other("SQL exceeds 64 KiB".into()));
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut steps = 0usize;
+        self.conn.progress_handler(
+            1_000,
+            Some(move || {
+                steps += 1_000;
+                steps >= 2_000_000 || std::time::Instant::now() >= deadline
+            }),
+        )?;
+        struct ResetProgress<'a>(&'a Connection);
+        impl Drop for ResetProgress<'_> {
+            fn drop(&mut self) {
+                let _ = self.0.progress_handler(0, None::<fn() -> bool>);
+            }
+        }
+        let _reset = ResetProgress(&self.conn);
         let mut st = self.conn.prepare(sql)?;
         let columns: Vec<String> = st.column_names().iter().map(|s| (*s).to_string()).collect();
         let n = columns.len();
         let mut out = Vec::new();
         let mut truncated = false;
+        let mut bytes = columns.iter().map(String::len).sum::<usize>();
         let mut rows = st.query([])?;
         while let Some(r) = rows.next()? {
-            if out.len() >= max_rows {
+            if out.len() >= max_rows.min(10_000) {
                 truncated = true;
                 break;
             }
-            out.push(
-                (0..n)
-                    .map(|i| match r.get_ref(i) {
-                        Ok(ValueRef::Null) | Err(_) => serde_json::Value::Null,
-                        Ok(ValueRef::Integer(v)) => v.into(),
-                        Ok(ValueRef::Real(v)) => v.into(),
-                        Ok(ValueRef::Text(t)) => String::from_utf8_lossy(t).into_owned().into(),
-                        Ok(ValueRef::Blob(b)) => format!("0x{}", alloy::hex_encode(b)).into(),
-                    })
-                    .collect(),
-            );
+            let values: Vec<serde_json::Value> = (0..n)
+                .map(|i| match r.get_ref(i) {
+                    Ok(ValueRef::Null) | Err(_) => serde_json::Value::Null,
+                    Ok(ValueRef::Integer(v)) => v.into(),
+                    Ok(ValueRef::Real(v)) => v.into(),
+                    Ok(ValueRef::Text(t)) => String::from_utf8_lossy(t).into_owned().into(),
+                    Ok(ValueRef::Blob(b)) => format!("0x{}", alloy::hex_encode(b)).into(),
+                })
+                .collect();
+            bytes += serde_json::to_vec(&values)
+                .map_err(|e| StoreError::Other(e.to_string()))?
+                .len();
+            if bytes > 1_048_576 {
+                return Err(StoreError::Other("SQL result exceeds 1 MiB".into()));
+            }
+            out.push(values);
         }
         Ok(SqlResult {
             columns,

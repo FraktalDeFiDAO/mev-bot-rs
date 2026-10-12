@@ -35,8 +35,7 @@ cargo fmt --all --check
 cargo clippy -q --message-format=short -p mev-decode -p seqscope-core -p seqscope-store -p seqscope-server -p seqscope-cli --all-targets -- -D warnings
 
 step "tests"
-cargo test -q -p mev-decode -p seqscope-core -p seqscope-store -p seqscope-server -p seqscope-cli 2>&1 | grep -E "^test result|FAILED|panicked|error" || true
-cargo test -q -p mev-decode -p seqscope-core -p seqscope-store -p seqscope-server -p seqscope-cli 2>&1 | grep -qE "FAILED|panicked|^error" && { echo "TESTS FAILED"; exit 1; } || true
+cargo test -q -p mev-decode -p seqscope-core -p seqscope-store -p seqscope-server -p seqscope-cli
 
 step "performance guard (release): rule engine, 100 rules, decoding included"
 OUT=$(cargo run -q --release -p seqscope-core --example bench 2>&1)

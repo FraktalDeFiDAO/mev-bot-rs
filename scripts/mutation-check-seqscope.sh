@@ -4,7 +4,7 @@
 #
 #   scripts/mutation-check-seqscope.sh
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 missed=0
 try() { # name file sed-expr test-command (run in the container)
   mutate "$1" "$2" "$3" "scripts/dev.sh bash -c '$4'"

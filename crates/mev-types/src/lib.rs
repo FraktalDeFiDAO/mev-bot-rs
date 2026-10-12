@@ -1,7 +1,24 @@
 //! Shared domain types used across the bot.
 
+pub mod price;
+
 pub use alloy::primitives::{Address, B256, Bytes, U256};
 use serde::{Deserialize, Serialize};
+
+/// A producer's state version and confidence, shared with the final submission check.
+#[derive(Debug, Clone)]
+pub struct StateVersion {
+    pub revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub confidence: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub expected: u64,
+}
+
+impl StateVersion {
+    pub fn current(&self) -> bool {
+        use std::sync::atomic::Ordering::Acquire;
+        self.confidence.load(Acquire) && self.revision.load(Acquire) == self.expected
+    }
+}
 
 /// How a pool prices swaps. Mirrors the executor contract's hop kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -150,7 +167,10 @@ pub fn redact_secrets(s: &str) -> std::borrow::Cow<'_, str> {
 }
 
 fn push_segment(out: &mut String, seg: &str, in_host: bool, is_key_char: impl Fn(char) -> bool) {
-    if !in_host && seg.len() >= 16 && seg.chars().all(is_key_char) {
+    if in_host && let Some((_, host)) = seg.rsplit_once('@') {
+        out.push_str("***@");
+        out.push_str(host);
+    } else if !in_host && seg.len() >= 16 && seg.chars().all(is_key_char) {
         out.push_str("***");
     } else {
         out.push_str(seg);
@@ -160,6 +180,18 @@ fn push_segment(out: &mut String, seg: &str, in_host: bool, is_key_char: impl Fn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_userinfo_is_always_redacted() {
+        assert_eq!(
+            redact_secrets("https://user:p@host.example/rpc"),
+            "https://***@host.example/rpc"
+        );
+        assert_eq!(
+            redact_secrets("wss://user:long%40password@host.example/rpc"),
+            "wss://***@host.example/rpc"
+        );
+    }
 
     #[test]
     fn hop_kinds_match_executor_constants() {
@@ -222,4 +254,49 @@ mod tests {
             assert_eq!(redact_secrets(keep), keep);
         }
     }
+}
+
+/// A liquidatable unit: an account in a market (Aave pool, Comet, Silo, Morpho market, ...), or a
+/// whole vault for venues that liquidate by tick/price range (Fluid).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct AccountRef {
+    pub market: Address,
+    pub account: Address,
+    /// Protocol-specific sub-id (e.g. Dolomite account number, Morpho market id low bits); 0 if unused.
+    pub sub_id: u64,
+}
+
+impl std::fmt::Display for AccountRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.account, self.market)
+    }
+}
+
+/// One call the executor makes during the liquidation, with an optional exact approval of the
+/// flash-borrowed debt asset to `approve_spender` (reset to zero right after the call).
+#[derive(Debug, Clone, Serialize)]
+pub struct ProtocolCall {
+    pub target: Address,
+    pub data: Bytes,
+    pub approve_spender: Address,
+    pub approve_amount: U256,
+}
+
+/// A planned liquidation: what to borrow, which protocol calls to make, and what collateral comes
+/// back. The engine adds the swap route (collateral -> debt) and simulates before sending.
+#[derive(Debug, Clone, Serialize)]
+pub struct Plan {
+    #[serde(skip)]
+    pub dependencies: Vec<StateVersion>,
+    pub protocol: &'static str,
+    pub account: AccountRef,
+    pub debt_asset: Address,
+    pub collateral_asset: Address,
+    /// Amount of `debt_asset` to flash-borrow (covers repayment incl. rounding; excess is returned).
+    pub flash_amount: U256,
+    /// Expected collateral received, raw units (for route sizing).
+    pub expected_collateral: f64,
+    /// Expected liquidator bonus at oracle prices, USD, before swap costs and gas.
+    pub bonus_usd: f64,
+    pub calls: Vec<ProtocolCall>,
 }

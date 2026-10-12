@@ -33,6 +33,8 @@ pub const NATIVE: Address = address!("EeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE")
 pub const WETH: Address = address!("82aF49447D8a07e3bd95BD0d56f35241523fBab1");
 /// Accept up to 1% less collateral per unit debt than quoted (state moves between quote and tx).
 const SLIPPAGE: f64 = 0.99;
+const SLIPPAGE_NUM: u64 = 99;
+const SLIPPAGE_DEN: u64 = 100;
 
 sol! {
     struct LiquidationStruct {
@@ -62,6 +64,17 @@ pub fn erc20(token: Address) -> Address {
 }
 
 /// Minimum collateral per unit of debt, 1e18-scaled, with the slippage guard applied.
+/// Exact `colPerUnitDebt` (1e18-scaled collateral per unit of debt) with the 1% slippage guard, rounded down.
+pub fn col_per_unit_debt_exact(debt_in: U256, col_out: U256) -> Option<U256> {
+    if debt_in.is_zero() {
+        return None;
+    }
+    col_out
+        .checked_mul(U256::from(10u8).pow(U256::from(18u8)))?
+        .checked_mul(U256::from(SLIPPAGE_NUM))?
+        .checked_div(debt_in.checked_mul(U256::from(SLIPPAGE_DEN))?)
+}
+
 pub fn col_per_unit_debt(debt_in: f64, col_out: f64) -> f64 {
     if debt_in <= 0.0 {
         0.0
@@ -76,6 +89,9 @@ struct Quote {
     col_token: Address,
     debt_in: f64,
     col_out: f64,
+    /// The resolver's amounts as exact integers; calldata is built from these.
+    debt_in_raw: U256,
+    col_out_raw: U256,
 }
 
 pub struct FluidAdapter {
@@ -188,6 +204,8 @@ impl FluidAdapter {
                         col_token: l.tokenOut,
                         debt_in: f64::from(l.tokenInAmtOne),
                         col_out: f64::from(l.tokenOutAmtOne),
+                        debt_in_raw: l.tokenInAmtOne,
+                        col_out_raw: l.tokenOutAmtOne,
                     },
                 ))
             })
@@ -282,14 +300,17 @@ impl LiquidationAdapter for FluidAdapter {
         let Some(q) = quotes.get(&h.account.market).copied() else {
             return Ok(None);
         };
-        if q.debt_in <= 0.0 || q.debt_token == NATIVE {
+        if q.debt_in_raw.is_zero() || q.debt_token == NATIVE {
             return Ok(None);
         }
+        let Some(col_per_unit) = col_per_unit_debt_exact(q.debt_in_raw, q.col_out_raw) else {
+            return Ok(None);
+        };
         let prices = self.usd_prices().await?;
-        let debt_amt = U256::from(q.debt_in as u128);
+        let debt_amt = q.debt_in_raw;
         let data = IFluidVaultT1::liquidateCall {
             debtAmt: debt_amt,
-            colPerUnitDebt: U256::from(col_per_unit_debt(q.debt_in, q.col_out) as u128),
+            colPerUnitDebt: col_per_unit,
             to: executor,
             absorb: false,
         }
@@ -302,6 +323,7 @@ impl LiquidationAdapter for FluidAdapter {
             debt_asset: q.debt_token,
             collateral_asset: erc20(q.col_token),
             flash_amount: debt_amt,
+            dependencies: vec![],
             expected_collateral: q.col_out,
             bonus_usd,
             calls: vec![ProtocolCall {
@@ -343,5 +365,22 @@ mod tests {
         let v = col_per_unit_debt(2_000.0, 1.0);
         assert!((v - 1e18 / 2_000.0 * 0.99).abs() < 1.0);
         assert_eq!(col_per_unit_debt(0.0, 1.0), 0.0);
+    }
+
+    #[test]
+    fn exact_col_per_unit_debt_matches_the_float_form_and_keeps_every_unit() {
+        let v = col_per_unit_debt_exact(
+            U256::from(2_000u64),
+            U256::from(10u64).pow(U256::from(18u8)),
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            U256::from(10u64).pow(U256::from(36u8)) * U256::from(99u8) / U256::from(200_000u64)
+        );
+        // Above f64 precision: 2^70 + 1 debt units.
+        let debt = (U256::from(1u8) << 70) + U256::from(1u8);
+        assert!(col_per_unit_debt_exact(debt, debt).unwrap() > U256::from(0u8));
+        assert_eq!(col_per_unit_debt_exact(U256::ZERO, U256::from(1u8)), None);
     }
 }

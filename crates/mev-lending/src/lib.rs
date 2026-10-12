@@ -6,11 +6,10 @@
 //! [`Plan`] into an executor transaction. Adapters own protocol rules and encoding; nothing
 //! protocol-specific leaks out of their crate.
 
-use std::fmt;
-
-use alloy::primitives::{Address, Bytes, U256};
+use alloy::primitives::Address;
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+pub use mev_types::{AccountRef, Plan, ProtocolCall};
+use serde::Serialize;
 
 /// Stable adapter id, e.g. `"aave-v3"`.
 pub type ProtocolId = &'static str;
@@ -26,22 +25,6 @@ pub enum AdapterStatus {
     Inactive(&'static str),
 }
 
-/// A liquidatable unit: an account in a market (Aave pool, Comet, Silo, Morpho market, ...), or a
-/// whole vault for venues that liquidate by tick/price range (Fluid).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct AccountRef {
-    pub market: Address,
-    pub account: Address,
-    /// Protocol-specific sub-id (e.g. Dolomite account number, Morpho market id low bits); 0 if unused.
-    pub sub_id: u64,
-}
-
-impl fmt::Display for AccountRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.account, self.market)
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Health {
     pub account: AccountRef,
@@ -55,33 +38,6 @@ impl Health {
     pub fn liquidatable(&self) -> bool {
         self.health_factor < 1.0
     }
-}
-
-/// One call the executor makes during the liquidation, with an optional exact approval of the
-/// flash-borrowed debt asset to `approve_spender` (reset to zero right after the call).
-#[derive(Debug, Clone, Serialize)]
-pub struct ProtocolCall {
-    pub target: Address,
-    pub data: Bytes,
-    pub approve_spender: Address,
-    pub approve_amount: U256,
-}
-
-/// A planned liquidation: what to borrow, which protocol calls to make, and what collateral comes
-/// back. The engine adds the swap route (collateral -> debt) and simulates before sending.
-#[derive(Debug, Clone, Serialize)]
-pub struct Plan {
-    pub protocol: ProtocolId,
-    pub account: AccountRef,
-    pub debt_asset: Address,
-    pub collateral_asset: Address,
-    /// Amount of `debt_asset` to flash-borrow (covers repayment incl. rounding; excess is returned).
-    pub flash_amount: U256,
-    /// Expected collateral received, raw units (for route sizing).
-    pub expected_collateral: f64,
-    /// Expected liquidator bonus at oracle prices, USD, before swap costs and gas.
-    pub bonus_usd: f64,
-    pub calls: Vec<ProtocolCall>,
 }
 
 /// RPC handles an adapter may use. Fast = low-latency (paid/WS-backed); scan = complete wide-range

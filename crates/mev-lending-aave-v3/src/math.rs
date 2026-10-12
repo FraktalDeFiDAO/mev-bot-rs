@@ -21,6 +21,9 @@ pub struct ReserveInfo {
     pub liquidation_threshold_bps: u32,
     /// Oracle price, USD per whole token.
     pub price_usd: f64,
+    /// The oracle's raw base-currency price (8 decimals); zero when unknown.
+    #[serde(default)]
+    pub price_raw: alloy::primitives::U256,
 }
 
 impl ReserveInfo {
@@ -45,6 +48,10 @@ pub struct Position {
     pub collateral: Vec<(Address, f64)>,
     /// (asset, variable + stable debt).
     pub debt: Vec<(Address, f64)>,
+    /// The same debt balances as exact integers (variable + stable), for amounts that are sent on-chain.
+    pub debt_exact: Vec<(Address, alloy::primitives::U256)>,
+    /// Exact aToken balances of the collateral reserves.
+    pub collateral_exact: Vec<(Address, alloy::primitives::U256)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,7 +112,7 @@ pub fn plan(pos: &Position, reserves: &[ReserveInfo]) -> Option<LiquidationPlan>
             let bonus_usd = gross_bonus_usd - fee_usd;
             let collateral_out = c.raw(cover_usd * bonus - fee_usd);
             if best.as_ref().is_none_or(|b| bonus_usd > b.bonus_usd) {
-                best = Some(LiquidationPlan {
+                let mut plan = LiquidationPlan {
                     user: pos.user,
                     collateral: *c_asset,
                     debt: *d_asset,
@@ -113,11 +120,57 @@ pub fn plan(pos: &Position, reserves: &[ReserveInfo]) -> Option<LiquidationPlan>
                     collateral_out,
                     debt_usd: cover_usd,
                     bonus_usd,
-                });
+                };
+                // Replace the float payout with the contract's integer result when exact inputs are known;
+                // the debt repaid is capped by the exact balance, never the float estimate.
+                if let Some(x) = exact_payout(pos, d, c, plan.debt_to_cover) {
+                    plan.debt_to_cover = u256_to_f64(x.debt_needed);
+                    plan.collateral_out = u256_to_f64(x.collateral_to_liquidator);
+                }
+                best = Some(plan);
             }
         }
     }
     best
+}
+
+fn u256_to_f64(v: alloy::primitives::U256) -> f64 {
+    f64::from(v)
+}
+
+/// The contract's integer payout for repaying about `debt_to_cover` raw units of `d` against `c`.
+fn exact_payout(
+    pos: &Position,
+    d: &ReserveInfo,
+    c: &ReserveInfo,
+    debt_to_cover: f64,
+) -> Option<crate::exact::Payout> {
+    use alloy::primitives::U256;
+    if d.price_raw.is_zero()
+        || c.price_raw.is_zero()
+        || !debt_to_cover.is_finite()
+        || debt_to_cover < 0.0
+    {
+        return None;
+    }
+    let debt_balance = pos.debt_exact.iter().find(|(a, _)| *a == d.asset)?.1;
+    let coll_balance = pos.collateral_exact.iter().find(|(a, _)| *a == c.asset)?.1;
+    // Floor the float to an integer, then cap by the exact debt we know exists.
+    let want = if debt_to_cover >= 3.0e38 {
+        U256::MAX
+    } else {
+        U256::from(debt_to_cover as u128)
+    };
+    crate::exact::available_collateral(&crate::exact::Inputs {
+        collateral_price: c.price_raw,
+        debt_price: d.price_raw,
+        collateral_decimals: c.decimals,
+        debt_decimals: d.decimals,
+        liquidation_bonus: U256::from(c.liquidation_bonus_bps),
+        protocol_fee_bps: U256::from(c.protocol_fee_bps),
+        user_collateral_balance: coll_balance,
+        debt_to_cover: want.min(debt_balance),
+    })
 }
 
 /// Predicted health below this triggers a backrun. A little under 1.0 so calibration error doesn't
@@ -229,6 +282,7 @@ mod tests {
                 protocol_fee_bps: 1_000,
                 liquidation_threshold_bps: 8_300,
                 price_usd: 2_000.0,
+                price_raw: Default::default(),
             },
             ReserveInfo {
                 asset: USDC,
@@ -237,6 +291,7 @@ mod tests {
                 protocol_fee_bps: 1_000,
                 liquidation_threshold_bps: 7_800,
                 price_usd: 1.0,
+                price_raw: Default::default(),
             },
         ]
     }
@@ -247,6 +302,7 @@ mod tests {
             health_factor: hf,
             collateral: vec![(WETH, weth * 1e18)],
             debt: vec![(USDC, usdc_debt * 1e6)],
+            ..Default::default()
         }
     }
 
@@ -332,10 +388,10 @@ mod props {
             hf in 0.5f64..0.9999, weth in 0.01f64..1e4, debt in 10.0f64..5e7, px in 100.0f64..1e5,
         ) {
             let reserves = vec![
-                ReserveInfo { asset: WETH, decimals: 18, liquidation_bonus_bps: 10_500, protocol_fee_bps: 1_000, liquidation_threshold_bps: 8_300, price_usd: px },
-                ReserveInfo { asset: USDC, decimals: 6, liquidation_bonus_bps: 10_450, protocol_fee_bps: 1_000, liquidation_threshold_bps: 7_800, price_usd: 1.0 },
+                ReserveInfo { asset: WETH, decimals: 18, liquidation_bonus_bps: 10_500, protocol_fee_bps: 1_000, liquidation_threshold_bps: 8_300, price_usd: px, price_raw: Default::default() },
+                ReserveInfo { asset: USDC, decimals: 6, liquidation_bonus_bps: 10_450, protocol_fee_bps: 1_000, liquidation_threshold_bps: 7_800, price_usd: 1.0, price_raw: Default::default() },
             ];
-            let pos = Position { user: Address::ZERO, health_factor: hf, collateral: vec![(WETH, weth * 1e18)], debt: vec![(USDC, debt * 1e6)] };
+            let pos = Position { user: Address::ZERO, health_factor: hf, collateral: vec![(WETH, weth * 1e18)], debt: vec![(USDC, debt * 1e6)], ..Default::default() };
             if let Some(p) = plan(&pos, &reserves) {
                 prop_assert!(p.debt_usd <= debt + 1e-6, "never repays more than the debt");
                 prop_assert!(p.collateral_out <= weth * 1e18 * (1.0 + 1e-9), "never seizes more than exists");
@@ -343,5 +399,53 @@ mod props {
                 prop_assert!(p.bonus_usd <= p.debt_usd * 0.05 + 1e-6, "bonus capped by the 5% incentive");
             }
         }
+    }
+
+    #[test]
+    fn exact_inputs_replace_the_float_payout_and_cap_repayment_at_the_real_debt() {
+        use alloy::primitives::U256;
+        let reserves = vec![
+            ReserveInfo {
+                asset: WETH,
+                decimals: 18,
+                liquidation_bonus_bps: 10_500,
+                protocol_fee_bps: 1_000,
+                liquidation_threshold_bps: 8_300,
+                price_usd: 2000.0,
+                price_raw: U256::from(2_000u64 * 100_000_000),
+            },
+            ReserveInfo {
+                asset: USDC,
+                decimals: 6,
+                liquidation_bonus_bps: 10_450,
+                protocol_fee_bps: 1_000,
+                liquidation_threshold_bps: 7_800,
+                price_usd: 1.0,
+                price_raw: U256::from(100_000_000u64),
+            },
+        ];
+        let mut p = Position {
+            user: Address::ZERO,
+            health_factor: 0.9,
+            collateral: vec![(WETH, 10e18)],
+            debt: vec![(USDC, 1_000e6)],
+            ..Default::default()
+        };
+        p.debt_exact = vec![(USDC, U256::from(1_000_000_000u64))];
+        p.collateral_exact = vec![(WETH, U256::from(10u128 * 10u128.pow(18)))];
+        let plan = plan(&p, &reserves).unwrap();
+        let x = crate::exact::available_collateral(&crate::exact::Inputs {
+            collateral_price: reserves[0].price_raw,
+            debt_price: reserves[1].price_raw,
+            collateral_decimals: 18,
+            debt_decimals: 6,
+            liquidation_bonus: U256::from(10_500u64),
+            protocol_fee_bps: U256::from(1_000u64),
+            user_collateral_balance: p.collateral_exact[0].1,
+            debt_to_cover: U256::from(1_000_000_000u64),
+        })
+        .unwrap();
+        assert_eq!(plan.collateral_out, f64::from(x.collateral_to_liquidator));
+        assert_eq!(plan.debt_to_cover, f64::from(x.debt_needed));
     }
 }

@@ -101,9 +101,9 @@ impl EventIndex {
             self.state.next_block = head + 1;
             self.state.back_block = head + 1;
         }
-        let step = self.cfg.step.max(1);
         let mut requests = 0;
         while self.state.next_block <= head && requests < self.cfg.max_requests {
+            let step = self.cfg.step.max(1);
             let from = self.state.next_block;
             let (_, to) = self
                 .scan(
@@ -118,6 +118,7 @@ impl EventIndex {
             self.state.next_block = to + 1;
         }
         while self.state.back_block > self.cfg.from_block && requests < self.cfg.max_requests {
+            let step = self.cfg.step.max(1);
             let to = self.state.back_block - 1;
             let from = to.saturating_sub(step - 1).max(self.cfg.from_block);
             let (from, _) = self
@@ -147,6 +148,10 @@ impl EventIndex {
         requests: &mut usize,
     ) -> Result<(u64, u64)> {
         loop {
+            anyhow::ensure!(
+                *requests < self.cfg.max_requests,
+                "log scan request budget exhausted"
+            );
             *requests += 1;
             tokio::time::sleep(self.cfg.throttle).await;
             let filter = Filter::new()
@@ -166,12 +171,13 @@ impl EventIndex {
                     return Ok((from, to));
                 }
                 // Too many results / range too wide: shrink and retry. Rate limits bubble up.
-                Err(e) if to > from + 1_000 && !mev_rpc::is_rate_limit(&e) => {
+                Err(e) if to > from && !mev_rpc::is_rate_limit(&e) => {
                     if backward {
                         from = to - (to - from) / 4;
                     } else {
                         to = from + (to - from) / 4;
                     }
+                    self.cfg.step = (to - from + 1).max(1);
                 }
                 Err(e) => return Err(e),
             }
@@ -222,6 +228,32 @@ pub fn topic_address(log: &Log, i: usize) -> Option<Address> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn provider_limits_below_a_thousand_blocks_shrink_and_are_remembered() {
+        use alloy::{
+            providers::{Provider, ProviderBuilder},
+            transports::mock::Asserter,
+        };
+        let mock = Asserter::new();
+        mock.push_success(&"0x64");
+        mock.push_failure_msg("block range exceeds provider limit");
+        mock.push_failure_msg("block range exceeds provider limit");
+        mock.push_success(&Vec::<Log>::new());
+        let provider = ProviderBuilder::new()
+            .connect_mocked_client(mock.clone())
+            .erased();
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = cfg(dir.path().join("index.json"));
+        config.from_block = 0;
+        config.step = 100;
+        config.max_requests = 3;
+        let mut index = EventIndex::open(config);
+        assert!(!index.step(&provider, |_| vec![]).await.unwrap());
+        assert!(index.cfg.step < 10);
+        assert!(index.state.back_block < 100);
+        assert!(mock.read_q().is_empty());
+    }
 
     fn cfg(path: PathBuf) -> IndexConfig {
         IndexConfig {

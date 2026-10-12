@@ -177,6 +177,11 @@ struct CometSnap {
 }
 
 /// What a plan buys: `amount` of collateral `asset`, after `absorb`ing the borrower if set.
+/// On-chain slippage floor as a fraction of the quoted collateral. The base we pay is already priced at
+/// 0.999 of the quote (`QUOTE_HAIRCUT`), so the contract's collateral lands near 0.999 x amount; a floor of
+/// 0.999 would sit exactly on that edge and revert on float noise. Keep the floor a full 0.1% below it.
+const MIN_AMOUNT_FRACTION: f64 = 0.998;
+
 struct Buy {
     asset: Address,
     amount: f64,
@@ -323,7 +328,7 @@ impl CompoundV3Adapter {
             target: c.address,
             data: IComet::buyCollateralCall {
                 asset,
-                minAmount: U256::from((amount * 0.999) as u128),
+                minAmount: U256::from((amount * MIN_AMOUNT_FRACTION) as u128),
                 baseAmount: base_amount,
                 recipient: executor,
             }
@@ -338,6 +343,7 @@ impl CompoundV3Adapter {
             debt_asset: c.base,
             collateral_asset: asset,
             flash_amount: base_amount,
+            dependencies: vec![],
             expected_collateral: amount,
             bonus_usd: q.discount_usd,
             calls,
@@ -869,4 +875,13 @@ mod tests {
         assert_eq!((e.price, e.e), (1.2147 * 2700.0, None));
         assert_eq!(e.update(1.2147 * 2754.0, 2754e8).e, Some(1.0));
     }
+}
+
+#[cfg(test)]
+mod slippage_floor_tests {
+    use super::*;
+
+    // The base is priced at QUOTE_HAIRCUT of the quote, so received collateral is about
+    // QUOTE_HAIRCUT x amount; the floor must leave room for rounding on both sides.
+    const _: () = assert!(MIN_AMOUNT_FRACTION < math::QUOTE_HAIRCUT - 1e-4);
 }

@@ -10,7 +10,10 @@
 #   scripts/run.sh stop             stop and remove the container
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export UID GID="$(id -g)"
+export UID
+GID="$(id -g)"
+export GID
+export MEV_ENV_FILE="${MEV_ENV_FILE:-.env.shadow}"
 CHAIN=arbitrum
 STOP_FILE="data/$CHAIN/STOP"
 # podman-compose explicitly: `podman compose` may delegate to docker-compose (and the Docker daemon).
@@ -32,6 +35,17 @@ need_live_keys() {
 
 start() {
   preflight
+  if [[ $1 == shadow ]]; then
+    # Do not source .env: values are data, and the signing key must never enter this container.
+    local shadow_tmp
+    shadow_tmp=$(mktemp .env.shadow.XXXXXX)
+    chmod 600 "$shadow_tmp"
+    awk '/^(ARBITRUM_(HTTP_URL|WS_URL|WS_FALLBACK|SWEEP_URL|PRESIM_URL|FAST_FEED_KEY)(_[0-9]+)?|EXECUTOR_ADDRESS|PROFIT_RECEIVER)=/ {print}' .env > "$shadow_tmp"
+    mv "$shadow_tmp" .env.shadow
+    MEV_ENV_FILE=.env.shadow
+  else
+    MEV_ENV_FILE=.env
+  fi
   # NO_BUILD=1: the image was built elsewhere and loaded (small hosts can't compile the workspace).
   [[ -n ${NO_BUILD:-} ]] || compose build bot >/dev/null
   compose down >/dev/null 2>&1 || true
@@ -40,7 +54,7 @@ start() {
 }
 
 case "${1:-}" in
-  build)  compose build bot ;;
+  build)  MEV_ENV_FILE=.env compose build bot ;;
   shadow) start shadow ;;
   live)
     need_live_keys
