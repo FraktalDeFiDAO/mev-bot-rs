@@ -28,6 +28,8 @@ sol! {
 
 const UNI_FACTORY: Address = address!("1F98431c8aD98523631AE4a59f267346ea31F984");
 const UNI_QUOTER: Address = address!("61fFE014bA17989E743c5F6cB21bF9697530B21e");
+const PANCAKE_FACTORY: Address = address!("0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865");
+const PANCAKE_QUOTER: Address = address!("B048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997");
 
 #[tokio::test]
 #[ignore = "network"]
@@ -41,20 +43,25 @@ async fn integer_swap_math_equals_the_quoter() {
         .map(|s| s.parse().unwrap())
         .unwrap_or(address!("C6962004f452bE9203591991D15f6b388e09E8D0"));
     let p = IPool::new(pool, &rpc.http);
-    assert_eq!(
-        p.factory().call().await.unwrap(),
-        UNI_FACTORY,
-        "pick a Uniswap V3 pool"
+    let factory = p.factory().call().await.unwrap();
+    assert!(
+        factory == UNI_FACTORY || factory == PANCAKE_FACTORY,
+        "pick a Uniswap or Pancake V3 pool"
     );
     let (t0, t1) = (
         p.token0().call().await.unwrap(),
         p.token1().call().await.unwrap(),
     );
     let fee = u32::try_from(p.fee().call().await.unwrap()).unwrap();
+    let (kind, quoter_addr) = if factory == PANCAKE_FACTORY {
+        (PoolKind::PancakeV3 { fee }, PANCAKE_QUOTER)
+    } else {
+        (PoolKind::UniV3 { fee }, UNI_QUOTER)
+    };
     let info = PoolInfo {
         address: pool,
         dex: "t".into(),
-        kind: PoolKind::UniV3 { fee },
+        kind,
         token0: t0,
         token1: t1,
     };
@@ -69,7 +76,7 @@ async fn integer_swap_math_equals_the_quoter() {
     ));
     assert!(pool_state.exact.is_some(), "exact state must be loaded");
 
-    let quoter = IQuoterV2::new(UNI_QUOTER, &rpc.http);
+    let quoter = IQuoterV2::new(quoter_addr, &rpc.http);
     let (mut compared, mut crossed) = (0, 0);
     for token_in in [t0, t1] {
         let token_out = if token_in == t0 { t1 } else { t0 };

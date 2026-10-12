@@ -5,6 +5,7 @@
 //! *which tokens* to look up; the pools themselves still come from the factories. Uniswap V4 pools
 //! live inside the one PoolManager (`v4`), hookless ones only.
 
+pub mod created;
 pub mod ticks;
 pub mod v4;
 
