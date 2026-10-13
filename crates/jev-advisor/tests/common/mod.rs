@@ -35,6 +35,10 @@ pub enum Script {
     },
     /// 200 + chunked JSON, then keep streaming `total` bytes in `chunk`-sized pieces.
     Flood { chunk: usize, total: usize },
+    /// Answer request number `i` (0-based, by arrival) with `scripts[min(i, len-1)]`.
+    Seq(Vec<Script>),
+    /// Wait `delay` (real time) after reading the request, then behave as `inner`.
+    Delayed(Duration, Box<Script>),
 }
 
 #[derive(Debug, Clone)]
@@ -73,8 +77,12 @@ impl TestServer {
                 let Ok((sock, _)) = listener.accept().await else {
                     return;
                 };
-                c.fetch_add(1, Ordering::SeqCst);
-                tokio::spawn(handle(sock, script.clone(), r.clone(), f.clone()));
+                let n = c.fetch_add(1, Ordering::SeqCst);
+                let chosen = match &script {
+                    Script::Seq(v) => v[n.min(v.len() - 1)].clone(),
+                    other => other.clone(),
+                };
+                tokio::spawn(handle(sock, chosen, r.clone(), f.clone()));
             }
         });
         Self {
@@ -134,7 +142,13 @@ async fn handle(
         body: buf[head_end..head_end + len].to_vec(),
     });
 
+    let mut script = script;
+    while let Script::Delayed(d, inner) = script {
+        tokio::time::sleep(d).await;
+        script = *inner;
+    }
     match script {
+        Script::Seq(_) | Script::Delayed(..) => {}
         Script::Raw(bytes) => {
             let _ = sock.write_all(&bytes).await;
             let _ = sock.shutdown().await;
@@ -234,3 +248,46 @@ pub fn features() -> RedactedFeatures {
     })
     .unwrap()
 }
+
+/// Same shape as [`features`] but distinct per `i` (0..64), so requests have distinct keys.
+pub fn features_n(i: usize) -> RedactedFeatures {
+    use DebtUsdBand as D;
+    use HealthFactorBand as H;
+    let hf = [
+        H::NoDebt,
+        H::Below1,
+        H::B100To102,
+        H::B102To105,
+        H::B105To110,
+        H::B110To125,
+        H::B125To200,
+        H::Above200,
+    ];
+    let debt = [
+        D::Zero,
+        D::Under1k,
+        D::K1To10,
+        D::K10To100,
+        D::K100To500,
+        D::K500ToM1,
+        D::Above1m,
+        D::Unknown,
+    ];
+    RedactedFeatures::new(FeatureV1 {
+        chain: Chain::ArbitrumOne,
+        protocol: Protocol::AaveV3,
+        health_factor_band: hf[i % 8],
+        debt_usd_band: debt[(i / 8) % 8],
+        collateral_class: AssetClass::VolatileEthCorrelated,
+        debt_class: AssetClass::Stablecoin,
+        oracle_volatility_band: OracleVolatilityBand::High,
+        hf_trend: HfTrend::Falling,
+        liquidity_to_debt_band: LiquidityToDebtBand::Medium,
+        historical_route_success_band: RouteSuccessBand::Low,
+        last_account_recheck_age_band: RecheckAgeBand::Under30s,
+        snapshot_quality: SnapshotQuality::VerifiedCanonical,
+    })
+    .unwrap()
+}
+
+pub mod manual;

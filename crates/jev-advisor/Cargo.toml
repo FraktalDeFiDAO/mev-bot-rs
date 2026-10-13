@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "TypeSafe (Jev) REST transport and strict response validation for the liquidation advisor (JEV-LIQ-009). Advisory only: no retry, breaker or quota here."
+description = "TypeSafe (Jev) REST transport, strict response validation, and the retry/breaker/quota/cache layer for the liquidation advisor (JEV-LIQ-009/010). Advisory only."
 
 [features]
 # Permits `http://` to 127.0.0.1/::1 for local test servers. Never enabled in production builds.
