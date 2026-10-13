@@ -556,6 +556,25 @@ fn release_refunds_the_attempt_and_is_immediately_claimable() {
     assert_eq!(again[0].attempts, 1);
 }
 
+#[test]
+fn dead_letter_requires_the_lease_and_is_final() {
+    let (_env, store) = filled(1);
+    let g = store.claim("a", 5, 100, 1).unwrap();
+    assert!(matches!(
+        store.dead_letter("other", g[0].id, 6, "x"),
+        Err(AdvisorError::LeaseLost(_))
+    ));
+    store
+        .dead_letter("a", g[0].id, 6, "invalid features")
+        .unwrap();
+    assert_eq!(store.stats(7).unwrap().dead, 1);
+    assert!(store.claim("a", 1000, 100, 1).unwrap().is_empty());
+    assert!(matches!(
+        store.dead_letter("a", g[0].id, 8, "again"),
+        Err(AdvisorError::LeaseLost(_))
+    ));
+}
+
 // ---- decisions ----
 
 fn live() -> (Env, AdvisorStore, EnqueueOutcome) {

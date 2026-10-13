@@ -11,7 +11,8 @@ description = "TypeSafe (Jev) REST transport, strict response validation, and th
 loopback-http = []
 
 [dependencies]
-alloy = { workspace = true }
+# Lean alloy: primitives only. The workspace alloy enables signer-local/providers, which Process B must not link (spec invariant 7).
+alloy = { version = "2.5", default-features = false, features = ["std"] }
 httpdate = { workspace = true }
 mev-liq-features = { workspace = true }
 reqwest = { workspace = true }

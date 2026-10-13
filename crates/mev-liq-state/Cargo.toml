@@ -7,7 +7,8 @@ publish.workspace = true
 description = "Canonical, exact (U256) borrower account snapshots with a durable SQLite repository and CAS revisions."
 
 [dependencies]
-alloy = { workspace = true }
+# Lean alloy: primitives only. The workspace alloy enables signer-local/providers, which Process B must not link (spec invariant 7).
+alloy = { version = "2.5", default-features = false, features = ["std"] }
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
 
