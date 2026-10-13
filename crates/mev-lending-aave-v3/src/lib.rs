@@ -9,6 +9,7 @@
 pub mod deployment;
 pub mod exact;
 pub mod math;
+pub mod recheck;
 
 use std::{collections::HashMap, path::PathBuf, sync::Mutex, time::Duration};
 

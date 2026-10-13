@@ -1,0 +1,16 @@
+[package]
+name = "mev-liq-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Canonical, exact (U256) borrower account snapshots with a durable SQLite repository and CAS revisions."
+
+[dependencies]
+alloy = { workspace = true }
+rusqlite = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = "3"

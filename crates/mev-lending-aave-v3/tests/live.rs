@@ -245,3 +245,68 @@ async fn pinned_deployment_matches_chain() {
         Err(mev_lending_aave_v3::deployment::DeploymentError::CodeHash { .. })
     ));
 }
+
+/// JEV-LIQ-003: an exact snapshot of a real borrower at one pinned block equals a second read at
+/// that same block, and survives a round trip through the durable repository.
+#[tokio::test]
+#[ignore = "network"]
+async fn rechecker_snapshot_is_exact_and_stable_at_a_pinned_block() {
+    use mev_lending_aave_v3::recheck::AaveAccountRechecker;
+    use mev_liq_state::{SnapshotRepository, WAD};
+
+    let c = cfg().aave.unwrap();
+    let r = rpc();
+    let head = r.scan.get_block_number().await.unwrap();
+    let f = Filter::new()
+        .address(c.pool)
+        .event_signature(IAavePool::Borrow::SIGNATURE_HASH)
+        .from_block(head - 20_000)
+        .to_block(head);
+    let logs = r.scan.get_logs(&f).await.unwrap();
+    let user = Address::from_word(
+        *logs
+            .last()
+            .expect("borrows in last 20k")
+            .topics()
+            .get(2)
+            .unwrap(),
+    );
+
+    let rc = AaveAccountRechecker {
+        chain_id: 42161,
+        pool: c.pool,
+        provider: r.fast.clone(),
+        risk_metadata_version: 0,
+    };
+    let a = rc.recheck_at_head(user).await.unwrap();
+    let b = rc.recheck(user, &a.chain).await.unwrap();
+    assert_eq!(a.chain.block_hash, b.chain.block_hash);
+    assert_eq!(
+        a.feature_digest, b.feature_digest,
+        "same block => same exact snapshot"
+    );
+    assert_eq!(a.health_factor_wad, b.health_factor_wad);
+    assert_eq!(a.total_debt_base, b.total_debt_base);
+    assert_eq!(a.total_collateral_base, b.total_collateral_base);
+    eprintln!(
+        "borrower {user} block {} hf_wad {} debt {} coll {} eligible {}",
+        a.chain.block_number,
+        a.health_factor_wad,
+        a.total_debt_base,
+        a.total_collateral_base,
+        a.eligible()
+    );
+    assert_eq!(
+        a.eligible(),
+        a.health_factor_wad < WAD && !a.total_debt_base.is_zero()
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = SnapshotRepository::open(&dir.path().join("snap.db")).unwrap();
+    let stored = repo.upsert_cas(&a, 0).unwrap();
+    assert_eq!(stored.revision, 1);
+    assert_eq!(
+        repo.fetch_by_key(&a.key).unwrap().unwrap().feature_digest,
+        b.feature_digest
+    );
+}

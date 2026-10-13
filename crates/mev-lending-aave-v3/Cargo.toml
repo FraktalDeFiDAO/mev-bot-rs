@@ -18,6 +18,7 @@ mev-bindings = { workspace = true }
 mev-config = { workspace = true }
 mev-lending = { workspace = true }
 mev-lending-index = { workspace = true }
+mev-liq-state = { workspace = true }
 mev-oracle = { workspace = true }
 mev-rpc = { workspace = true }
 
