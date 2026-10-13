@@ -184,6 +184,14 @@ pub struct Engine {
     /// are dropped (`fundable`).
     search_loan: HashMap<Address, f64>,
     sim: Option<Simulator>,
+    /// Shadow-only REVM path for liquidations (`[liquidation] revm_shadow`, default off).
+    revm_liq: Option<
+        Arc<
+            mev_localsim::liquidation::LiquidationSimulator<
+                mev_localsim::liquidation::RpcStateSource,
+            >,
+        >,
+    >,
     sender: Option<Arc<Sender>>,
     risk: RiskGuard,
     metrics: Arc<Metrics>,
@@ -501,6 +509,17 @@ impl Engine {
         };
 
         let (sim, sender) = wire_executor(&cfg, &secrets, &rpc, mode).await?;
+        let revm_liq = (mode == Mode::Shadow
+            && cfg
+                .liquidation
+                .as_ref()
+                .is_some_and(|l| l.enabled && l.revm_shadow))
+        .then(|| {
+            Arc::new(mev_localsim::liquidation::LiquidationSimulator::new(
+                mev_localsim::liquidation::RpcStateSource::new(rpc.http.clone()),
+                cfg.chain_id,
+            ))
+        });
 
         let limits = RiskLimits {
             min_profit_usd: cfg.risk.min_profit_usd,
@@ -877,6 +896,7 @@ impl Engine {
             max_loan,
             search_loan,
             sim,
+            revm_liq,
             sender,
             risk,
             metrics,
@@ -1329,6 +1349,72 @@ impl Engine {
         self.price_integer(token)?
             .raw_for_cost(cost)
             .filter(|floor| *floor <= U256::from(u128::MAX))
+    }
+
+    /// JEV-LIQ-015, shadow only: simulate the exact final calldata with REVM at a hash-pinned
+    /// block and with `eth_call` at the same block; log both and flag every disagreement. Runs in
+    /// a task; never affects what is dispatched.
+    fn revm_shadow_compare(
+        &self,
+        fin: &mev_bindings::FinalCalldata,
+        gas_limit: u64,
+        floor0_profit: U256,
+    ) {
+        use mev_localsim::liquidation::{BlockPin, SimulationRequest, compare};
+        if self.mode != Mode::Shadow {
+            return;
+        }
+        let (Some(rl), Some(sim)) = (&self.revm_liq, &self.sim) else {
+            return;
+        };
+        let (rl, metrics) = (rl.clone(), self.metrics.clone());
+        let (from, to, fin) = (sim.owner(), sim.executor(), fin.clone());
+        tokio::spawn(async move {
+            let head = match rl
+                .source
+                .provider()
+                .get_block_by_number(alloy::eips::BlockNumberOrTag::Latest)
+                .await
+            {
+                Ok(Some(b)) => b,
+                other => {
+                    return metrics.event(
+                        "liq_revm_compare",
+                        json!({"error": format!("no pin: {:?}", other.map(|_| ()))}),
+                    );
+                }
+            };
+            let pin = BlockPin {
+                number: head.header.number,
+                hash: head.header.hash,
+            };
+            let req = SimulationRequest::new(
+                pin,
+                fin.bytes.clone(),
+                from,
+                to,
+                U256::ZERO,
+                gas_limit,
+                now_secs() + 30,
+            );
+            let parity = req.calldata_hash == fin.hash;
+            let revm = rl.simulate(&req, now_secs()).await;
+            let eth = rl.source.eth_call(&req).await;
+            let ev = match &revm {
+                Ok(r) => {
+                    let mm = compare(r, &eth);
+                    json!({"block": pin.number, "block_hash": pin.hash, "calldata_hash": req.calldata_hash,
+                        "calldata_parity": parity, "revm_success": r.success(), "revm_status": format!("{:?}", r.status),
+                        "revm_gas_used": r.gas_used, "revm_profit": r.executor_reported_profit.map(|p| p.to_string()),
+                        "l1_data_fee": format!("{:?}", r.l1_data_fee), "eth_call": format!("{eth:?}"),
+                        "floor0_ethcall_profit": floor0_profit.to_string(),
+                        "mismatch": !mm.is_empty() || !parity, "mismatches": format!("{mm:?}")})
+                }
+                Err(refusal) => json!({"block": pin.number, "calldata_parity": parity,
+                    "refused": format!("{refusal:?}"), "eth_call": format!("{eth:?}"), "mismatch": !parity}),
+            };
+            metrics.event("liq_revm_compare", ev);
+        });
     }
 
     async fn shadow_candidate(&self, calldata: Vec<u8>, gas_limit: u64, fees: Fees) {
@@ -2892,12 +2978,11 @@ impl Engine {
             if let Some((fees, _)) = self.pga_bid(profit_usd, gas, gas_price, native_px, &base) {
                 let limit = gas + gas * 3 / 10;
                 if let Some(min_profit) = self.shadow_floor(limit, fees, plan.debt_asset) {
-                    self.shadow_candidate(
-                        mev_bindings::liquidation_calldata(&plan, &hops, min_profit, aave_pool),
-                        limit,
-                        fees,
-                    )
-                    .await;
+                    // One builder for the final bytes: what is signed is what REVM simulates.
+                    let fin =
+                        mev_exec::liquidation_final_calldata(&plan, &hops, min_profit, aave_pool);
+                    self.revm_shadow_compare(&fin, limit, profit);
+                    self.shadow_candidate(fin.bytes, limit, fees).await;
                 }
             }
             return;

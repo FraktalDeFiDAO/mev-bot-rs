@@ -18,3 +18,8 @@ revm = { version = "43", default-features = false, features = ["std", "optional_
 mev-sequencer = { workspace = true }
 mev-presim = { workspace = true }
 mev-rpc = { workspace = true }
+
+[dev-dependencies]
+mev-bindings = { workspace = true }
+mev-types = { workspace = true }
+mev-lending = { workspace = true }

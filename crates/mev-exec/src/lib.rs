@@ -194,7 +194,7 @@ impl Sender {
         fees: Option<Fees>,
         aave_pool: Option<Address>,
     ) -> Result<TxHash> {
-        let data = mev_bindings::liquidation_calldata(plan, hops, min_profit, aave_pool);
+        let data = liquidation_final_calldata(plan, hops, min_profit, aave_pool).bytes;
         self.send_calldata(data, gas_limit, fees)
             .await
             .map(|s| s.hash)
@@ -212,7 +212,7 @@ impl Sender {
         aave_pool: Option<Address>,
     ) -> Result<Sent> {
         self.send_calldata(
-            mev_bindings::liquidation_calldata(plan, hops, min_profit, aave_pool),
+            liquidation_final_calldata(plan, hops, min_profit, aave_pool).bytes,
             gas_limit,
             Some(fees),
         )
@@ -489,6 +489,18 @@ pub fn tx_request(
 /// Executor calldata for a Balancer-funded arbitrage (pure; unit-tested against the ABI).
 pub fn execute_calldata(opp: &Opportunity, min_profit: U256) -> Vec<u8> {
     mev_bindings::arb_calldata(opp, min_profit, false)
+}
+
+/// The calldata `Sender::send_liquidation` / `send_liquidation_fast` sign for these inputs, with
+/// its hash. Both send paths build through this function, so a simulation of `.bytes` (or a
+/// matching `.hash`) is a simulation of exactly what would be signed.
+pub fn liquidation_final_calldata(
+    plan: &Plan,
+    hops: &[Hop],
+    min_profit: U256,
+    aave_pool: Option<Address>,
+) -> mev_bindings::FinalCalldata {
+    mev_bindings::final_liquidation_calldata(plan, hops, min_profit, aave_pool)
 }
 
 /// Executor calldata for a Balancer-funded liquidation (pure; unit-tested against the ABI).
@@ -799,6 +811,17 @@ mod tests {
                 1
             )
         );
+
+        // Parity (JEV-LIQ-015): the hash a simulation binds to is the hash of the bytes the
+        // send paths sign, and a different min_profit (the old sim used 0) is a different hash.
+        let fin = liquidation_final_calldata(&plan, &[hop()], U256::from(3), Some(pool));
+        assert_eq!(
+            fin.bytes,
+            mev_bindings::liquidation_calldata(&plan, &[hop()], U256::from(3), Some(pool))
+        );
+        assert_eq!(fin.hash, alloy::primitives::keccak256(&fin.bytes));
+        let zero = liquidation_final_calldata(&plan, &[hop()], U256::ZERO, Some(pool));
+        assert_ne!(zero.hash, fin.hash);
     }
 
     #[test]

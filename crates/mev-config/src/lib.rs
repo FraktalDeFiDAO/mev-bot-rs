@@ -102,6 +102,11 @@ pub struct LiquidationConfig {
     pub fallback_poll_secs: u64,
     /// Swap routes for seized collateral may go through these tokens.
     pub route_via: Vec<String>,
+    /// Shadow mode only (JEV-LIQ-015): also simulate the exact final calldata with REVM at a
+    /// hash-pinned block and log it against an `eth_call` of the same bytes at that block.
+    /// Never influences a dispatch decision. Default off.
+    #[serde(default)]
+    pub revm_shadow: bool,
 }
 
 /// Aave v3 adapter.

@@ -313,6 +313,26 @@ pub fn batch_outcomes(
     out.into_iter().map(|(_, ok)| ok).collect()
 }
 
+/// The exact liquidation calldata together with its keccak hash. Built ONCE with the final
+/// (floored) `min_profit` so the bytes that are simulated and the bytes that are signed are the
+/// same object, and the hash can be compared (JEV-LIQ-015).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalCalldata {
+    pub bytes: Vec<u8>,
+    pub hash: alloy::primitives::B256,
+}
+
+pub fn final_liquidation_calldata(
+    plan: &mev_types::Plan,
+    hops: &[mev_types::Hop],
+    min_profit: alloy::primitives::U256,
+    aave_pool: Option<alloy::primitives::Address>,
+) -> FinalCalldata {
+    let bytes = liquidation_calldata(plan, hops, min_profit, aave_pool);
+    let hash = alloy::primitives::keccak256(&bytes);
+    FinalCalldata { bytes, hash }
+}
+
 /// Executor calldata for a liquidation: funded by Balancer (`liquidate`), or by an Aave V3 flash
 /// loan from `aave_pool` (`liquidateViaAave`) when the loan exceeds what Balancer holds. Both
 /// return the profit as `uint256`.

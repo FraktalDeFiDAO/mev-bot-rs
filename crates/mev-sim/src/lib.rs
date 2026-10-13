@@ -37,6 +37,14 @@ impl Simulator {
         }
     }
 
+    pub fn executor(&self) -> Address {
+        self.executor
+    }
+
+    pub fn owner(&self) -> Address {
+        self.owner
+    }
+
     /// The executor call for `opp` as its owner (flash swap or Balancer, see `arb_calldata`).
     fn arb_request(&self, opp: &Opportunity, min_profit: U256) -> TransactionRequest {
         TransactionRequest::default()
