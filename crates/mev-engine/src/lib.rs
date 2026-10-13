@@ -3117,20 +3117,28 @@ fn metered_rotating(
     mev_rpc::metered_rotating_provider(&urls, m)
 }
 
-/// Warn (with the exact fix) about liquidation targets the executor hasn't allowlisted.
+/// Warn about liquidation targets the executor hasn't allowlisted: one line per protocol with the count, one
+/// example of the exact fix, and the full list at debug level (Fluid alone has ~50 vaults).
 async fn check_allowlist(rpc: &Rpc, exec: Address, targets: &[(&'static str, Address)]) {
     let c = ArbExecutor::new(exec, &rpc.http);
+    let mut missing: std::collections::BTreeMap<&'static str, Vec<Address>> = Default::default();
     for (protocol, t) in targets {
         match c.allowedTarget(*t).call().await {
             Ok(true) => {}
-            Ok(false) => warn!(
-                protocol,
-                target = %t,
-                fix = format!("cast send {exec} 'setTarget(address,bool)' {t} true --private-key $PRIVATE_KEY --rpc-url $ARBITRUM_HTTP_URL"),
-                "liquidation target not allowlisted on executor; liquidations will revert until it is"
-            ),
+            Ok(false) => missing.entry(protocol).or_default().push(*t),
             Err(e) => warn!(protocol, target = %t, error = %e, "could not read executor allowlist"),
         }
+    }
+    for (protocol, list) in missing {
+        tracing::debug!(protocol, targets = ?list, "not allowlisted");
+        let example = list[0];
+        warn!(
+            protocol,
+            not_allowlisted = list.len(),
+            example = %example,
+            fix = format!("cast send {exec} 'setTarget(address,bool)' <target> true --private-key $PRIVATE_KEY --rpc-url $ARBITRUM_HTTP_URL"),
+            "liquidation targets not allowlisted on executor; liquidations on them will revert until they are (scripts/allow-targets.sh)"
+        );
     }
 }
 
