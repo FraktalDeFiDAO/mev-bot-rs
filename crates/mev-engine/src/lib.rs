@@ -77,7 +77,7 @@ use mev_types::Opportunity;
 use race::Trigger;
 use serde_json::json;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// Recently observed winning tips kept for the competition estimate (count, max age).
 const TIP_BOOK_CAPACITY: usize = 200;
@@ -3051,6 +3051,18 @@ async fn wire_executor(
     Ok((Some(sim), sender))
 }
 
+/// Attempts at the Aave deployment check; only RPC failures are retried, a mismatch is final.
+const AAVE_PIN_ATTEMPTS: u32 = 3;
+
+/// Whether the Aave adapter may start after the deployment check. Live mode requires a
+/// verified pin; shadow mode starts anyway so the mismatch is visible without trading.
+fn aave_pin_allows(
+    mode: Mode,
+    failure: Option<&mev_lending_aave_v3::deployment::DeploymentError>,
+) -> bool {
+    failure.is_none() || mode != Mode::Live
+}
+
 /// Build the liquidation runner from config: one adapter per enabled protocol section.
 async fn build_liquidation(
     cfg: &ChainConfig,
@@ -3081,20 +3093,42 @@ async fn build_liquidation(
     };
     let mut adapters: Vec<Box<dyn LiquidationAdapter>> = Vec::new();
     if let Some(a) = cfg.aave.clone().filter(|a| a.enabled) {
-        // Startup check only: live fails closed, shadow logs (JEV-LIQ-002).
-        match mev_lending_aave_v3::deployment::verify_deployment(&arpc.fast, &a).await {
-            Ok(o) => info!(
+        // Startup check (JEV-LIQ-002). A failure disables only Aave liquidations in live
+        // mode; arbitrage and the other lenders keep running. Re-pin the manifest to recover.
+        let mut result = mev_lending_aave_v3::deployment::verify_deployment(&arpc.fast, &a).await;
+        let mut backoff = Backoff::default();
+        for _ in 1..AAVE_PIN_ATTEMPTS {
+            if !matches!(
+                result,
+                Err(mev_lending_aave_v3::deployment::DeploymentError::Rpc(_))
+            ) {
+                break;
+            }
+            tokio::time::sleep(backoff.next_delay()).await;
+            result = mev_lending_aave_v3::deployment::verify_deployment(&arpc.fast, &a).await;
+        }
+        if let Ok(o) = &result {
+            info!(
                 block = o.block,
                 impl_code_hash = %o.pool_implementation_code_hash,
                 "Aave deployment matches the pinned manifest"
-            ),
-            Err(e) if mode == Mode::Live => bail!("Aave deployment check failed: {e}"),
-            Err(e) => warn!(error = %e, "Aave deployment check failed (shadow: continuing)"),
+            );
         }
-        let cache = data_dir.join("aave_v3_borrowers.json");
-        adapters.push(Box::new(
-            mev_lending_aave_v3::AaveV3Adapter::new(a, arpc.clone(), cache).await?,
-        ));
+        if aave_pin_allows(mode, result.as_ref().err()) {
+            if let Err(e) = &result {
+                warn!(error = %e, "Aave deployment check failed (shadow: continuing)");
+            }
+            let cache = data_dir.join("aave_v3_borrowers.json");
+            adapters.push(Box::new(
+                mev_lending_aave_v3::AaveV3Adapter::new(a, arpc.clone(), cache).await?,
+            ));
+        } else if let Err(e) = &result {
+            error!(
+                error = %e,
+                "ALERT: Aave deployment check failed; Aave liquidations disabled (live). \
+                 Re-pin [aave.manifest] after verifying the upgrade, then restart"
+            );
+        }
     }
     if let Some(c) = cfg.compound_v3.clone().filter(|c| c.enabled) {
         let cache = data_dir.join("compound_v3_borrowers.json");
@@ -3436,5 +3470,34 @@ mod burst_tests {
         ]);
         assert_eq!(out, vec![(a, Some(t2)), (b, Some(t3))]);
         assert!(last_trigger_per_pool(vec![]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod aave_pin_tests {
+    use super::*;
+    use mev_lending_aave_v3::deployment::DeploymentError;
+
+    #[test]
+    fn verified_pin_enables_aave_in_both_modes() {
+        assert!(aave_pin_allows(Mode::Live, None));
+        assert!(aave_pin_allows(Mode::Shadow, None));
+    }
+
+    #[test]
+    fn failed_pin_disables_aave_only_in_live_mode() {
+        let mismatch = DeploymentError::ChainId {
+            expected: 42161,
+            observed: 1,
+        };
+        let rpc = DeploymentError::Rpc("timeout".into());
+        assert!(!aave_pin_allows(Mode::Live, Some(&mismatch)));
+        assert!(!aave_pin_allows(Mode::Live, Some(&rpc)));
+        assert!(!aave_pin_allows(
+            Mode::Live,
+            Some(&DeploymentError::NoManifest)
+        ));
+        assert!(aave_pin_allows(Mode::Shadow, Some(&mismatch)));
+        assert!(aave_pin_allows(Mode::Shadow, Some(&rpc)));
     }
 }
