@@ -1,0 +1,29 @@
+{
+  "source_commit": "4149baf881656812ff58629085455f964cb86154",
+  "files": [
+    {
+      "path": "crates/mev-liq-replay/fixtures/quiet.jsonl",
+      "sha256_hash": "46c2397df3a6ded8d446be97f992ddb81f9a5034fcda7893490bd74acb0e9e04"
+    },
+    {
+      "path": "crates/mev-liq-replay/fixtures/oracle-shock.jsonl",
+      "sha256_hash": "61342c713f23a452205951a8c510589a6f435dc2f22e41b4132a2ba71977ad39"
+    },
+    {
+      "path": "crates/mev-liq-replay/fixtures/overload.jsonl",
+      "sha256_hash": "25e03b26fcdc64e16cde926dd0d3022697e46a4d18fccfc3c9d8f60cbc6a1d6e"
+    },
+    {
+      "path": "docs/audits/evidence/jev-liq-006/quiet.json",
+      "sha256_hash": "c590bf6833f40ab3384c9db28fa286f15db172883841ed0527b152ade4376f06"
+    },
+    {
+      "path": "docs/audits/evidence/jev-liq-006/oracle-shock.json",
+      "sha256_hash": "86e495cf59304286f8b274184fcf72248c0248a88f1f7f143666ecc3ac28fc88"
+    },
+    {
+      "path": "docs/audits/evidence/jev-liq-006/overload.json",
+      "sha256_hash": "637fa0d2a822c25c564d6f9a2adf186f8afb4735d6bc4e0f520fd4c1f55361d7"
+    }
+  ]
+}

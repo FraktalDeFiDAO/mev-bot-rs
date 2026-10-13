@@ -47,15 +47,15 @@ scripts/dev.sh cargo test -q -p mev-liq-replay --locked
 scripts/dev.sh cargo run -q -p mev-liq-replay --locked -- \
   --input crates/mev-liq-replay/fixtures/quiet.jsonl \
   --output docs/audits/evidence/jev-liq-006/quiet.json \
-  --code-revision d0f7b52+JEV-LIQ-006
+  --code-revision 4149baf881656812ff58629085455f964cb86154
 scripts/dev.sh cargo run -q -p mev-liq-replay --locked -- \
   --input crates/mev-liq-replay/fixtures/oracle-shock.jsonl \
   --output docs/audits/evidence/jev-liq-006/oracle-shock.json \
-  --code-revision d0f7b52+JEV-LIQ-006
+  --code-revision 4149baf881656812ff58629085455f964cb86154
 scripts/dev.sh cargo run -q -p mev-liq-replay --locked -- \
   --input crates/mev-liq-replay/fixtures/overload.jsonl \
   --output docs/audits/evidence/jev-liq-006/overload.json \
-  --code-revision d0f7b52+JEV-LIQ-006 --concurrency 1 --recheck-ms 1000
+  --code-revision 4149baf881656812ff58629085455f964cb86154 --concurrency 1 --recheck-ms 1000
 ```
 
 All three recordings are deterministic **synthetic** fixtures, with generation provenance,
@@ -77,7 +77,7 @@ deadline semantics; this is not a separately invented completion SLA.
 
 Observed local gates (2026-10-13, rootless Podman): workspace format and clippy
 `--all-targets --locked -- -D warnings` passed; workspace tests passed **707, failed 0,
-ignored 28** across 175 test binaries, including 16 replay tests (one property test runs
+ignored 28** across 175 test summaries, including 16 replay tests (one property test runs
 256 generated permutations). The existing Python CI suite passed 3 tests. Foundry,
 network/fork tests and browser tests were not rerun for this offline Rust-only change.
 `scripts/graph.sh optimize` completed; generated graph/Obsidian files stay outside this PR.
