@@ -8,6 +8,7 @@
 
 mod coalesce;
 mod domain;
+mod history;
 mod index;
 mod repo;
 
@@ -16,6 +17,7 @@ pub use domain::{
     AccountKey, BorrowerSnapshot, ChainPoint, ChainRef, ChainSource, DirtyReason, ReserveBalance,
     SnapshotStatus, WAD,
 };
+pub use history::{HISTORY_RETENTION, HistoryPoint};
 pub use index::{
     ApplyOutcome, BorrowerRecord, CoverageGap, DirtyEntry, Effect, FLAG_BACKLOG_ESCALATED,
     FLAG_FULL_REVERIFICATION, KIND_COLLATERAL, KIND_DEBT, NewGap, PoolFlag, ReconcileOutcome,

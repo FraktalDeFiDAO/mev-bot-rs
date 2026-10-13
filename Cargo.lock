@@ -3476,6 +3476,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-liq-features"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-liq-state",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
 name = "mev-liq-state"
 version = "0.1.0"
 dependencies = [

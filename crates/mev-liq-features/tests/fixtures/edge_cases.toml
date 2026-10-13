@@ -1,0 +1,83 @@
+# Fixture: health-factor and debt band edge cases for copper_liq_features_v1.
+#
+# Provenance: SYNTHETIC boundary values derived from the Aave V3 definitions (health factor is a
+# WAD, liquidatable strictly below 1e18; base currency is USD with 8 decimals on Arbitrum One,
+# chain id 42161). No on-chain fetch was made for this fixture (no hosted RPC is called by this
+# task); values are exact integers so each row sits on, or one unit below, an edge.
+# Changing a threshold in crates/mev-liq-features/src/bands.rs must change these rows.
+
+[[hf]]
+name = "one_wei_below_liquidation"
+hf_wad = "999999999999999999"
+band = "below_1.00"
+
+[[hf]]
+name = "exactly_one"
+hf_wad = "1000000000000000000"
+band = "1.00_to_1.02"
+
+[[hf]]
+name = "one_wei_below_1_02"
+hf_wad = "1019999999999999999"
+band = "1.00_to_1.02"
+
+[[hf]]
+name = "exactly_1_02"
+hf_wad = "1020000000000000000"
+band = "1.02_to_1.05"
+
+[[hf]]
+name = "exactly_1_05"
+hf_wad = "1050000000000000000"
+band = "1.05_to_1.10"
+
+[[hf]]
+name = "exactly_1_10"
+hf_wad = "1100000000000000000"
+band = "1.10_to_1.25"
+
+[[hf]]
+name = "exactly_1_25"
+hf_wad = "1250000000000000000"
+band = "1.25_to_2.00"
+
+[[hf]]
+name = "one_wei_below_2"
+hf_wad = "1999999999999999999"
+band = "1.25_to_2.00"
+
+[[hf]]
+name = "exactly_2"
+hf_wad = "2000000000000000000"
+band = "above_2.00"
+
+# Debt is in Aave base units (USD * 1e8).
+[[debt]]
+name = "one_unit_below_1k"
+debt_base = "99999999999"
+band = "under_1k"
+
+[[debt]]
+name = "exactly_1k"
+debt_base = "100000000000"
+band = "1k_to_10k"
+
+[[debt]]
+name = "exactly_10k"
+debt_base = "1000000000000"
+band = "10k_to_100k"
+
+[[debt]]
+name = "exactly_100k"
+debt_base = "10000000000000"
+band = "100k_to_500k"
+
+[[debt]]
+name = "exactly_500k"
+debt_base = "50000000000000"
+band = "500k_to_1m"
+
+[[debt]]
+name = "exactly_1m"
+debt_base = "100000000000000"
+band = "above_1m"

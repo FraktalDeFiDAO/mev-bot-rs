@@ -66,7 +66,7 @@ fn dirty(r: &SnapshotRepository, n: u8) -> Vec<DirtyReason> {
 #[test]
 fn migration_two_applies_and_rolls_back_without_touching_version_one_data() {
     let (d, r) = repo();
-    assert_eq!(r.schema_version().unwrap(), 2);
+    assert_eq!(r.schema_version().unwrap(), SCHEMA_VERSION);
     r.mark_dirty(
         DirtyTarget::Account(AccountKey {
             chain_id: CHAIN,
@@ -85,7 +85,11 @@ fn migration_two_applies_and_rolls_back_without_touching_version_one_data() {
     assert!(r.scan_cursor("n").is_err());
     drop(r);
     let r = SnapshotRepository::open(&d.path().join("s.db")).unwrap();
-    assert_eq!(r.schema_version().unwrap(), 2, "reopening re-applies v2");
+    assert_eq!(
+        r.schema_version().unwrap(),
+        SCHEMA_VERSION,
+        "reopening re-applies the migrations"
+    );
     assert_eq!(r.list_dirty().unwrap().len(), 2);
     assert!(r.scan_cursor("n").unwrap().is_none());
 }
