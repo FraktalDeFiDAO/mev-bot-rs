@@ -985,6 +985,19 @@ impl Engine {
         let (created_tx, mut created_rx) = mpsc::unbounded_channel::<alloy::rpc::types::Log>();
         let mut watch_addrs = mev_discovery::created::factories(&self.cfg.dexes);
         watch_addrs.extend(self.liq_watch.iter().copied());
+        // Every contract a protocol crate with liquidation events knows (Dolomite's margin contract, comets, ...):
+        // recorded even where the runtime adapter is not enabled.
+        watch_addrs.extend(
+            mev_decode::protocols()
+                .iter()
+                .filter(|p| {
+                    p.events()
+                        .iter()
+                        .any(|k| k.class == mev_decode::events::Class::Liquidation)
+                })
+                .flat_map(|p| p.contracts())
+                .map(|c| c.address),
+        );
         let fluid_dex_factory = self
             .cfg
             .fluid

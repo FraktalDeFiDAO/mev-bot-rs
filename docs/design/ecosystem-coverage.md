@@ -35,7 +35,7 @@ Watched today: about **75%** of volume (Uniswap V3 + V4, Pancake V3, Camelot V3/
 | Fluid Lending | 135 / 110 | **active on all 50 T1 vaults** (`auto_vaults`); events recorded on all 95. Of 69 liquidations in 9 days none were on the two vaults first configured (34, 30 and 5 on three others), so the fixed list had been watching the wrong vaults | T2-T4 (smart collateral/debt: 45 vaults) have another `liquidate` shape; an executor allowlist entry is needed per vault |
 | Compound V3 | 68 / 24 | **active** (four comets) | verify the comet list against the factory |
 | Morpho Blue | 34 / 22 | **active** | none |
-| Dolomite | 23 / 11 | crate exists, **disabled** (audit pending) | next lending target: largest unwatched borrow book |
+| Dolomite | 23 / 11 | liquidation and vaporization events **recorded** (2 liquidations in 9 days); capture adapter **disabled** (audit pending) | rare (about one every 4-5 days): not worth the capture work yet |
 | Contango V2 | 5 / 7 | not watched | liquidations of margin positions; evaluate |
 | Euler V2, Curve LlamaLend, Silo V1/V2, Venus, Revert Lend | 0-3 / 0-1 each | crates for Silo exist, inactive | record `Liquidate`-style events; add as borrow grows |
 | GMX V2 (perps) | 204 / n.a. | not watched | keeper-executed liquidations; recording only, no capture path |
