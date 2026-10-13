@@ -1120,6 +1120,8 @@ impl Engine {
                                 None => break,
                             }
                         }
+                        // The cache now reflects every log up to the last block in this burst.
+                        let batch_block = batch.last().and_then(|l| l.block_number);
                         let mut touched: Vec<(Address, Option<alloy::primitives::TxHash>)> = Vec::new();
                         let mut invalid = false;
                         for log in &batch {
@@ -1130,7 +1132,7 @@ impl Engine {
                             }
                         }
                         for (pool, tx) in last_trigger_per_pool(touched) {
-                            let trigger = Trigger { tx, source: "block", seen: Instant::now() };
+                            let trigger = Trigger { tx, source: "block", seen: Instant::now(), block: batch_block };
                             self.on_pool_update(pool, trigger, &tx_done).await;
                         }
                         if invalid { break }
@@ -1188,7 +1190,7 @@ impl Engine {
                             }
                         }
                         for (pool, _) in last_trigger_per_pool(moved) {
-                            let trigger = Trigger { tx: Some(pre.tx), source: "presim", seen: pre.received };
+                            let trigger = Trigger { tx: Some(pre.tx), source: "presim", seen: pre.received, block: Some(pre.block) };
                             self.on_pool_update(pool, trigger, &tx_done).await;
                         }
                     }
@@ -2350,8 +2352,31 @@ impl Engine {
                         self.sim_bad.prune(now_secs(), SIM_BAD_TTL);
                     }
                     self.sim_bad.mark(key, now_secs());
-                    self.metrics
-                        .event("sim_revert", json!({ "opp": base, "reason": r }));
+                    // Shadow diagnostic: was the route already dead at the block whose state we priced it on? If it
+                    // simulates fine there but not at the latest block, the edge decayed in between (taken by
+                    // someone faster); if it fails there too, our cached state or model is wrong.
+                    let mut diag = serde_json::Value::Null;
+                    if !self.sending(true)
+                        && let Some(b) = trigger.block
+                    {
+                        let at = sim
+                            .simulate_fast_at(&opp, U256::ZERO, alloy::eips::BlockId::number(b))
+                            .await;
+                        let latest = self.rpc.http.get_block_number().await.ok();
+                        diag = json!({
+                            "trigger_block": b,
+                            "latest_block": latest,
+                            "at_trigger_block": match at {
+                                Ok(SimOutcome::Profitable { profit, .. }) => format!("profit {profit}"),
+                                Ok(SimOutcome::Reverted(e)) => format!("revert {}", e.chars().take(80).collect::<String>()),
+                                Err(e) => format!("error {e}"),
+                            },
+                        });
+                    }
+                    self.metrics.event(
+                        "sim_revert",
+                        json!({ "opp": base, "reason": r, "diag": diag }),
+                    );
                     // The model said profit and the chain said no: re-read the route's pools so a
                     // stale price is corrected now (and the drift is logged), not at the next resync.
                     if trigger.source == "block" {
