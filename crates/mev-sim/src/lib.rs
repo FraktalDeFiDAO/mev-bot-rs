@@ -103,6 +103,29 @@ impl Simulator {
 }
 
 impl Simulator {
+    /// Like `simulate_fast`, but against the state at `block` (diagnostics: where did an edge stop existing?).
+    pub async fn simulate_fast_at(
+        &self,
+        opp: &Opportunity,
+        min_profit: U256,
+        block: alloy::eips::BlockId,
+    ) -> Result<SimOutcome> {
+        let req = self.arb_request(opp, min_profit);
+        let raw = match self.provider.call(req).block(block).await {
+            Ok(raw) => raw,
+            Err(e) => return Ok(SimOutcome::Reverted(short(&e.to_string()))),
+        };
+        Ok(match ArbExecutor::executeCall::abi_decode_returns(&raw) {
+            Ok(profit) => SimOutcome::Profitable {
+                profit,
+                gas: arb_gas_estimate(opp.hops.len()),
+            },
+            Err(e) => SimOutcome::Reverted(short(&e.to_string())),
+        })
+    }
+}
+
+impl Simulator {
     /// `eth_call` the executor's generic `liquidate` as its owner, then estimate gas if it succeeds.
     pub async fn simulate_liquidation(
         &self,

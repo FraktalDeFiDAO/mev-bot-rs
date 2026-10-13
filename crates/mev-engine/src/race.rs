@@ -28,6 +28,8 @@ pub struct Trigger {
     pub source: &'static str,
     /// When the engine learned of it.
     pub seen: Instant,
+    /// The block whose logs (or simulation) produced it, when known.
+    pub block: Option<u64>,
 }
 
 /// At most this many receipts are fetched per attempt to find the winner.
