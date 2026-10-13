@@ -1,0 +1,100 @@
+{
+  "task": "JEV-LIQ-001",
+  "date": "2026-10-13",
+  "source_commit": "c6f3aa466fb1230424a0dfb41b65e09b5084d72e",
+  "checkout_clean_at_test_start": true,
+  "worktree": "/tmp/mev-jev-liq-001-audit",
+  "task_branch": "docs/jev-liq-001-audit",
+  "read_only_parallel_auditors": 3,
+  "environment": {
+    "podman": "6.1.3",
+    "rootless": true,
+    "arch": "amd64",
+    "rust": "1.99.0",
+    "foundry": "1.8.4",
+    "solidity": "0.8.28",
+    "node_host": "24.18.0",
+    "forge_std_gitlink": "c6fa5d82a3a287c4ff23f26c8f7e2958aafd32d9"
+  },
+  "checks": {
+    "rust_fmt": {
+      "exit_code": 0
+    },
+    "workspace_clippy": {
+      "exit_code": 0,
+      "locked": true,
+      "all_targets": true,
+      "deny_warnings": true
+    },
+    "workspace_tests": {
+      "exit_code": 0,
+      "passed": 564,
+      "failed": 0,
+      "ignored": 24,
+      "test_summaries": 153
+    },
+    "foundry_fmt_build": {
+      "exit_code": 0,
+      "arb_executor_runtime_bytes": 21376,
+      "atlas_solver_runtime_bytes": 23555
+    },
+    "foundry_offline": {
+      "exit_code": 0,
+      "passed": 27,
+      "failed": 0,
+      "skipped": 0,
+      "invariant_runs": 256,
+      "invariant_calls": 128000
+    },
+    "python": {
+      "exit_code": 0,
+      "passed": 3
+    },
+    "browser": {
+      "exit_code": 0,
+      "logic_passed": 23,
+      "browser_passed": 17,
+      "failed": 0,
+      "stored_rows": 3586,
+      "dropped": 0,
+      "storage_failed": 0
+    },
+    "podman_compose_config": {
+      "exit_code": 0
+    }
+  },
+  "docker": {
+    "status": "not independently verified",
+    "reason": "docker CLI delegates to Podman 6.1.3 / podman-compose 1.6.0; --no-env-resolution rejected",
+    "config_attempt_exit_code": 2
+  },
+  "not_run": [
+    "24 ignored Rust network tests",
+    "3 Foundry live-RPC fork suites",
+    "Anvil e2e/crash test bots",
+    "historical Aave/REVM parity",
+    "Jev API",
+    "deployment",
+    "four-arm evaluation"
+  ],
+  "behavior_changes": false,
+  "dependency_changes": false,
+  "infra_changes": false,
+  "log_normalization": {
+    "method": "trailing whitespace and extra blank EOF lines removed; test content retained",
+    "raw_log_sha256_hashes": [
+      {
+        "path": "logs/browser.log",
+        "sha256_hash": "a1794a28beaed7717ac52bee8c5b5d81ef39e3b80ace92dc088f546336439a69"
+      },
+      {
+        "path": "logs/foundry.log",
+        "sha256_hash": "95c66543fda387b2485dcd97fb814672a241a56c5d417617941de91cbb0ef7f9"
+      },
+      {
+        "path": "logs/rust.log",
+        "sha256_hash": "47a5afcfa690965277bdcfb8e34801bcde6bc1facb212bb995cfebefd31eefac"
+      }
+    ]
+  }
+}
