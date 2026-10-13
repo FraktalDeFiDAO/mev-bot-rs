@@ -200,12 +200,11 @@ proptest! {
     ) {
         let w = world(&specs, true, &[]);
         let cfg = small_cfg(conc);
-        let dec: Vec<OptionalDecision> = decs.iter().map(|(n, rev, d, bonus, exp)| OptionalDecision {
-            key: key(*n),
-            revision: *rev,
-            feature_digest: B256::repeat_byte(*d),
-            bonus: *bonus,
-            expires_at_ns: *exp,
+        let dec: Vec<OptionalDecision> = decs.iter().map(|(n, rev, d, bonus, exp)| {
+            let mut x = good_decision(*n, *rev, B256::repeat_byte(*d));
+            x.confidence = f64::from(*bonus) / 255.0;
+            x.expires_at_ns = *exp;
+            x
         }).collect();
         let base = exec(&w, &[], &cfg);
         let with = exec(&w, &dec, &cfg);

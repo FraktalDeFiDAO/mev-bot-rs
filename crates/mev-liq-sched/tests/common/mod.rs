@@ -114,3 +114,30 @@ pub fn find(o: &ScheduleOutput, n: u32) -> Option<&RecheckJob> {
         .chain(o.backlog.iter())
         .find(|j| j.key == key(n))
 }
+
+pub const POLICY_V: &str = "policy-v1";
+pub const SCHEMA_V: &str = "features-v1";
+pub const MODEL: &str = "model-a";
+
+/// A decision that satisfies every clause for account `n` whose snapshot is `snap(..)`.
+pub fn good_decision(n: u32, revision: u64, digest: B256) -> OptionalDecision {
+    OptionalDecision {
+        key: key(n),
+        chain_id: 42161,
+        pool: pool(),
+        policy_version: POLICY_V.into(),
+        feature_schema: SCHEMA_V.into(),
+        revision,
+        feature_digest: digest,
+        expires_at_ns: NOW + 1_000 * SEC,
+        model: MODEL.into(),
+        watch_tier: mev_liq_state::WatchTier::High,
+        confidence: 0.95,
+        prep_probability: 0.5,
+        value_score: 1.0,
+    }
+}
+
+pub fn adv_cfg() -> AdvisoryConfig {
+    AdvisoryConfig::new(POLICY_V, SCHEMA_V, vec![MODEL.into()])
+}

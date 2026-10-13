@@ -333,6 +333,22 @@ pub fn replay(
     cfg: &ReplayConfig,
     code_revision: &str,
 ) -> Result<ReplayReport, ReplayError> {
+    let policy = BaselinePolicy {
+        config: cfg.policy.clone(),
+    };
+    replay_with_policy(stream, cfg, code_revision, &policy, "BASELINE")
+}
+
+/// Same replay with any ranking policy at the same event stream, service model and budgets
+/// (`cfg`). `label` is recorded as `ReplayReport::policy` (e.g. `REPLAY_JEV`). `cfg.policy`
+/// must be the scheduler config the policy itself uses so the budgets are equal.
+pub fn replay_with_policy(
+    stream: &ReplayStream,
+    cfg: &ReplayConfig,
+    code_revision: &str,
+    policy: &dyn RankingPolicy,
+    label: &str,
+) -> Result<ReplayReport, ReplayError> {
     cfg.policy.validate()?;
     if cfg.tick_ns == 0 || cfg.max_steps == 0 || cfg.max_checks == 0 {
         return Err(ReplayError::Invalid(
@@ -351,9 +367,6 @@ pub fn replay(
             .collect(),
     )?;
     let truth = GroundTruth::build(&stream.events).map_err(|(_, e)| ReplayError::Invalid(e))?;
-    let policy = BaselinePolicy {
-        config: cfg.policy.clone(),
-    };
     let mut world = World {
         accounts: BTreeMap::new(),
         dependencies: BTreeMap::new(),
@@ -367,7 +380,7 @@ pub fn replay(
     let mut records = Vec::new();
     let mut report = ReplayReport {
         report_version: 1,
-        policy: "BASELINE".into(),
+        policy: label.into(),
         code_revision: code_revision.into(),
         dataset_id: stream.header.dataset_id.clone(),
         synthetic: stream.header.synthetic,

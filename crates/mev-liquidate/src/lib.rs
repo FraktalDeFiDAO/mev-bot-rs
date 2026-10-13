@@ -19,7 +19,10 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 mod shadow;
-pub use shadow::{EVENT_COUNTERS, EVENT_SCHEDULE, ShadowSchedule, ShadowSink};
+pub use shadow::{
+    AdvisoryShadow, DecisionFn, EVENT_ADVISORY, EVENT_COUNTERS, EVENT_SCHEDULE, HealthFn,
+    ShadowSchedule, ShadowSink,
+};
 
 /// Index more often while history is being back-filled.
 /// Delay before the single retry of an adapter whose sweep failed (instead of a full `sweep_secs`).
@@ -1069,5 +1072,59 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(500)).await;
         h.abort();
         assert!(events.lock().unwrap().is_empty());
+    }
+
+    fn advisory_hook(mode: mev_liq_sched::AdvisoryMode) -> AdvisoryShadow {
+        AdvisoryShadow {
+            policy: mev_liq_sched::AdvisoryPolicy::new(
+                mode,
+                mev_liq_sched::PolicyConfig::default(),
+                mev_liq_sched::AdvisoryConfig::new("policy-v1", "features-v1", vec!["m".into()]),
+                mev_liq_sched::JevHealth::Healthy,
+            )
+            .unwrap(),
+            decisions: Arc::new(|_, _| mev_liq_sched::AdvisoryInputs::default()),
+            health: Arc::new(|| mev_liq_sched::JevHealth::Healthy),
+        }
+    }
+
+    async fn run_pass(sched: &ShadowSchedule) {
+        sched.spawn_pass();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    #[tokio::test]
+    async fn advisory_shadow_emits_its_event_and_leaves_the_schedule_event_unchanged() {
+        let plain = Arc::new(Mutex::new(Vec::new()));
+        let (_d1, s1) = shadow_for(true, plain.clone());
+        run_pass(&s1).await;
+        let adv = Arc::new(Mutex::new(Vec::new()));
+        let (_d2, s2) = shadow_for(true, adv.clone());
+        run_pass(&s2.with_advisory(advisory_hook(mev_liq_sched::AdvisoryMode::Shadow))).await;
+
+        let (p, a) = (plain.lock().unwrap(), adv.lock().unwrap());
+        let jobs = |ev: &[(String, serde_json::Value)]| {
+            ev.iter().find(|(k, _)| k == EVENT_SCHEDULE).unwrap().1["jobs"].clone()
+        };
+        assert_eq!(jobs(&p), jobs(&a));
+        assert!(!p.iter().any(|(k, _)| k == EVENT_ADVISORY));
+        let rep = &a
+            .iter()
+            .find(|(k, _)| k == EVENT_ADVISORY)
+            .expect("advisory event")
+            .1;
+        assert_eq!(rep["mode"], "Shadow");
+        assert_eq!(rep["mandatory_unchanged"], true);
+        assert!(rep["counters"]["copper_jev_fallback_total"].is_object());
+    }
+
+    #[tokio::test]
+    async fn advisory_off_emits_no_advisory_event() {
+        let ev = Arc::new(Mutex::new(Vec::new()));
+        let (_d, s) = shadow_for(true, ev.clone());
+        run_pass(&s.with_advisory(advisory_hook(mev_liq_sched::AdvisoryMode::Off))).await;
+        let ev = ev.lock().unwrap();
+        assert!(ev.iter().any(|(k, _)| k == EVENT_SCHEDULE));
+        assert!(!ev.iter().any(|(k, _)| k == EVENT_ADVISORY));
     }
 }
