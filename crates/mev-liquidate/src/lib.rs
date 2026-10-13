@@ -18,6 +18,9 @@ use mev_sequencer::SequencedTx;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
+mod shadow;
+pub use shadow::{EVENT_COUNTERS, EVENT_SCHEDULE, ShadowSchedule, ShadowSink};
+
 /// Index more often while history is being back-filled.
 /// Delay before the single retry of an adapter whose sweep failed (instead of a full `sweep_secs`).
 const SWEEP_RETRY: Duration = Duration::from_secs(60);
@@ -116,6 +119,8 @@ pub struct Runner {
     last_backrun: HashMap<AccountRef, Instant>,
     /// Auction hints (SVR); taken by `run`.
     hints: Option<mpsc::UnboundedReceiver<OracleHint>>,
+    /// Optional shadow-only mandatory scheduler pass (JEV-LIQ-005); never alters dispatch.
+    shadow: Option<ShadowSchedule>,
     /// Plans predicted for a (feed, answer) update, reused by the parallel auction of the same
     /// update (adapters move their prediction state on each `predict`).
     hint_plans: HashMap<(Address, u64), (Instant, Vec<Plan>)>,
@@ -168,6 +173,7 @@ impl Runner {
             last_plan: HashMap::new(),
             last_backrun: HashMap::new(),
             hints: None,
+            shadow: None,
             hint_plans: HashMap::new(),
         }
     }
@@ -201,6 +207,13 @@ impl Runner {
     /// Take oracle updates announced by SVR auctions as another source of backruns.
     pub fn with_hints(mut self, rx: mpsc::UnboundedReceiver<OracleHint>) -> Self {
         self.hints = Some(rx);
+        self
+    }
+
+    /// Attach the shadow mandatory-scheduler pass. It only records; it is skipped unless
+    /// `schedule.enabled` (default false).
+    pub fn with_shadow_schedule(mut self, schedule: ShadowSchedule) -> Self {
+        self.shadow = Some(schedule);
         self
     }
 
@@ -498,6 +511,11 @@ impl Runner {
             return;
         }
         let mut hints = self.hints.take();
+        let mut shadow_iv = self.shadow.as_ref().filter(|s| s.enabled).map(|s| {
+            let mut iv = tokio::time::interval(s.every);
+            iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            iv
+        });
         let sweep_every = Duration::from_secs(self.cfg.sweep_secs);
         let mut index_tick = tokio::time::interval(BACKFILL_EVERY);
         let mut sweep = tokio::time::interval(sweep_every);
@@ -509,6 +527,9 @@ impl Runner {
         let mut backfilled = false;
         loop {
             tokio::select! {
+                _ = shadow::tick_opt(&mut shadow_iv) => {
+                    if let Some(s) = &self.shadow { s.spawn_pass(); }
+                }
                 _ = index_tick.tick() => {
                     if self.index_all().await && !backfilled {
                         backfilled = true;
@@ -971,5 +992,82 @@ mod tests {
             input: Default::default(),
             tx: env,
         }
+    }
+
+    fn shadow_for(
+        enabled: bool,
+        events: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    ) -> (tempfile::TempDir, ShadowSchedule) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo =
+            Arc::new(mev_liq_state::SnapshotRepository::open(&dir.path().join("s.db")).unwrap());
+        let pool = Address::repeat_byte(0xaa);
+        repo.register_borrowers(42161, pool, &[Address::with_last_byte(9)], None, 1)
+            .unwrap();
+        let params = mev_liq_sched::ShadowParams {
+            chain_id: 42161,
+            pool,
+            scan_name: "live".into(),
+            policy: mev_liq_sched::PolicyConfig::default(),
+            max_records: 50,
+        };
+        let sink: ShadowSink =
+            Arc::new(move |k, d| events.lock().unwrap().push((k.to_string(), d)));
+        let s = ShadowSchedule::new(repo, params)
+            .enabled(enabled)
+            .every(Duration::from_millis(100))
+            .with_sink(sink);
+        (dir, s)
+    }
+
+    #[tokio::test]
+    async fn shadow_schedule_is_recorded_from_the_runner_loop_without_changing_dispatch() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (_d, sched) = shadow_for(true, events.clone());
+        let (_hf, a) = fake(0.97, AdapterStatus::Live);
+        let c = RunnerConfig {
+            fallback_poll_secs: 1,
+            ..cfg()
+        };
+        let r = Runner::new(c, vec![a]).with_shadow_schedule(sched);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let h = tokio::spawn(r.run(None, tx));
+        // the runner still plans the liquidatable account exactly as without the shadow pass
+        let plan = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(RunnerEvent::Plan(p)) = rx.recv().await {
+                    break p;
+                }
+            }
+        })
+        .await
+        .expect("plan");
+        assert_eq!(plan.protocol, "fake");
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        h.abort();
+        let ev = events.lock().unwrap();
+        let sched_ev = ev
+            .iter()
+            .find(|(k, _)| k == EVENT_SCHEDULE)
+            .expect("schedule event");
+        assert_eq!(sched_ev.1["jobs"][0]["decision"]["tier"], "P1");
+        assert!(
+            ev.iter()
+                .any(|(k, d)| k == EVENT_COUNTERS && d["candidates"]["p1"] == 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn shadow_schedule_is_off_unless_enabled() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (_d, sched) = shadow_for(false, events.clone());
+        sched.spawn_pass();
+        let (_hf, a) = fake(1.5, AdapterStatus::Live);
+        let r = Runner::new(cfg(), vec![a]).with_shadow_schedule(sched);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let h = tokio::spawn(r.run(None, tx));
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        h.abort();
+        assert!(events.lock().unwrap().is_empty());
     }
 }

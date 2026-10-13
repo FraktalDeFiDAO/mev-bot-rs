@@ -3490,6 +3490,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-liq-sched"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-liq-state",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "mev-liq-state"
 version = "0.1.0"
 dependencies = [
@@ -3509,9 +3521,13 @@ dependencies = [
  "async-trait",
  "futures",
  "mev-lending",
+ "mev-liq-sched",
+ "mev-liq-state",
  "mev-oracle",
  "mev-sequencer",
  "mev-types",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]

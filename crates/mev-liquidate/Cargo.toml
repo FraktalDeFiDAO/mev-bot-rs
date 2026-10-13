@@ -15,6 +15,10 @@ tracing = { workspace = true }
 mev-lending = { workspace = true }
 mev-oracle = { workspace = true }
 mev-sequencer = { workspace = true }
+mev-liq-state = { workspace = true }
+mev-liq-sched = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
+tempfile = "3"

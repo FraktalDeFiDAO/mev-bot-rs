@@ -1,0 +1,17 @@
+[package]
+name = "mev-liq-sched"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Pure deterministic mandatory liquidation recheck scheduler (tiers, deadlines, reserved capacity, coverage checks)."
+
+[dependencies]
+alloy = { workspace = true }
+mev-liq-state = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = "3"
