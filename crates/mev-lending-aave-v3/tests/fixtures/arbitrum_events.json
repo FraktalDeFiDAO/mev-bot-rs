@@ -1,0 +1,316 @@
+[
+ {
+  "name": "Supply",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 514400063,
+   "tx": "0xfeab517ac3beab255278dd70db539d295abcce9b26f55972159c24d525106f55",
+   "log_index": 5,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0x2b627736bca15cd5381dcf80b0bf11fd197d01a037c52b927a881a10fb73ba61",
+    "0x000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831",
+    "0x00000000000000000000000044465d46ccade60799c81c090c0f7d318c2ce87e",
+    "0x0000000000000000000000000000000000000000000000000000000000000000"
+   ],
+   "data": "0x00000000000000000000000044465d46ccade60799c81c090c0f7d318c2ce87e0000000000000000000000000000000000000000000000000000000211fd42fe",
+   "blockNumber": "0x1ea91f3f",
+   "transactionHash": "0xfeab517ac3beab255278dd70db539d295abcce9b26f55972159c24d525106f55",
+   "transactionIndex": "0x1",
+   "blockHash": "0xaf78e1093e6045a1dd2b4c6afdeaa7272490a0a534bb0e84dabda66604cbd779",
+   "blockTimestamp": "0x0",
+   "logIndex": "0x5",
+   "removed": false
+  }
+ },
+ {
+  "name": "Borrow",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 514401503,
+   "tx": "0x1b9d41ad8485e431d6580010a68b4c8605f21131d4a5d668addfa823a4746d14",
+   "log_index": 10,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0xb3d084820fb1a9decffb176436bd02558d15fac9b0ddfed8c465bc7359d7dce0",
+    "0x000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831",
+    "0x000000000000000000000000bb9da6b1d771b2022c858f9e138db8012199a406",
+    "0x0000000000000000000000000000000000000000000000000000000000000000"
+   ],
+   "data": "0x000000000000000000000000bb9da6b1d771b2022c858f9e138db8012199a4060000000000000000000000000000000000000000000000000000000000c65d40000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000020577d5a5fd22f69a5ce11",
+   "blockNumber": "0x1ea924df",
+   "transactionHash": "0x1b9d41ad8485e431d6580010a68b4c8605f21131d4a5d668addfa823a4746d14",
+   "transactionIndex": "0x6",
+   "blockHash": "0x37d1cc3006066ea5ea10c37f43f09ae9c1eec7c165a2ecd41fa0ada31e9f76c7",
+   "blockTimestamp": "0x0",
+   "logIndex": "0xa",
+   "removed": false
+  }
+ },
+ {
+  "name": "Repay",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 514400543,
+   "tx": "0xd507b6672a4ca63071df12c6b13dd3f4425b123aef676f41e46e40c89b464f8d",
+   "log_index": 5,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051",
+    "0x000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831",
+    "0x000000000000000000000000b143f6ca55358fac056eca7ac1a228a1f018b048",
+    "0x000000000000000000000000b143f6ca55358fac056eca7ac1a228a1f018b048"
+   ],
+   "data": "0x0000000000000000000000000000000000000000000000000000000026b2c0950000000000000000000000000000000000000000000000000000000000000000",
+   "blockNumber": "0x1ea9211f",
+   "transactionHash": "0xd507b6672a4ca63071df12c6b13dd3f4425b123aef676f41e46e40c89b464f8d",
+   "transactionIndex": "0x2",
+   "blockHash": "0x50553242672d68f4e243d196091207941648b48f4e553888b24cb87a10513ab1",
+   "blockTimestamp": "0x0",
+   "logIndex": "0x5",
+   "removed": false
+  }
+ },
+ {
+  "name": "Withdraw",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 514400292,
+   "tx": "0xa6b056c7603956763ec90a147c2c2ccb9a0ebbb5448ae0d92583797cb010401e",
+   "log_index": 28,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7",
+    "0x000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831",
+    "0x0000000000000000000000007f6501d3b98ee91f9b9535e4b0ac710fb0f9e0bc",
+    "0x000000000000000000000000dbcd6d6e3e6ff51648ca73d4274cafd34d22a679"
+   ],
+   "data": "0x000000000000000000000000000000000000000000000000000000004c1dfea4",
+   "blockNumber": "0x1ea92024",
+   "transactionHash": "0xa6b056c7603956763ec90a147c2c2ccb9a0ebbb5448ae0d92583797cb010401e",
+   "transactionIndex": "0x3",
+   "blockHash": "0xb20ae9d864faa216f2b6948e634ccb5d668901cf1de4e82b76085ec0aa1b8a48",
+   "blockTimestamp": "0x0",
+   "logIndex": "0x1c",
+   "removed": false
+  }
+ },
+ {
+  "name": "ReserveDataUpdated",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 514400063,
+   "tx": "0xfeab517ac3beab255278dd70db539d295abcce9b26f55972159c24d525106f55",
+   "log_index": 0,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0x804c9b842b2748a22bb64b345453a3de7ca54a6ca45ce00d415894979e22897a",
+    "0x000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831"
+   ],
+   "data": "0x000000000000000000000000000000000000000000199b5eee417a38184b8f2d000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000020578d4aa275d8f81c477e000000000000000000000000000000000000000003d117ff7136a8cfc433a10000000000000000000000000000000000000000000406aeee68f48491231e0684",
+   "blockNumber": "0x1ea91f3f",
+   "transactionHash": "0xfeab517ac3beab255278dd70db539d295abcce9b26f55972159c24d525106f55",
+   "transactionIndex": "0x1",
+   "blockHash": "0xaf78e1093e6045a1dd2b4c6afdeaa7272490a0a534bb0e84dabda66604cbd779",
+   "blockTimestamp": "0x0",
+   "logIndex": "0x0",
+   "removed": false
+  }
+ },
+ {
+  "name": "ReserveUsedAsCollateralEnabled",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 514400063,
+   "tx": "0xfeab517ac3beab255278dd70db539d295abcce9b26f55972159c24d525106f55",
+   "log_index": 4,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0x00058a56ea94653cdf4f152d227ace22d4c00ad99e2a43f58cb7d9e3feb295f2",
+    "0x000000000000000000000000af88d065e77c8cc2239327c5edb3a432268e5831",
+    "0x00000000000000000000000044465d46ccade60799c81c090c0f7d318c2ce87e"
+   ],
+   "data": "0x",
+   "blockNumber": "0x1ea91f3f",
+   "transactionHash": "0xfeab517ac3beab255278dd70db539d295abcce9b26f55972159c24d525106f55",
+   "transactionIndex": "0x1",
+   "blockHash": "0xaf78e1093e6045a1dd2b4c6afdeaa7272490a0a534bb0e84dabda66604cbd779",
+   "blockTimestamp": "0x0",
+   "logIndex": "0x4",
+   "removed": false
+  }
+ },
+ {
+  "name": "ReserveUsedAsCollateralDisabled",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 514403778,
+   "tx": "0x9931caabdd411bfdb0f6adec2d1a28a7c608994d866f14a851ddec2dc3211225",
+   "log_index": 19,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0x44c58d81365b66dd4b1a7f36c25aa97b8c71c361ee4937adc1a00000227db5dd",
+    "0x00000000000000000000000082af49447d8a07e3bd95bd0d56f35241523fbab1",
+    "0x0000000000000000000000001eaf7f8393a3feb626ccbdcacc8d6b4bd9286bb1"
+   ],
+   "data": "0x",
+   "blockNumber": "0x1ea92dc2",
+   "transactionHash": "0x9931caabdd411bfdb0f6adec2d1a28a7c608994d866f14a851ddec2dc3211225",
+   "transactionIndex": "0x7",
+   "blockHash": "0x593557525004d73fba9c2d9927c84a41cc9c9ec4a799a52e1aa8a1f5b3f6a21b",
+   "blockTimestamp": "0x0",
+   "logIndex": "0x13",
+   "removed": false
+  }
+ },
+ {
+  "name": "UserEModeSet",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 514372713,
+   "tx": "0xd8b50c4e28b79d71792c48a50238b05ec7351ba8d71108f26d89be3cb44437ff",
+   "log_index": 2,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0xd728da875fc88944cbf17638bcbe4af0eedaef63becd1d1c57cc097eb4608d84",
+    "0x000000000000000000000000dc207a30e85be7c755336f45e01888532147572c"
+   ],
+   "data": "0x0000000000000000000000000000000000000000000000000000000000000001",
+   "blockNumber": "0x1ea8b469",
+   "transactionHash": "0xd8b50c4e28b79d71792c48a50238b05ec7351ba8d71108f26d89be3cb44437ff",
+   "transactionIndex": "0x2",
+   "blockHash": "0xb51e9c7915e2513c5bb5ebd504e039b07e5e72e35a028b4ff682cf4c35cc8667",
+   "blockTimestamp": "0x0",
+   "logIndex": "0x2",
+   "removed": false
+  }
+ },
+ {
+  "name": "LiquidationCall",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 505434458,
+   "tx": "0x0f1595085be9fc396bbd34e6f61f6c6ac86356dab331c3df13eeb67f36cd72fa",
+   "log_index": 20,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0xe413a321e8681d831f4dbccbca790d2952b56f977908e45be37335533e005286",
+    "0x0000000000000000000000002f2a2543b76a4166549f7aab2e75bef0aefc5b0f",
+    "0x000000000000000000000000fd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+    "0x0000000000000000000000000f0cf96ec3110d903551efdb553ec5a2328932cb"
+   ],
+   "data": "0x00000000000000000000000000000000000000000000000000000000007415ca00000000000000000000000000000000000000000000000000000000000029750000000000000000000000003a43a868ee1829ad89f79c8ecf67cc7476469f550000000000000000000000000000000000000000000000000000000000000000",
+   "blockNumber": "0x1e20515a",
+   "transactionHash": "0x0f1595085be9fc396bbd34e6f61f6c6ac86356dab331c3df13eeb67f36cd72fa",
+   "transactionIndex": "0x3",
+   "blockHash": "0x9737e297162e43c0b3d464ffcc5a13e277a99a0bb615d88d4c48916c9858266b",
+   "blockTimestamp": "0x0",
+   "logIndex": "0x14",
+   "removed": false
+  }
+ },
+ {
+  "name": "DeficitCreated",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 506500829,
+   "tx": "0x02727d19b1101e0df1e253776ac9abcdad7221d50b8428794b0a8745abb9c20e",
+   "log_index": 11,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0x2bccfb3fad376d59d7accf970515eb77b2f27b082c90ed0fb15583dd5a942699",
+    "0x0000000000000000000000000aa30a5dd83aeba89fad85f2b02eb6bfbc81d8c9",
+    "0x000000000000000000000000da10009cbd5d07dd0cecc66161fc93d7c9000da1"
+   ],
+   "data": "0x000000000000000000000000000000000000000000000000000001470a8dadca",
+   "blockNumber": "0x1e3096dd",
+   "transactionHash": "0x02727d19b1101e0df1e253776ac9abcdad7221d50b8428794b0a8745abb9c20e",
+   "transactionIndex": "0x3",
+   "blockHash": "0xfe9d8b2eab836ad584c3162a58a9a6b97e912c319564b9403ae79828a6503e15",
+   "blockTimestamp": "0x0",
+   "logIndex": "0xb",
+   "removed": false
+  }
+ },
+ {
+  "name": "Upgraded",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 467847043,
+   "tx": "0x66d52da3758195baa3a6b3ca908e804558d65d4a1ed9144b8ed28c7759edf4a7",
+   "log_index": 32,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0x794a61358d6845594f94dc1db02a252b5b4814ad",
+   "topics": [
+    "0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b",
+    "0x000000000000000000000000f05fd3cc911b4c5e36e53c00354f645e22922c9a"
+   ],
+   "data": "0x",
+   "blockNumber": "0x1be2c783",
+   "transactionHash": "0x66d52da3758195baa3a6b3ca908e804558d65d4a1ed9144b8ed28c7759edf4a7",
+   "transactionIndex": "0x6",
+   "blockHash": "0x482ec36edc73dc2eaa52a2b91a04c217a1ef01fc105b01a16968f4454ecdc345",
+   "blockTimestamp": "0x0",
+   "logIndex": "0x20",
+   "removed": false
+  }
+ },
+ {
+  "name": "AssetSourceUpdated",
+  "provenance": {
+   "chain_id": 42161,
+   "block": 514098512,
+   "tx": "0xe250bc7e4a7f6601a8b4d564be3f1e1ff0e3f409ca1dd062483f06a1aef80a3f",
+   "log_index": 13,
+   "source": "eth_getLogs via https://arb1.arbitrum.io/rpc, fetched 2026-10-13"
+  },
+  "log": {
+   "address": "0xb56c2f0b653b2e0b10c9b928c8580ac5df02c7c7",
+   "topics": [
+    "0x22c5b7b2d8561d39f7f210b6b326a1aa69f15311163082308ac4877db6339dc1",
+    "0x00000000000000000000000017fc002b466eec40dae837fc4be5c67993ddbd6f",
+    "0x000000000000000000000000c3b102d52db93fe3b22b356085c5854c6bcc2091"
+   ],
+   "data": "0x",
+   "blockNumber": "0x1ea48550",
+   "transactionHash": "0xe250bc7e4a7f6601a8b4d564be3f1e1ff0e3f409ca1dd062483f06a1aef80a3f",
+   "transactionIndex": "0x1",
+   "blockHash": "0x8dad5439d6647937a0bf024966fe4a000c08ab37f17922ac85a9d5258bd43851",
+   "blockTimestamp": "0x0",
+   "logIndex": "0xd",
+   "removed": false
+  }
+ }
+]

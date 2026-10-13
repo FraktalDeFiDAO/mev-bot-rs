@@ -57,6 +57,8 @@ pub enum DirtyReason {
     Reorg,
     Stale,
     Manual,
+    /// Borrower first seen by the index (live event, backfill or import): never checked yet.
+    Discovered,
 }
 
 impl DirtyReason {
@@ -68,6 +70,23 @@ impl DirtyReason {
             Self::Reorg => 4,
             Self::Stale => 5,
             Self::Manual => 6,
+            Self::Discovered => 7,
+        }
+    }
+
+    /// Higher is more urgent. Coalescing keeps the most urgent reason: a reorg invalidates the
+    /// state itself, a price move can push health below 1 with no borrower event, a borrower
+    /// event changed the position, reserve parameter/rate changes act slowly, and the rest are
+    /// bookkeeping sweeps.
+    pub fn urgency(self) -> u8 {
+        match self {
+            Self::Reorg => 6,
+            Self::PriceMove => 5,
+            Self::BorrowerEvent => 4,
+            Self::ReserveConfig => 3,
+            Self::Stale => 2,
+            Self::Discovered => 1,
+            Self::Manual => 0,
         }
     }
     pub(crate) fn from_code(c: i64) -> Option<Self> {
@@ -78,6 +97,7 @@ impl DirtyReason {
             4 => Self::Reorg,
             5 => Self::Stale,
             6 => Self::Manual,
+            7 => Self::Discovered,
             _ => return None,
         })
     }

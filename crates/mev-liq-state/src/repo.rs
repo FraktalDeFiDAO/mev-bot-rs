@@ -20,7 +20,7 @@ use crate::domain::{
     SnapshotStatus,
 };
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 struct Migration {
     version: i64,
@@ -29,10 +29,11 @@ struct Migration {
     down: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "snapshots_dirty_checkpoints",
-    up: "
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "snapshots_dirty_checkpoints",
+        up: "
 CREATE TABLE snapshots(
   chain_id INTEGER NOT NULL, pool BLOB NOT NULL, borrower BLOB NOT NULL,
   revision INTEGER NOT NULL,
@@ -53,8 +54,15 @@ CREATE TABLE dirty(
 ) WITHOUT ROWID;
 CREATE TABLE checkpoints(block_hash BLOB PRIMARY KEY, block_number INTEGER NOT NULL) WITHOUT ROWID;
 ",
-    down: "DROP TABLE checkpoints; DROP TABLE dirty; DROP TABLE snapshots;",
-}];
+        down: "DROP TABLE checkpoints; DROP TABLE dirty; DROP TABLE snapshots;",
+    },
+    Migration {
+        version: 2,
+        name: "event_index_reverse_deps_gaps",
+        up: crate::index::MIGRATION_2_UP,
+        down: crate::index::MIGRATION_2_DOWN,
+    },
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepoError {
@@ -93,23 +101,23 @@ pub struct SnapshotRepository {
     conn: Mutex<Connection>,
 }
 
-fn i64_of(v: u64, what: &'static str) -> Result<i64, RepoError> {
+pub(crate) fn i64_of(v: u64, what: &'static str) -> Result<i64, RepoError> {
     i64::try_from(v).map_err(|_| RepoError::Overflow(what))
 }
-fn u64_of(v: i64, what: &'static str) -> Result<u64, RepoError> {
+pub(crate) fn u64_of(v: i64, what: &'static str) -> Result<u64, RepoError> {
     u64::try_from(v).map_err(|_| RepoError::Corrupt(format!("negative {what}")))
 }
-fn u256_of(b: &[u8]) -> Result<U256, RepoError> {
+pub(crate) fn u256_of(b: &[u8]) -> Result<U256, RepoError> {
     U256::try_from_be_slice(b)
         .filter(|_| b.len() == 32)
         .ok_or_else(|| RepoError::Corrupt(format!("u256 blob of {} bytes", b.len())))
 }
-fn b256_of(b: &[u8]) -> Result<B256, RepoError> {
+pub(crate) fn b256_of(b: &[u8]) -> Result<B256, RepoError> {
     (b.len() == 32)
         .then(|| B256::from_slice(b))
         .ok_or_else(|| RepoError::Corrupt(format!("hash blob of {} bytes", b.len())))
 }
-fn addr_of(b: &[u8]) -> Result<Address, RepoError> {
+pub(crate) fn addr_of(b: &[u8]) -> Result<Address, RepoError> {
     (b.len() == 20)
         .then(|| Address::from_slice(b))
         .ok_or_else(|| RepoError::Corrupt(format!("address blob of {} bytes", b.len())))
@@ -214,7 +222,7 @@ fn load(tx: &Connection, key: &AccountKey) -> Result<Option<BorrowerSnapshot>, R
     Ok(Some(s))
 }
 
-fn load_all_keys(
+pub(crate) fn load_all_keys(
     tx: &Connection,
     sql: &str,
     args: &[&dyn rusqlite::ToSql],
@@ -240,16 +248,44 @@ fn load_all_keys(
 }
 
 fn mark(tx: &Connection, key: &AccountKey, reason: DirtyReason, at: u64) -> Result<(), RepoError> {
+    mark_at(tx, key, reason, at, None)
+}
+
+/// Upsert one dirty mark. Repeated marks coalesce on `(account, reason)`: the mark time only moves
+/// forward and the chain position is the highest block seen (a `None` never erases a known one).
+pub(crate) fn mark_at(
+    tx: &Connection,
+    key: &AccountKey,
+    reason: DirtyReason,
+    at: u64,
+    chain: Option<ChainPoint>,
+) -> Result<(), RepoError> {
+    let (num, hash) = match chain {
+        Some(c) => (
+            Some(i64_of(c.block_number, "block_number")?),
+            Some(c.block_hash.to_vec()),
+        ),
+        None => (None, None),
+    };
     tx.execute(
-        "INSERT INTO dirty(chain_id,pool,borrower,reason,marked_at_ns) VALUES(?1,?2,?3,?4,?5)
+        "INSERT INTO dirty(chain_id,pool,borrower,reason,marked_at_ns,block_number,block_hash)
+         VALUES(?1,?2,?3,?4,?5,?6,?7)
          ON CONFLICT(chain_id,pool,borrower,reason) DO UPDATE SET
-           marked_at_ns=MAX(marked_at_ns, excluded.marked_at_ns)",
+           marked_at_ns=MAX(marked_at_ns, excluded.marked_at_ns),
+           block_hash=CASE WHEN excluded.block_number IS NOT NULL
+                            AND (block_number IS NULL OR excluded.block_number >= block_number)
+                           THEN excluded.block_hash ELSE block_hash END,
+           block_number=CASE WHEN excluded.block_number IS NOT NULL
+                              AND (block_number IS NULL OR excluded.block_number >= block_number)
+                             THEN excluded.block_number ELSE block_number END",
         params![
             i64_of(key.chain_id, "chain_id")?,
             key.pool.as_slice(),
             key.borrower.as_slice(),
             reason.code(),
-            i64_of(at, "marked_at_ns")?
+            i64_of(at, "marked_at_ns")?,
+            num,
+            hash
         ],
     )?;
     Ok(())
@@ -269,7 +305,7 @@ impl SnapshotRepository {
         Ok(repo)
     }
 
-    fn conn(&self) -> MutexGuard<'_, Connection> {
+    pub(crate) fn conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|p| p.into_inner())
     }
 
@@ -548,6 +584,19 @@ impl SnapshotRepository {
     ) -> Result<usize, RepoError> {
         let mut c = self.conn();
         let tx: Transaction<'_> = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let n = invalidate_in_tx(&tx, ancestor, now_ns)?;
+        tx.commit()?;
+        Ok(n)
+    }
+}
+
+/// Body of `invalidate_from_reorg`, reusable inside a larger transaction.
+pub(crate) fn invalidate_in_tx(
+    tx: &Connection,
+    ancestor: ChainPoint,
+    now_ns: u64,
+) -> Result<usize, RepoError> {
+    {
         let num = i64_of(ancestor.block_number, "block_number")?;
         tx.execute("DELETE FROM checkpoints WHERE block_number>?1", [num])?;
         tx.execute(
@@ -555,7 +604,7 @@ impl SnapshotRepository {
             params![num, ancestor.block_hash.as_slice()],
         )?;
         let keys = load_all_keys(
-            &tx,
+            tx,
             "SELECT chain_id,pool,borrower FROM snapshots
              WHERE status=0 AND (block_number>?1 OR (block_number=?1 AND block_hash<>?2))",
             &[&num, &ancestor.block_hash.as_slice()],
@@ -570,9 +619,8 @@ impl SnapshotRepository {
                     k.borrower.as_slice()
                 ],
             )?;
-            mark(&tx, k, DirtyReason::Reorg, now_ns)?;
+            mark(tx, k, DirtyReason::Reorg, now_ns)?;
         }
-        tx.commit()?;
         Ok(keys.len())
     }
 }

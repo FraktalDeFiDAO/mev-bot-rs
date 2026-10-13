@@ -7,9 +7,11 @@
 //! - Price feeds: Aave oracle sources resolved to Chainlink aggregators (sequencer triggers).
 
 pub mod deployment;
+pub mod events;
 pub mod exact;
 pub mod math;
 pub mod recheck;
+pub mod triggers;
 
 use std::{collections::HashMap, path::PathBuf, sync::Mutex, time::Duration};
 
@@ -69,6 +71,11 @@ pub struct AaveV3Adapter {
     feed_assets: HashMap<Address, Vec<Address>>,
     /// State for backrun prediction, refreshed by sweeps and moved by each predicted update.
     snapshot: Mutex<Snapshot>,
+    /// Aggregator -> reserves it prices, for matching price-update transactions (tag = asset).
+    feed_watcher: mev_oracle::FeedWatcher<Address>,
+    /// Optional deterministic-trigger indexer (JEV-LIQ-004). `None` unless `attach_triggers` ran,
+    /// in which case `index()` behaves exactly as before.
+    triggers: Option<triggers::AaveTriggerIndexer>,
 }
 
 #[derive(Default)]
@@ -164,6 +171,12 @@ impl AaveV3Adapter {
             .into_iter()
             .map(|(agg, assets)| (agg, assets.into_iter().collect()))
             .collect();
+        let mut feed_watcher = mev_oracle::FeedWatcher::default();
+        for (agg, assets) in &feed_assets {
+            for a in assets {
+                feed_watcher.watch(*agg, *a);
+            }
+        }
         info!(
             protocol = ID,
             reserves = reserves.len(),
@@ -181,7 +194,57 @@ impl AaveV3Adapter {
             user_masks: Mutex::new(HashMap::new()),
             feed_assets,
             snapshot: Mutex::new(Snapshot::default()),
+            feed_watcher,
+            triggers: None,
         })
+    }
+
+    /// Attach the dependency indexer (additive: the existing `Borrow` index, sweep and f64 paths
+    /// are untouched). Known borrowers from the legacy index are imported into the registry once.
+    pub async fn attach_triggers(
+        &mut self,
+        repo: std::sync::Arc<mev_liq_state::SnapshotRepository>,
+        cfg: triggers::TriggerConfig,
+    ) -> Result<()> {
+        let t = triggers::AaveTriggerIndexer::new(
+            self.cfg.clone(),
+            cfg,
+            self.rpc.scan.clone(),
+            self.rpc.fast.clone(),
+            repo,
+        )
+        .await?;
+        let known: Vec<Address> = self.index.accounts().map(|(_, u)| *u).collect();
+        let n = t.import_known_borrowers(&known)?;
+        info!(protocol = ID, imported = n, "trigger indexer attached");
+        self.triggers = Some(t);
+        Ok(())
+    }
+
+    pub fn trigger_indexer(&self) -> Option<&triggers::AaveTriggerIndexer> {
+        self.triggers.as_ref()
+    }
+
+    /// Reserves whose price a transaction to `to` (with calldata `input`) updates, found through
+    /// the same `FeedWatcher` matching the sequencer path uses (looks through forwarders).
+    pub fn price_update_assets(&self, to: Option<Address>, input: &[u8]) -> Vec<Address> {
+        let mut v: Vec<Address> = self.feed_watcher.matches_tx(to, input).to_vec();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// Mark the holders of every reserve a pending price-update transaction moves. Returns the
+    /// number of immediate marks; `Ok(0)` when no indexer is attached or nothing matched.
+    pub fn on_price_update_tx(&self, to: Option<Address>, input: &[u8]) -> Result<usize> {
+        let Some(t) = &self.triggers else {
+            return Ok(0);
+        };
+        let assets = self.price_update_assets(to, input);
+        if assets.is_empty() {
+            return Ok(0);
+        }
+        Ok(t.mark_assets_price_moved(&assets)?)
     }
 
     /// Which reserves at-risk users touch, so feed updates re-poll only exposed users. Runs on
@@ -428,13 +491,22 @@ impl LiquidationAdapter for AaveV3Adapter {
     async fn index(&mut self) -> Result<bool> {
         let pool = self.cfg.pool;
         // Borrow(reserve, user, onBehalfOf indexed, ...): the debt belongs to onBehalfOf (topic 2).
-        self.index
+        let done = self
+            .index
             .step(&self.rpc.scan, |l| {
                 topic_address(l, 2)
                     .map(|u| vec![(market_key(pool), u)])
                     .unwrap_or_default()
             })
-            .await
+            .await?;
+        // Dependency indexing is best effort here: its failures are reported, never fatal to the
+        // existing sweep. (Errors inside it are also surfaced as gaps/warnings in the repository.)
+        if let Some(t) = &mut self.triggers
+            && let Err(e) = t.step().await
+        {
+            warn!(protocol = ID, error = %format!("{e:#}"), "trigger index step");
+        }
+        Ok(done)
     }
 
     fn accounts(&self) -> Vec<AccountRef> {
