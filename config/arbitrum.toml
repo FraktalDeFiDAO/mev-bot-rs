@@ -59,6 +59,18 @@ oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"
 from_block = 7700000             # Aave v3 Arbitrum deployment
 scan_step = 2000000
 
+# Pinned deployment (JEV-LIQ-002). Startup check in mev-lending-aave-v3 `deployment`: live mode
+# refuses to start on any mismatch, shadow mode logs it. Re-pin after an Aave Pool upgrade.
+[aave.manifest]
+chain_id = 42161
+pool_addresses_provider = "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb"
+pool = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"
+pool_implementation = "0xF05Fd3cC911b4c5E36e53c00354F645E22922C9A"
+pool_implementation_code_hash = "0x9018e99643e0c9b7506f6c8233da851241f5bfddb06158e978fda41861fdea50"
+verified_block = 514414210
+source = "https://github.com/aave-dao/aave-address-book/blob/38f57964f2ae776b371b1d7115c901136edb38ca/src/AaveV3Arbitrum.sol"
+
 [compound_v3]
 enabled = true
 from_block = 87000000            # first Arbitrum Comet (USDC.e), May 2023

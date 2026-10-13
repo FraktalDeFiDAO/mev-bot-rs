@@ -3,7 +3,7 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{Context, Result, anyhow};
-use mev_types::Address;
+use mev_types::{Address, B256};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -114,6 +114,26 @@ pub struct AaveConfig {
     /// First block to index Borrow events from (pool deployment).
     pub from_block: u64,
     pub scan_step: u64,
+    /// Pinned deployment (`[aave.manifest]`); checked once at startup (JEV-LIQ-002).
+    pub manifest: Option<AaveManifest>,
+}
+
+/// Pinned Aave v3 deployment: what the chain must look like before the adapter is trusted.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AaveManifest {
+    pub chain_id: u64,
+    pub pool_addresses_provider: Address,
+    pub pool: Address,
+    pub oracle: Address,
+    /// Pool implementation behind the proxy (EIP-1967 slot) at the pinned block.
+    pub pool_implementation: Address,
+    /// keccak256 of `eth_getCode(pool_implementation)`. An Aave upgrade changes it and fails
+    /// the startup check until the manifest is re-pinned.
+    pub pool_implementation_code_hash: B256,
+    /// Block at which the values above were observed (provenance only).
+    pub verified_block: u64,
+    /// aave-address-book file and commit the addresses were taken from.
+    pub source: String,
 }
 
 /// One Compound III (Comet) market.

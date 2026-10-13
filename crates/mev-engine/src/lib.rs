@@ -410,6 +410,7 @@ impl Engine {
             &secrets.sweep_urls,
             &data_dir,
             secrets.executor.unwrap_or_default(),
+            mode,
             &mut meters,
         )
         .await?;
@@ -3057,6 +3058,7 @@ async fn build_liquidation(
     sweep_urls: &[String],
     data_dir: &std::path::Path,
     executor: Address,
+    mode: Mode,
     meters: &mut Vec<(&'static str, Arc<RpcMeter>)>,
 ) -> Result<Option<(Runner, Vec<Address>)>> {
     let Some(lcfg) = cfg.liquidation.clone().filter(|l| l.enabled) else {
@@ -3079,6 +3081,16 @@ async fn build_liquidation(
     };
     let mut adapters: Vec<Box<dyn LiquidationAdapter>> = Vec::new();
     if let Some(a) = cfg.aave.clone().filter(|a| a.enabled) {
+        // Startup check only: live fails closed, shadow logs (JEV-LIQ-002).
+        match mev_lending_aave_v3::deployment::verify_deployment(&arpc.fast, &a).await {
+            Ok(o) => info!(
+                block = o.block,
+                impl_code_hash = %o.pool_implementation_code_hash,
+                "Aave deployment matches the pinned manifest"
+            ),
+            Err(e) if mode == Mode::Live => bail!("Aave deployment check failed: {e}"),
+            Err(e) => warn!(error = %e, "Aave deployment check failed (shadow: continuing)"),
+        }
         let cache = data_dir.join("aave_v3_borrowers.json");
         adapters.push(Box::new(
             mev_lending_aave_v3::AaveV3Adapter::new(a, arpc.clone(), cache).await?,

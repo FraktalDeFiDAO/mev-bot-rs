@@ -225,3 +225,23 @@ async fn every_price_dependency_of_every_reserve_is_watched() {
         "reserve prices depend on unwatched feeds: {missing:?}"
     );
 }
+
+/// JEV-LIQ-002: the pinned manifest matches Arbitrum One (chain id, provider-resolved Pool and
+/// Oracle, Pool implementation code hash). Fails when Aave upgrades the Pool: re-pin then.
+#[tokio::test]
+#[ignore = "network"]
+async fn pinned_deployment_matches_chain() {
+    let c = cfg().aave.unwrap();
+    let r = rpc();
+    let o = mev_lending_aave_v3::deployment::verify_deployment(&r.fast, &c)
+        .await
+        .unwrap();
+    println!("observed deployment: {o:#?}");
+    // The same manifest must reject a tampered pin.
+    let mut bad = c.clone();
+    bad.manifest.as_mut().unwrap().pool_implementation_code_hash = alloy::primitives::B256::ZERO;
+    assert!(matches!(
+        mev_lending_aave_v3::deployment::verify_deployment(&r.fast, &bad).await,
+        Err(mev_lending_aave_v3::deployment::DeploymentError::CodeHash { .. })
+    ));
+}
