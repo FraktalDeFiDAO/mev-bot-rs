@@ -47,6 +47,24 @@ pub fn market_id(vault: Address) -> B256 {
     B256::from(b)
 }
 
+/// Fluid DEX pools (`DexT1`): swaps only, recorded; no price model or trading yet.
+pub struct FluidDex;
+
+impl Protocol for FluidDex {
+    fn id(&self) -> &'static str {
+        "fluid_dex"
+    }
+
+    fn events(&self) -> Vec<EventKind> {
+        vec![EventKind::new(
+            Dex::Swap::SIGNATURE_HASH,
+            "swap_fluid_dex",
+            Class::Swap,
+            self.id(),
+        )]
+    }
+}
+
 pub struct Fluid;
 
 impl Protocol for Fluid {
@@ -69,7 +87,6 @@ impl Protocol for Fluid {
                 Class::Liquidation,
                 p,
             ),
-            EventKind::new(Dex::Swap::SIGNATURE_HASH, "swap_fluid_dex", Class::Swap, p),
         ]
     }
 
@@ -156,18 +173,10 @@ mod tests {
         let topic = |n: &str| format!("{:x}", ev.iter().find(|k| k.name == n).unwrap().topic0);
         assert!(topic("liquidation_fluid").starts_with("80fd9cc6b1"));
         assert!(topic("absorb_fluid").starts_with("115609402b"));
-        assert!(
-            ev.iter()
-                .filter(|k| k.name != "swap_fluid_dex")
-                .all(|k| k.class == Class::Liquidation)
-        );
-        assert_eq!(
-            ev.iter()
-                .find(|k| k.name == "swap_fluid_dex")
-                .unwrap()
-                .class,
-            Class::Swap
-        );
+        assert!(ev.iter().all(|k| k.class == Class::Liquidation));
+        let dex = FluidDex.events();
+        assert_eq!(dex.len(), 1);
+        assert_eq!(dex[0].class, Class::Swap);
     }
 
     #[test]
