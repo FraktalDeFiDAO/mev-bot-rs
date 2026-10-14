@@ -507,7 +507,7 @@ impl Runner {
     /// Run until the event receiver is dropped.
     pub async fn run(
         mut self,
-        mut feed: Option<mpsc::UnboundedReceiver<SequencedTx>>,
+        mut feed: Option<mpsc::Receiver<SequencedTx>>,
         tx: mpsc::UnboundedSender<RunnerEvent>,
     ) {
         if self.slots.is_empty() {
@@ -568,7 +568,7 @@ impl Runner {
                         if !self.poll(i, None, &tx).await { return; }
                     }
                 }
-                Some(st) = recv_opt(&mut feed) => self.on_feed_tx(&st, &tx),
+                Some(st) = recv_feed(&mut feed) => self.on_feed_tx(&st, &tx),
                 Some(h) = recv_opt(&mut hints) => self.on_hint(&h, &tx),
                 _ = burst.tick() => {
                     let now = Instant::now();
@@ -584,6 +584,13 @@ impl Runner {
                 }
             }
         }
+    }
+}
+
+async fn recv_feed(rx: &mut Option<mpsc::Receiver<SequencedTx>>) -> Option<SequencedTx> {
+    match rx {
+        Some(r) => r.recv().await,
+        None => std::future::pending().await,
     }
 }
 

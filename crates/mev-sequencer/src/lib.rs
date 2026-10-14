@@ -269,6 +269,9 @@ pub struct FeedStats {
     /// Messages dropped as already seen.
     pub stale: std::sync::atomic::AtomicU64,
     pub reconnects: std::sync::atomic::AtomicU64,
+    /// Feed transactions a consumer's bounded queue refused because it fell behind (counted once
+    /// per consumer). The consumer keeps running; only the stale backlog is shed.
+    pub dropped: std::sync::atomic::AtomicU64,
 }
 
 impl FeedStats {
@@ -277,12 +280,13 @@ impl FeedStats {
         use std::sync::atomic::Ordering::Relaxed;
         let t = |a: &std::sync::atomic::AtomicU64| a.swap(0, Relaxed);
         format!(
-            "messages={} gaps={} missed={} stale={} reconnects={}",
+            "messages={} gaps={} missed={} stale={} reconnects={} dropped={}",
             t(&self.messages),
             t(&self.gaps),
             t(&self.missed),
             t(&self.stale),
-            t(&self.reconnects)
+            t(&self.reconnects),
+            t(&self.dropped)
         )
     }
 }

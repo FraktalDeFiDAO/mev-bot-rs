@@ -271,6 +271,8 @@ type DestTally = std::collections::HashMap<(alloy::primitives::Address, [u8; 4])
 #[derive(Debug, Default)]
 pub struct PresimStats {
     pub feed: std::sync::atomic::AtomicU64,
+    /// Results dropped because the engine's queue was full (it fell behind).
+    pub out_dropped: std::sync::atomic::AtomicU64,
     pub candidates: std::sync::atomic::AtomicU64,
     /// Contract calls that mention no watched pool or token (not simulated).
     pub unrelated: std::sync::atomic::AtomicU64,
@@ -334,10 +336,11 @@ impl PresimStats {
             t(&self.errors),
         );
         let stale = t(&self.already_included);
+        let out_dropped = t(&self.out_dropped);
         let sims = moved + none;
         let mean = t(&self.sim_ms_total).checked_div(sims).unwrap_or(0);
         format!(
-            "feed={feed} unrelated={unrelated} candidates={cand} skipped_busy={busy} moved_pools={moved} no_pool_effect={none} already_included={stale} timeouts={to} errors={err} mean_sim_ms={mean}"
+            "feed={feed} unrelated={unrelated} candidates={cand} skipped_busy={busy} moved_pools={moved} no_pool_effect={none} already_included={stale} timeouts={to} errors={err} mean_sim_ms={mean} out_dropped={out_dropped}"
         )
     }
 }
@@ -496,11 +499,11 @@ pub struct Presimulated {
 /// Runs until the feed or the receiver closes.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
-    mut feed: tokio::sync::mpsc::UnboundedReceiver<SequencedTx>,
+    mut feed: tokio::sync::mpsc::Receiver<SequencedTx>,
     p: DynProvider,
     max_in_flight: usize,
     timeout: std::time::Duration,
-    out: tokio::sync::mpsc::UnboundedSender<Presimulated>,
+    out: tokio::sync::mpsc::Sender<Presimulated>,
     stats: std::sync::Arc<PresimStats>,
     watch: Watchlist,
     rec: Option<std::sync::Arc<record::TxRecorder>>,
@@ -579,13 +582,18 @@ pub async fn run(
                 stats.no_pool_effect.fetch_add(1, Relaxed);
             } else {
                 stats.moved_pools.fetch_add(1, Relaxed);
-                let _ = out.send(Presimulated {
-                    tx: st.hash,
-                    block: st.block(),
-                    received: st.received,
-                    logs,
-                    call: call_json(&st.tx).unwrap_or_default(),
-                });
+                if out
+                    .try_send(Presimulated {
+                        tx: st.hash,
+                        block: st.block(),
+                        received: st.received,
+                        logs,
+                        call: call_json(&st.tx).unwrap_or_default(),
+                    })
+                    .is_err()
+                {
+                    stats.out_dropped.fetch_add(1, Relaxed);
+                }
             }
         });
     }

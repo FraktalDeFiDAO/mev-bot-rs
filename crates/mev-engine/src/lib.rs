@@ -266,7 +266,7 @@ pub struct Engine {
     decode_stats: std::sync::Mutex<decode_check::DecodeStats>,
     /// Decoded rival swaps from the feed, from arrival until presim or a block log has put them in our state.
     pending: pending::PendingSwaps,
-    dec_rx: Option<mpsc::UnboundedReceiver<pending::DecodedSwap>>,
+    dec_rx: Option<mpsc::Receiver<pending::DecodedSwap>>,
     localsim_stats: Arc<mev_localsim::worker::LocalStats>,
     /// Pools + tokens a feed tx must mention to be pre-simulated (refreshed on resync).
     presim_watch: mev_presim::Watchlist,
@@ -283,7 +283,7 @@ pub struct Engine {
 
 /// Liquidation side of the engine (the runner and its adapters run as their own task).
 /// Pool logs from simulated feed txs (feed-driven arbitrage).
-type PresimRx = mpsc::UnboundedReceiver<mev_presim::Presimulated>;
+type PresimRx = mpsc::Receiver<mev_presim::Presimulated>;
 
 struct LiqCtx {
     via: Vec<Address>,
@@ -641,7 +641,7 @@ impl Engine {
         } else {
             None
         };
-        let (dec_tx, dec_rx) = mpsc::unbounded_channel::<pending::DecodedSwap>();
+        let (dec_tx, dec_rx) = mpsc::channel::<pending::DecodedSwap>(FEED_QUEUE);
         let (liq_feed, presim_feed) = match cfg.sequencer_feed.clone() {
             Some(url) => {
                 let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<mev_sequencer::SequencedTx>();
@@ -656,8 +656,12 @@ impl Engine {
                     );
                 }
                 tokio::spawn(mev_sequencer::run_tracked(url, raw_tx, feed_stats.clone()));
-                let (liq_tx, liq_rx) = mpsc::unbounded_channel();
-                let (pre_tx, pre_rx) = mpsc::unbounded_channel();
+                // Bounded: a consumer that stalls (the engine while it re-reconciles, the runner
+                // inside a long index step) sheds its stale backlog instead of growing without
+                // limit (a 5 h stall reached 7.4 GB and an OOM kill, 2026-10-14).
+                let (liq_tx, liq_rx) = mpsc::channel(FEED_QUEUE);
+                let (pre_tx, pre_rx) = mpsc::channel(FEED_QUEUE);
+                let drops = feed_stats.clone();
                 let dec_tx = dec_tx.clone();
                 let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
                 let log = feed_log.clone();
@@ -701,43 +705,52 @@ impl Engine {
                                     mev_decode::Decoded::Pools(p) => (None, p.pools),
                                     _ => continue,
                                 };
-                                let _ = dec_tx.send(pending::DecodedSwap {
-                                    hash: st.hash,
-                                    intent,
-                                    named_pools,
-                                    scan: None,
-                                    pair_scan: false,
-                                    received: st.received,
-                                });
+                                shed(
+                                    &drops,
+                                    dec_tx.try_send(pending::DecodedSwap {
+                                        hash: st.hash,
+                                        intent,
+                                        named_pools,
+                                        scan: None,
+                                        pair_scan: false,
+                                        received: st.received,
+                                    }),
+                                );
                             }
                             // Aggregators name their route's pools in the calldata, not as one exact swap.
                             if mev_decode::scans_for_pools(to) {
-                                let _ = dec_tx.send(pending::DecodedSwap {
-                                    hash: st.hash,
-                                    intent: None,
-                                    named_pools: Vec::new(),
-                                    scan: Some(st.input.to_vec()),
-                                    pair_scan: false,
-                                    received: st.received,
-                                });
+                                shed(
+                                    &drops,
+                                    dec_tx.try_send(pending::DecodedSwap {
+                                        hash: st.hash,
+                                        intent: None,
+                                        named_pools: Vec::new(),
+                                        scan: Some(st.input.to_vec()),
+                                        pair_scan: false,
+                                        received: st.received,
+                                    }),
+                                );
                             }
                             // A program that lists its tokens and fee tiers but derives its pools.
                             if mev_decode::scans_for_pairs(to) {
-                                let _ = dec_tx.send(pending::DecodedSwap {
-                                    hash: st.hash,
-                                    intent: None,
-                                    named_pools: Vec::new(),
-                                    scan: Some(st.input.to_vec()),
-                                    pair_scan: true,
-                                    received: st.received,
-                                });
+                                shed(
+                                    &drops,
+                                    dec_tx.try_send(pending::DecodedSwap {
+                                        hash: st.hash,
+                                        intent: None,
+                                        named_pools: Vec::new(),
+                                        scan: Some(st.input.to_vec()),
+                                        pair_scan: true,
+                                        received: st.received,
+                                    }),
+                                );
                             }
                         }
                         if want_pre {
-                            let _ = pre_tx.send(st.clone());
+                            shed(&drops, pre_tx.try_send(st.clone()));
                         }
                         if want_liq {
-                            let _ = liq_tx.send(st);
+                            shed(&drops, liq_tx.try_send(st));
                         }
                     }
                 });
@@ -761,11 +774,11 @@ impl Engine {
                     .collect();
                 let p = metered_rotating(presim_urls.clone(), "presim", &mut meters)?;
                 sim_v1 = Some(p.clone());
-                let (tx, rx) = mpsc::unbounded_channel();
+                let (tx, rx) = mpsc::channel(FEED_QUEUE);
                 // Local mode: the worker simulates the feed in-process and passes only candidates
                 // it can't run yet to the RPC pre-simulator.
                 let rpc_feed = if pc.local && !pc.diff_rpc_urls.is_empty() {
-                    let (fb_tx, fb_rx) = mpsc::unbounded_channel();
+                    let (fb_tx, fb_rx) = mpsc::channel(FEED_QUEUE);
                     let endpoints = mev_localsim::worker::Endpoints {
                         diff: metered_rotating(
                             pc.diff_rpc_urls.clone(),
@@ -1181,7 +1194,7 @@ impl Engine {
                             break;
                         }
                     }
-                    Some(d) = recv_opt(&mut dec_rx) => {
+                    Some(d) = recv_bounded(&mut dec_rx) => {
                         let mut pools = d
                             .intent
                             .as_ref()
@@ -1199,7 +1212,7 @@ impl Engine {
                             self.pending.insert(d.hash, pools, d.received);
                         }
                     }
-                    Some(pre) = recv_opt(&mut presim_rx) => {
+                    Some(pre) = recv_bounded(&mut presim_rx) => {
                         // Presim applies this transaction's effect below: it is no longer missing from our state.
                         self.pending.settle(&pre.tx, pending::Settled::Presim);
                         if !pre.call.is_null() {
@@ -3362,6 +3375,22 @@ async fn check_allowlist(rpc: &Rpc, exec: Address, targets: &[(&'static str, Add
 }
 
 /// `recv` on an optional channel; pends forever when there is none (so select! ignores it).
+async fn recv_bounded<T>(rx: &mut Option<mpsc::Receiver<T>>) -> Option<T> {
+    match rx {
+        Some(r) => r.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Count a send a full bounded feed queue refused (a closed queue is a stopped consumer, not a drop).
+fn shed<T>(stats: &mev_sequencer::FeedStats, r: Result<(), mpsc::error::TrySendError<T>>) {
+    if let Err(mpsc::error::TrySendError::Full(_)) = r {
+        stats
+            .dropped
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 async fn recv_opt<T>(rx: &mut Option<mpsc::UnboundedReceiver<T>>) -> Option<T> {
     match rx {
         Some(r) => r.recv().await,
@@ -3437,6 +3466,9 @@ impl RecentHashes {
 
 /// Recent tx hashes remembered for de-duplicating the two feeds (~a minute of Arbitrum traffic).
 const FEED_DEDUP: usize = 20_000;
+/// Capacity of each bounded feed queue (decoded swaps, presim, liquidation runner): a few
+/// seconds of feed at peak. Older entries are worthless for MEV once a consumer is this far behind.
+const FEED_QUEUE: usize = 8192;
 
 /// Run the Fast Feed client and forward its txs as `SequencedTx` (block-derived `seq`).
 fn spawn_fast_feed(
@@ -3482,6 +3514,37 @@ mod feed_dedup_tests {
         assert!(r.insert(a) && !r.insert(a));
         assert!(r.insert(b) && r.insert(c));
         assert!(r.insert(a), "evicted after capacity, so new again");
+    }
+
+    /// A stalled consumer's feed queue holds at most its capacity; every refused send is counted,
+    /// and a closed queue (stopped consumer) is not a drop.
+    #[tokio::test]
+    async fn a_stalled_consumer_queue_stays_bounded_and_counts_drops() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let stats = mev_sequencer::FeedStats::default();
+        let (tx, mut rx) = mpsc::channel::<u64>(4);
+        for i in 0..10_000u64 {
+            shed(&stats, tx.try_send(i));
+        }
+        assert_eq!(rx.len(), 4, "the backlog is the capacity, not the 10k sent");
+        assert_eq!(stats.dropped.load(Relaxed), 10_000 - 4);
+        assert_eq!(
+            rx.recv().await,
+            Some(0),
+            "the oldest queued entries are kept"
+        );
+        drop(rx);
+        shed(&stats, tx.try_send(1));
+        assert_eq!(
+            stats.dropped.load(Relaxed),
+            10_000 - 4,
+            "closed is not counted"
+        );
+        assert!(
+            stats
+                .take_summary()
+                .ends_with(&format!("dropped={}", 10_000 - 4))
+        );
     }
 }
 

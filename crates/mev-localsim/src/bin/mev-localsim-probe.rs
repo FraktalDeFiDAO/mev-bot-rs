@@ -89,13 +89,20 @@ async fn main() -> anyhow::Result<()> {
         mev_rpc::RpcMeter::new(),
     )?;
 
-    let (feed_tx, feed_rx) = mpsc::unbounded_channel::<SequencedTx>();
+    let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<SequencedTx>();
     tokio::spawn(mev_sequencer::run(
         "wss://arb1.arbitrum.io/feed".into(),
-        feed_tx,
+        raw_tx,
     ));
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<mev_presim::Presimulated>();
-    let (fb_tx, mut fb_rx) = mpsc::unbounded_channel::<SequencedTx>();
+    // The worker takes a bounded feed, as in the engine; a full queue sheds the stale tx.
+    let (feed_tx, feed_rx) = mpsc::channel::<SequencedTx>(8192);
+    tokio::spawn(async move {
+        while let Some(st) = raw_rx.recv().await {
+            let _ = feed_tx.try_send(st);
+        }
+    });
+    let (out_tx, mut out_rx) = mpsc::channel::<mev_presim::Presimulated>(8192);
+    let (fb_tx, mut fb_rx) = mpsc::channel::<SequencedTx>(8192);
     let wstats = Arc::new(worker::LocalStats::default());
     // Empty watchlist: every contract call counts as a candidate (the engine narrows this).
     tokio::spawn(worker::run(
