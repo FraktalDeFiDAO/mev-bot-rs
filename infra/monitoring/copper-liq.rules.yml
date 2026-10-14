@@ -1,0 +1,179 @@
+# Prometheus alert rules for the Copper liquidation scheduler and the Jev advisor (JEV-LIQ-013).
+#
+# Two classes, split by the `page` label so routing can never page on an advisory outage:
+#   page="true"   severity=critical  mandatory-path or invariant alerts (execution safety).
+#   page="false"  severity=warning   advisory-only alerts (Jev API, budget, queue). Jev being down must not page
+#                                    an execution incident while the baseline schedule keeps running.
+# Every metric used below is produced by the code (crates/mev-metrics registry or copper-jev-advisor
+# observability); crates/copper-jev-advisor/tests/observability.rs fails if a rule references a series that
+# is not produced. The spec's other critical alerts (stale state data, indexer gap or reorg mismatch,
+# snapshot-DB backlog or lease errors, simulator state mismatch, REVM provider inconsistency) have no producing
+# code yet and are listed in docs/design/jev-liq-013-observability.md; they are deliberately NOT in this file.
+#
+# Scrape config assumed: job "copper-bot" (hot path, MEV_METRICS_ADDR) and job "copper-jev-advisor"
+# (ADVISOR_METRICS_ADDR). Validate with: scripts/promtool.sh check rules infra/monitoring/copper-liq.rules.yml
+groups:
+  - name: copper-liq-critical
+    rules:
+      - alert: CopperLiqMandatoryDeadlineMiss
+        expr: sum(increase(copper_liq_recheck_deadline_miss_total{tier=~"p0|p1"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          page: "true"
+          class: mandatory
+        annotations:
+          summary: "P0/P1 recheck deadline missed in the shadow scheduler"
+          description: "The shadow scheduler saw overdue mandatory (P0/P1) rechecks in the last 5 minutes."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperliqmandatorydeadlinemiss"
+      - alert: CopperLiqCoverageViolation
+        expr: increase(copper_liq_coverage_violation_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          page: "true"
+          class: mandatory
+        annotations:
+          summary: "Mandatory recheck coverage cannot be guaranteed"
+          description: "A shadow pass reported a coverage violation (sweep capacity or overdue mandatory backlog)."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperliqcoverageviolation"
+      - alert: CopperLiqSchedulerPassStale
+        expr: time() - copper_liq_sched_last_pass_timestamp_seconds > 180
+        for: 2m
+        labels:
+          severity: critical
+          page: "true"
+          class: mandatory
+        annotations:
+          summary: "No shadow scheduler pass observed for over 3 minutes"
+          description: "The shadow scheduler stopped producing passes; coverage is no longer being measured."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperliqschedulerpassstale"
+      - alert: CopperLiqAdvisoryChangedMandatory
+        expr: increase(copper_liq_advisory_mandatory_changed_total[15m]) > 0
+        labels:
+          severity: critical
+          page: "true"
+          class: invariant
+        annotations:
+          summary: "Advisory ordering changed P0/P1 output (must be impossible)"
+          description: "An advisory shadow pass reported mandatory_unchanged=false. Treat as an invariant breach."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperliqadvisorychangedmandatory"
+
+  - name: copper-jev-advisory-only
+    rules:
+      - alert: CopperJevHttpErrors
+        expr: sum(increase(copper_jev_requests_total{result=~"rate_limited|overloaded|server_error"}[10m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Jev API returning 429/529/5xx"
+          description: "More than 5 rate-limited, overloaded or 5xx attempts in 10 minutes. The baseline is unaffected."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevhttperrors"
+      - alert: CopperJevCircuitOpen
+        expr: copper_jev_circuit_state == 2
+        for: 5m
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Jev circuit breaker open for 5 minutes"
+          description: "The advisor is not getting rankings; the deterministic baseline is in use."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevcircuitopen"
+      - alert: CopperJevMisconfigured
+        expr: copper_jev_circuit_misconfigured == 1
+        for: 1m
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Jev rejected our credentials (401/403)"
+          description: "The breaker is sticky until the key or endpoint is fixed and the advisor is restarted."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevmisconfigured"
+      - alert: CopperJevBudgetExhausted
+        expr: sum(increase(copper_jev_fallback_total{reason=~"request_budget|token_budget|cost_budget"}[15m])) > 0
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Jev request, token or cost budget exhausted"
+          description: "Calls fell back to the baseline because a configured hourly budget was used up."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevbudgetexhausted"
+      - alert: CopperJevSchemaOrModelMismatch
+        expr: sum(increase(copper_jev_requests_total{result="schema_error"}[15m])) + sum(increase(copper_jev_advisor_events_total{event="dead_invalid_response"}[15m])) > 0
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Jev response failed schema, model or policy validation"
+          description: "Responses were rejected (schema drift, wrong model, policy or feature-schema mismatch)."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevschemaormodelmismatch"
+      - alert: CopperJevDecisionExpiry
+        expr: increase(copper_jev_stale_response_total[30m]) > 50
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Many advisory decisions expired or arrived stale"
+          description: "More than 50 answers were discarded as stale or expired in 30 minutes; the advisor is too slow for the TTL."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevdecisionexpiry"
+      - alert: CopperJevCostSpike
+        expr: increase(copper_jev_estimated_cost_usd_total[1h]) > 2
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Estimated Jev spend above 2 USD in the last hour"
+          description: "Check JEV_BUDGET_USD_MICRO_PER_HOUR and the request rate; tune the threshold to the budget."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevcostspike"
+      - alert: CopperJevAdvisorQueueBacklog
+        expr: copper_jev_advisor_queue_rows{state="pending"} > 800
+        for: 10m
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Advisor outbox backlog above 800 rows"
+          description: "ADVISOR_MAX_PENDING defaults to 1000; rows beyond it are shed by the producer."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevadvisorqueuebacklog"
+      - alert: CopperJevAdvisorLeaseOrDeadRows
+        expr: increase(copper_jev_advisor_events_total{event=~"lease_lost|dead_invalid_features|dead_non_retryable"}[30m]) + increase(copper_jev_advisor_queue_missed_total[30m]) > 10
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Advisor queue lease losses, dead-lettered rows or shed export rows"
+          description: "The advisory DB queue is losing work. Advisory only: the snapshot DB and baseline are separate."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevadvisorleaseordeadrows"
+      - alert: CopperJevAdvisorStatsFailing
+        expr: copper_jev_advisor_queue_stats_ok == 0
+        for: 5m
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Advisor cannot read its own queue statistics"
+          description: "The advisory SQLite file is unreadable or locked."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevadvisorstatsfailing"
+      - alert: CopperJevAdvisorDown
+        expr: up{job="copper-jev-advisor"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          page: "false"
+          class: advisory-only
+        annotations:
+          summary: "Jev advisor exporter not scrapable"
+          description: "The advisor is stopped or its exporter is off. Trading and the baseline schedule are unaffected."
+          runbook: "docs/runbooks/copper-liq-alerts.md#copperjevadvisordown"

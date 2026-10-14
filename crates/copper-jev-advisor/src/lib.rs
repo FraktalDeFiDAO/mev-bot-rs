@@ -8,6 +8,7 @@
 pub mod check;
 pub mod config;
 pub mod features;
+pub mod observability;
 pub mod worker;
 
 pub use check::{CheckError, CheckReport, check};

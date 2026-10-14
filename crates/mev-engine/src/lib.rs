@@ -535,6 +535,11 @@ impl Engine {
         };
         let metrics = Arc::new(Metrics::new(data_dir.clone())?);
         metrics.set_live(mode == Mode::Live);
+        // Optional Prometheus exporter (JEV-LIQ-013): off unless MEV_METRICS_ADDR is set; loopback unless
+        // MEV_METRICS_ALLOW_NON_LOOPBACK=1. Renders from a registry fed by events, never from the hot path.
+        if let Some(addr) = mev_metrics::addr_from_env("MEV_METRICS")? {
+            metrics.serve_prometheus(addr)?;
+        }
         let accounting_dir = if mode == Mode::Shadow {
             data_dir.join("shadow-accounting")
         } else {
