@@ -42,3 +42,8 @@ mev-decode = { workspace = true }
 mev-outcomes = { workspace = true }
 mev-localsim = { workspace = true }
 mev-atlas = { workspace = true }
+mev-liq-state = { workspace = true }
+mev-liq-sched = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
