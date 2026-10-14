@@ -117,12 +117,25 @@ pub struct LiquidationShadowConfig {
     pub enabled: bool,
     /// Snapshot database; `None` = `<data-dir>/liq-state.sqlite`.
     pub snapshot_db: Option<std::path::PathBuf>,
-    /// Maximum snapshot rechecks in flight.
+    /// Recheck batches in flight (each batch is `recheck_batch` accounts at one pinned block).
     pub recheck_concurrency: usize,
-    /// Rechecks started per minute at most (each costs about two RPC calls on the fast endpoint).
+    /// Accounts per batch (read through Multicall3, 50 accounts per request).
+    pub recheck_batch: usize,
+    /// Accounts rechecked per minute at most, spread evenly over the ticks.
     pub recheck_budget_per_minute: u32,
-    /// Hard deadline after which an account's snapshot counts as expired.
+    /// Hard deadline after which a hot account's snapshot counts as expired.
     pub max_account_age_seconds: u64,
+    /// Debt (whole USD, Aave base currency) below which an account is dust ("cold").
+    pub min_debt_usd: u64,
+    /// Expiry of cold (dust) snapshots; events still mark them dirty at once.
+    pub cold_max_age_seconds: u64,
+    /// Never-read borrowers the schedule pass loads at once (the rest are counted as deferred).
+    pub max_unknown_per_pass: usize,
+    /// Borrowers whose dependency set the trigger indexer reconciles per step (borrowers
+    /// without debt are deactivated there).
+    pub reconcile_batch: usize,
+    /// Period of the repository census (`liq_shadow_census`: counts and lowest health factors).
+    pub census_seconds: u64,
     /// Period of the schedule pass and of the refresh task.
     pub tick_ms: u64,
 }
@@ -132,9 +145,15 @@ impl Default for LiquidationShadowConfig {
         Self {
             enabled: false,
             snapshot_db: None,
-            recheck_concurrency: 4,
-            recheck_budget_per_minute: 120,
+            recheck_concurrency: 2,
+            recheck_batch: 200,
+            recheck_budget_per_minute: 20_000,
             max_account_age_seconds: 300,
+            min_debt_usd: 10,
+            cold_max_age_seconds: 3600,
+            max_unknown_per_pass: 2000,
+            reconcile_batch: 500,
+            census_seconds: 60,
             tick_ms: 5000,
         }
     }
@@ -827,17 +846,23 @@ mod tests {
     }
 
     #[test]
-    fn liquidation_shadow_defaults_off_and_arbitrum_keeps_it_off() {
+    fn liquidation_shadow_defaults_off_and_arbitrum_runs_it_bounded() {
         let d = LiquidationShadowConfig::default();
         assert!(!d.enabled && d.snapshot_db.is_none());
         assert_eq!(
             (d.recheck_concurrency, d.max_account_age_seconds, d.tick_ms),
-            (4, 300, 5000)
+            (2, 300, 5000)
         );
         let e: LiquidationShadowConfig = toml::from_str("enabled = true").unwrap();
         assert!(e.enabled && e.max_account_age_seconds == 300);
-        let c = ChainConfig::load(&repo_config()).unwrap();
-        assert!(!c.liquidation_shadow.enabled);
+        // On: every input of a pass is bounded (dust cutoff, unknowns per pass, batched reads).
+        let c = ChainConfig::load(&repo_config())
+            .unwrap()
+            .liquidation_shadow;
+        assert!(c.enabled);
+        assert!(c.min_debt_usd > 0 && c.cold_max_age_seconds >= c.max_account_age_seconds);
+        assert!(c.max_unknown_per_pass > 0 && c.max_unknown_per_pass <= 10_000);
+        assert!(c.recheck_batch > 1 && c.reconcile_batch > 0);
     }
 
     #[test]

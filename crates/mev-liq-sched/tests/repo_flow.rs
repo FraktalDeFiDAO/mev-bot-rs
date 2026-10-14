@@ -27,6 +27,7 @@ fn params() -> ShadowParams {
         scan_name: SCAN.into(),
         policy: PolicyConfig::default(),
         max_records: 100,
+        bounds: None,
     }
 }
 
@@ -209,4 +210,58 @@ fn shadow_pass_reports_counters_and_job_list() {
     assert!(r.needs_alert());
     let v = serde_json::to_value(&r).unwrap();
     assert_eq!(v["jobs"][0]["decision"]["tier"], "P0");
+}
+
+#[test]
+fn bounded_load_keeps_hot_accounts_and_counts_deferred_unknowns() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = SnapshotRepository::open(&d.path().join("liq.sqlite")).unwrap();
+    seed(&repo, 1, 1_500, 5_000, 10); // hot
+    seed(&repo, 2, 3_000, 1, 10); // dust, no dirty mark
+    let never_read: Vec<_> = (100..150).map(|n| key(n).borrower).collect();
+    repo.register_borrowers(42161, pool(), &never_read, None, NOW - 10 * SEC)
+        .unwrap();
+
+    let mut p = params();
+    p.bounds = Some(LoadBounds {
+        min_debt_base: alloy::primitives::U256::from(100u64),
+        max_unknown: 10,
+    });
+    let l = load_inputs_bounded(&repo, 42161, pool(), SCAN, p.bounds.as_ref().unwrap()).unwrap();
+    let loaded: Vec<_> = l.accounts.iter().map(|a| a.key).collect();
+    assert_eq!(loaded.len(), 11, "1 hot + 10 never read");
+    assert!(loaded.contains(&key(1)) && !loaded.contains(&key(2)));
+    assert!(
+        (100..110).all(|n| loaded.contains(&key(n))),
+        "oldest discovery first"
+    );
+    assert_eq!(l.deferred_unknown, 40);
+    assert_eq!(l.dirty.len(), 10, "only the loaded accounts' marks");
+    assert!(l.dirty.iter().all(|e| loaded.contains(&e.key)));
+
+    // 30 accounts per window: the loaded 11 fit, the 51 the pool really has do not.
+    p.policy.concurrency = 1;
+    p.policy.recheck_cost_ns = 3 * SEC;
+    let r = run_shadow_pass(&repo, &p, NOW).unwrap();
+    assert_eq!((r.counters.tracked, r.counters.deferred_unknown), (11, 40));
+    assert_eq!(
+        r.counters.coverage_violations,
+        r.coverage_violations.len() as u64
+    );
+    assert!(r.coverage_violations.iter().any(|v| matches!(
+        v,
+        CoverageViolation::SweepCapacity {
+            tracked_accounts: 51,
+            sweep_capacity_per_window: 30,
+            ..
+        }
+    )));
+
+    // Unbounded, the same pool loads everything.
+    p.bounds = None;
+    let full = run_shadow_pass(&repo, &p, NOW).unwrap();
+    assert_eq!(
+        (full.counters.tracked, full.counters.deferred_unknown),
+        (52, 0)
+    );
 }

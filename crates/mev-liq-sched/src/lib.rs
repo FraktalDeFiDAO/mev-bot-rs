@@ -11,9 +11,10 @@ mod shadow;
 mod types;
 
 pub use advisory::*;
-pub use load::{LoadedInputs, cohort_of, load_inputs};
+pub use load::{LoadBounds, LoadedInputs, cohort_of, load_inputs, load_inputs_bounded};
 pub use policy::{
     BaselinePolicy, BonusFn, MAX_ADVISORY_BONUS, RankingPolicy, schedule, schedule_with_advisory,
+    sweep_capacity,
 };
 pub use shadow::{
     ShadowCounters, ShadowError, ShadowParams, ShadowReport, run_shadow_pass,

@@ -6,8 +6,8 @@ use mev_liq_state::{RepoError, SnapshotRepository};
 use serde::Serialize;
 
 use crate::{
-    load::load_inputs,
-    policy::schedule,
+    load::{LoadBounds, LoadedInputs, load_inputs, load_inputs_bounded},
+    policy::{schedule, sweep_capacity},
     types::{
         CoverageViolation, DeadlineMiss, PolicyConfig, RecheckJob, ScheduleInput, ScheduleOutput,
         TierCounts,
@@ -23,6 +23,9 @@ pub struct ShadowParams {
     pub policy: PolicyConfig,
     /// Jobs and misses embedded in the record (counts are always complete).
     pub max_records: usize,
+    /// `Some`: read through `load_inputs_bounded` (large populations); `None`: every active
+    /// borrower is loaded.
+    pub bounds: Option<LoadBounds>,
 }
 
 #[derive(Debug)]
@@ -62,6 +65,11 @@ pub struct ShadowCounters {
     pub deferred_discretionary: u64,
     pub not_ready: u64,
     pub free_slots: u32,
+    /// Accounts loaded into this pass.
+    pub tracked: u64,
+    /// Never-read borrowers left out of this pass by the load bounds (still counted for the
+    /// sweep-capacity check).
+    pub deferred_unknown: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +111,8 @@ impl ShadowReport {
             deferred_discretionary: out.deferred_discretionary,
             not_ready: out.not_ready,
             free_slots: out.free_slots,
+            tracked: 0,
+            deferred_unknown: 0,
         };
         let truncated = out.jobs.len() > max_records
             || out.backlog.len() > max_records
@@ -130,13 +140,55 @@ impl ShadowReport {
     }
 }
 
+fn load(repo: &SnapshotRepository, p: &ShadowParams) -> Result<LoadedInputs, ShadowError> {
+    match &p.bounds {
+        None => load_inputs(repo, p.chain_id, p.pool, &p.scan_name),
+        Some(b) => load_inputs_bounded(repo, p.chain_id, p.pool, &p.scan_name, b),
+    }
+    .map_err(ShadowError::Repo)
+}
+
+/// Record the pass size, and keep the sweep-capacity claim honest about the accounts the load
+/// bounds deferred: they still need a sweep, so they count toward `tracked_accounts`.
+fn account_for_load(report: &mut ShadowReport, loaded: &LoadedInputs, cfg: &PolicyConfig) {
+    let tracked = loaded.accounts.len() as u64;
+    report.counters.tracked = tracked;
+    report.counters.deferred_unknown = loaded.deferred_unknown;
+    if loaded.deferred_unknown == 0 {
+        return;
+    }
+    let total = tracked.saturating_add(loaded.deferred_unknown);
+    let existing = report.coverage_violations.iter_mut().find_map(|v| match v {
+        CoverageViolation::SweepCapacity {
+            tracked_accounts, ..
+        } => Some(tracked_accounts),
+        _ => None,
+    });
+    match existing {
+        Some(t) => *t = (*t).max(total),
+        None => {
+            let (window_capacity, sweep_capacity_per_window) = sweep_capacity(cfg);
+            if total > sweep_capacity_per_window {
+                report
+                    .coverage_violations
+                    .push(CoverageViolation::SweepCapacity {
+                        tracked_accounts: total,
+                        sweep_capacity_per_window,
+                        window_capacity,
+                    });
+            }
+        }
+    }
+    report.counters.coverage_violations = report.coverage_violations.len() as u64;
+}
+
 /// One shadow pass at wall-clock `now_ns` (supplied by the caller; this crate never reads time).
 pub fn run_shadow_pass(
     repo: &SnapshotRepository,
     p: &ShadowParams,
     now_ns: u64,
 ) -> Result<ShadowReport, ShadowError> {
-    let loaded = load_inputs(repo, p.chain_id, p.pool, &p.scan_name).map_err(ShadowError::Repo)?;
+    let loaded = load(repo, p)?;
     let input = ScheduleInput {
         now_ns,
         accounts: &loaded.accounts,
@@ -147,7 +199,9 @@ pub fn run_shadow_pass(
         optional_decisions: &[],
     };
     let out = schedule(&input, &p.policy).map_err(ShadowError::Policy)?;
-    Ok(ShadowReport::from_output(&out, p.max_records))
+    let mut report = ShadowReport::from_output(&out, p.max_records);
+    account_for_load(&mut report, &loaded, &p.policy);
+    Ok(report)
 }
 
 /// One shadow pass with the advisory policy. The returned `ShadowReport` is the dispatched
@@ -162,7 +216,7 @@ pub fn run_shadow_pass_advisory(
     policy: &crate::advisory::AdvisoryPolicy,
     decisions: crate::advisory::DecisionSource<'_>,
 ) -> Result<(ShadowReport, Option<crate::advisory::ShadowAdvisoryReport>), ShadowError> {
-    let loaded = load_inputs(repo, p.chain_id, p.pool, &p.scan_name).map_err(ShadowError::Repo)?;
+    let loaded = load(repo, p)?;
     let crate::advisory::AdvisoryInputs {
         decisions: dec,
         exports,
@@ -180,8 +234,7 @@ pub fn run_shadow_pass_advisory(
     let mut policy = policy.clone();
     policy.sched = p.policy.clone();
     let run = policy.run(&input, &exports).map_err(ShadowError::Policy)?;
-    Ok((
-        ShadowReport::from_output(&run.dispatch, p.max_records),
-        run.report,
-    ))
+    let mut report = ShadowReport::from_output(&run.dispatch, p.max_records);
+    account_for_load(&mut report, &loaded, &p.policy);
+    Ok((report, run.report))
 }

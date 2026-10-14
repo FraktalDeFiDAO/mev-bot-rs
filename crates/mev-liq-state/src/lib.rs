@@ -13,6 +13,7 @@ mod domain;
 mod history;
 mod index;
 mod repo;
+mod tiering;
 
 pub use advisor::{
     ADVISOR_SCHEMA_VERSION, AdvisorError, AdvisorStore, AdvisoryDecision,
@@ -33,3 +34,4 @@ pub use index::{
     RewindOutcome, ScanBatch, ScanCursor, ScanDir,
 };
 pub use repo::{DirtyTarget, RepoError, SCHEMA_VERSION, SnapshotRepository};
+pub use tiering::{DebtTiers, LowHealth, PoolCensus, StoreOutcome};

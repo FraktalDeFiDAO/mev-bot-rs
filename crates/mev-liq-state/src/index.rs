@@ -1122,6 +1122,13 @@ impl SnapshotRepository {
                 )?;
             }
         }
+        if !has_debt {
+            // Nothing left to recheck: a later `Borrow` re-registers and re-marks the account.
+            tx.execute(
+                "DELETE FROM dirty WHERE chain_id=?1 AND pool=?2 AND borrower=?3",
+                params![cid, pool.as_slice(), borrower.as_slice()],
+            )?;
+        }
         tx.execute(
             "UPDATE borrowers SET active=?4, deps_reconciled=1, deps_stale=0
              WHERE chain_id=?1 AND pool=?2 AND borrower=?3",
@@ -1320,12 +1327,27 @@ impl SnapshotRepository {
     /// Dirty accounts with their most urgent reason and latest chain position, most urgent first
     /// (then oldest mark first). What the scheduler (task 005) consumes.
     pub fn dirty_entries(&self) -> Result<Vec<DirtyEntry>, RepoError> {
+        self.dirty_entries_where(None, &|_| true)
+    }
+
+    /// `dirty_entries` restricted to one `(chain_id, pool)` (when given) and to the accounts
+    /// `keep` accepts. Rows are streamed, so only the kept entries are held in memory.
+    pub fn dirty_entries_where(
+        &self,
+        pool: Option<(u64, Address)>,
+        keep: &dyn Fn(&AccountKey) -> bool,
+    ) -> Result<Vec<DirtyEntry>, RepoError> {
         let c = self.conn();
+        let (cid, pool_bytes) = match pool {
+            Some((cid, p)) => (Some(i64_of(cid, "chain_id")?), Some(p.as_slice().to_vec())),
+            None => (None, None),
+        };
         let mut st = c.prepare(
             "SELECT chain_id,pool,borrower,reason,marked_at_ns,block_number,block_hash FROM dirty
+             WHERE (?1 IS NULL OR (chain_id=?1 AND pool=?2))
              ORDER BY chain_id,pool,borrower",
         )?;
-        let rows = st.query_map([], |r| {
+        let rows = st.query_map(params![cid, pool_bytes], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, Vec<u8>>(1)?,
@@ -1344,6 +1366,9 @@ impl SnapshotRepository {
                 pool: addr_of(&p)?,
                 borrower: addr_of(&b)?,
             };
+            if !keep(&k) {
+                continue;
+            }
             let reason = DirtyReason::from_code(reason)
                 .ok_or_else(|| RepoError::Corrupt("dirty reason".into()))?;
             let ns = u64_of(ns, "marked_at_ns")?;
