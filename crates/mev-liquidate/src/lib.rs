@@ -1025,6 +1025,7 @@ mod tests {
             scan_name: "live".into(),
             policy: mev_liq_sched::PolicyConfig::default(),
             max_records: 50,
+            bounds: None,
         };
         let sink: ShadowSink =
             Arc::new(move |k, d| events.lock().unwrap().push((k.to_string(), d)));

@@ -343,11 +343,7 @@ fn schedule_inner(
     // Coverage feasibility: every tracked account needs one successful recheck per max-age
     // window; the reserved P1 share must be able to carry that.
     let mut violations = Vec::new();
-    let window_capacity = (u128::from(cfg.concurrency) * u128::from(cfg.max_account_age_ns)
-        / u128::from(cfg.recheck_cost_ns))
-    .min(u128::from(u64::MAX)) as u64;
-    let sweep_capacity = (u128::from(window_capacity) * u128::from(cfg.p1_share_permille) / 1000)
-        .min(u128::from(u64::MAX)) as u64;
+    let (window_capacity, sweep_capacity) = sweep_capacity(cfg);
     let tracked = accs.len() as u64;
     if tracked > sweep_capacity {
         violations.push(CoverageViolation::SweepCapacity {
@@ -381,6 +377,17 @@ fn schedule_inner(
         running: running_jobs,
         free_slots: free,
     })
+}
+
+/// Rechecks one max-age window can hold on every slot, and the P1 share of it (the most accounts
+/// a full sweep can cover once per window). Behind `CoverageViolation::SweepCapacity`.
+pub fn sweep_capacity(cfg: &PolicyConfig) -> (u64, u64) {
+    let window = (u128::from(cfg.concurrency) * u128::from(cfg.max_account_age_ns)
+        / u128::from(cfg.recheck_cost_ns.max(1)))
+    .min(u128::from(u64::MAX)) as u64;
+    let sweep = (u128::from(window) * u128::from(cfg.p1_share_permille) / 1000)
+        .min(u128::from(u64::MAX)) as u64;
+    (window, sweep)
 }
 
 fn share_ceil(c: u32, permille: u32) -> u32 {

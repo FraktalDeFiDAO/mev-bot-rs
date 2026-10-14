@@ -54,14 +54,22 @@ route_via = ["WETH", "USDC", "USDT"]
 
 # Shadow-only liquidation pipeline (trigger indexer + snapshot refresh + mandatory-schedule record). Never plans or sends.
 [liquidation_shadow]
-# Off: with ~188k indexed Aave borrowers the shadow scheduler loads every borrower each tick and
-# drove the bot past 1.6 GB RSS on the 2 GB host (15 OOM restarts after deploy-20261014-030250).
-# Re-enable only after the input is bounded (minimum-debt cutoff, incremental scheduling).
-enabled = false
+# Shadow-only snapshot pipeline (records; never plans or sends). Bounded for the ~188k indexed
+# Aave borrowers: zero-debt borrowers are deactivated by reconciliation, dust (< min_debt_usd)
+# is refreshed hourly or on events, hot accounts every max_account_age_seconds, all through
+# batched Multicall3 reads pinned at one block. (deploy-20261014-030250 ran the unbounded version
+# out of memory on the 2 GB host.)
+enabled = true
 # snapshot_db = "<data-dir>/liq-state.sqlite"   # default
-recheck_concurrency = 4
-recheck_budget_per_minute = 30   # ~2 RPC calls each on the fast RPC; raise only after measuring quota use
+recheck_concurrency = 2          # batches in flight
+recheck_batch = 200              # accounts per batch = 4 aggregate3 requests
+recheck_budget_per_minute = 20000  # accounts; ceiling, steady state needs ~5k (hot/5min + cold/hour)
 max_account_age_seconds = 300
+min_debt_usd = 10
+cold_max_age_seconds = 3600
+max_unknown_per_pass = 2000
+reconcile_batch = 500
+census_seconds = 60
 tick_ms = 5000
 
 [aave]

@@ -6,6 +6,7 @@
 #   scripts/run.sh status           container state, health, last summary line
 #   scripts/run.sh logs             follow logs
 #   scripts/run.sh resources [N]    last N RAM/CPU samples (host + containers) from scripts/resources.sh
+#   scripts/run.sh liq [WINDOW]     liquidation pipeline view: tiers, freshness, rechecks, lowest HFs
 #   scripts/run.sh halt             kill switch: stop sending new trades (process keeps running)
 #   scripts/run.sh resume           remove the kill switch
 #   scripts/run.sh stop             stop and remove the container
@@ -116,6 +117,7 @@ case "${1:-}" in
     [[ -f $STOP_FILE ]] && echo "KILL SWITCH ACTIVE ($STOP_FILE)" || true ;;
   logs)   podman logs -f mev-bot-arbitrum ;;
   resources) scripts/resources.sh show "${2:-20}" ;;
+  liq)    scripts/liq-view.sh "${2:-15m}" ;;
   halt)   mkdir -p "data/$CHAIN" && touch "$STOP_FILE" && echo "kill switch on — no new trades will be sent" ;;
   resume)
     if [[ -f $STOP_FILE ]]; then
@@ -125,5 +127,5 @@ case "${1:-}" in
     fi
     rm -f "$STOP_FILE" && echo "kill switch off" ;;
   stop)   compose down ;;
-  *) sed -n '2,12p' "$0"; exit 2 ;;
+  *) sed -n '2,14p' "$0"; exit 2 ;;
 esac

@@ -67,6 +67,7 @@ fn pass_span_carries_chain_pass_block_and_revision_and_no_address() {
         scan_name: "live".into(),
         policy: PolicyConfig::default(),
         max_records: 50,
+        bounds: None,
     };
     let report = run_shadow_pass(&repo, &params, 1_000_000_000).unwrap();
     assert!(!report.jobs.is_empty(), "the fixture must schedule a job");

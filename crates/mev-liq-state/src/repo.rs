@@ -20,7 +20,7 @@ use crate::domain::{
     SnapshotStatus,
 };
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 struct Migration {
     version: i64,
@@ -73,6 +73,12 @@ CREATE TABLE checkpoints(block_hash BLOB PRIMARY KEY, block_number INTEGER NOT N
         name: "advisor_export_log",
         up: crate::advisor::MIGRATION_4_UP,
         down: crate::advisor::MIGRATION_4_DOWN,
+    },
+    Migration {
+        version: 5,
+        name: "snapshots_by_check",
+        up: crate::tiering::MIGRATION_5_UP,
+        down: crate::tiering::MIGRATION_5_DOWN,
     },
 ];
 
@@ -163,10 +169,13 @@ fn decode_reserves(b: &[u8]) -> Result<Vec<ReserveBalance>, RepoError> {
         .collect()
 }
 
-const COLS: &str = "revision, block_number, block_hash, source, observed_at_ns, hf, debt, coll, \
+pub(crate) const COLS: &str = "revision, block_number, block_hash, source, observed_at_ns, hf, debt, coll, \
     avail, liq_threshold, ltv, reserves, risk_version, last_check_ns, status, provenance, digest";
 
-fn row_snapshot(key: AccountKey, r: &rusqlite::Row<'_>) -> Result<BorrowerSnapshot, RepoError> {
+pub(crate) fn row_snapshot(
+    key: AccountKey,
+    r: &rusqlite::Row<'_>,
+) -> Result<BorrowerSnapshot, RepoError> {
     let blob = |i: usize| r.get::<_, Vec<u8>>(i);
     let source = ChainSource::from_code(r.get(3)?)
         .ok_or_else(|| RepoError::Corrupt("source code".into()))?;

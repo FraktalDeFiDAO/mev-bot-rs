@@ -3234,8 +3234,9 @@ async fn build_liquidation(
             if cfg.liquidation_shadow.enabled {
                 let wired = async {
                     let repo = liq_shadow::open_repo(&cfg.liquidation_shadow, data_dir)?;
-                    let tcfg =
+                    let mut tcfg =
                         mev_lending_aave_v3::triggers::TriggerConfig::for_pool(&acfg, cfg.chain_id);
+                    tcfg.reconcile_batch = cfg.liquidation_shadow.reconcile_batch.max(1);
                     let scan_name = tcfg.name.clone();
                     adapter.attach_triggers(repo.clone(), tcfg).await?;
                     anyhow::Ok((repo, scan_name))
@@ -3255,10 +3256,12 @@ async fn build_liquidation(
                                 scan_name,
                                 cfg: cfg.liquidation_shadow.clone(),
                             },
+                            // Bulk reads go to the sweep endpoints (keyed + public, rotating),
+                            // not the fast endpoint the live path depends on.
                             mev_lending_aave_v3::recheck::AaveAccountRechecker {
                                 chain_id: cfg.chain_id,
                                 pool,
-                                provider: arpc.fast.clone(),
+                                provider: arpc.sweep.clone(),
                                 risk_metadata_version: 0,
                             },
                         ));

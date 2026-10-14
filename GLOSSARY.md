@@ -28,6 +28,18 @@ _Avoid_: Priority, watch tier
 The longest a tracked borrower may go without a fresh exact read before it becomes mandatory work.
 _Avoid_: Sweep interval
 
+**Hot borrower**:
+A borrower whose last exact read shows debt at or above the dust cutoff; the maximum recheck age is guaranteed for it.
+_Avoid_: Active borrower, big account
+
+**Dust borrower**:
+A borrower whose last exact read shows debt below the dust cutoff, too small to liquidate at a profit; it is re-read on a longer age and whenever an event touches it.
+_Avoid_: Small account (code and config call this tier "cold")
+
+**Never-read borrower**:
+An indexed borrower with no exact read yet, so neither hot nor dust.
+_Avoid_: Unknown account, new borrower
+
 ## State
 
 **Block pin**:

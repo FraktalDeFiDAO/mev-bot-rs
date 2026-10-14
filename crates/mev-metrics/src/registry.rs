@@ -32,6 +32,30 @@ pub const SCHED_FAMILIES: &[&str] = &[
 
 pub const EVENT_SCHEDULE_COUNTERS: &str = "liq_sched_counters";
 pub const EVENT_ADVISORY: &str = "liq_advisory_shadow";
+/// Periodic census of the snapshot repository (engine `liq_shadow`).
+pub const EVENT_CENSUS: &str = "liq_shadow_census";
+/// One refresh round of the snapshot repository (engine `liq_shadow`).
+pub const EVENT_REFRESH: &str = "liq_shadow_refresh";
+
+/// Families the liquidation pipeline events produce (census + refresh).
+pub const PIPELINE_FAMILIES: &[&str] = &[
+    "copper_liq_accounts",
+    "copper_liq_census_timestamp_seconds",
+    "copper_liq_rechecks_total",
+];
+/// `state` label values of `copper_liq_accounts`, in census field order.
+pub const CENSUS_STATES: [&str; 9] = [
+    "active",
+    "inactive",
+    "unknown",
+    "hot",
+    "hot_fresh",
+    "cold",
+    "cold_fresh",
+    "dirty",
+    "eligible",
+];
+const RECHECK_RESULTS: [&str; 3] = ["stored", "superseded", "rpc_error"];
 
 const TIERS: [&str; 4] = ["p0", "p1", "p2", "p3"];
 /// `tier` label of the deadline-miss counter: the shadow counters aggregate P2 and P3.
@@ -65,9 +89,20 @@ struct AdvisoryState {
 }
 
 #[derive(Default)]
+struct PipelineState {
+    census_seen: bool,
+    census: [u64; 9],
+    census_ts: u64,
+    refresh_seen: bool,
+    /// Indexed like `RECHECK_RESULTS`.
+    rechecks: [u64; 3],
+}
+
+#[derive(Default)]
 struct State {
     sched: SchedState,
     advisory: AdvisoryState,
+    pipeline: PipelineState,
 }
 
 #[derive(Default)]
@@ -119,6 +154,8 @@ impl Registry {
         match kind {
             EVENT_SCHEDULE_COUNTERS => self.observe_sched(data),
             EVENT_ADVISORY => self.observe_advisory(data),
+            EVENT_CENSUS => self.observe_census(data),
+            EVENT_REFRESH => self.observe_refresh(data),
             _ => {}
         }
     }
@@ -159,6 +196,39 @@ impl Registry {
             .saturating_add(g("coverage_violations"));
         s.passes = s.passes.saturating_add(1);
         s.last_pass_ts = now_secs();
+    }
+
+    fn observe_census(&self, d: &Value) {
+        let Some(vals) = CENSUS_STATES
+            .iter()
+            .map(|k| u(d, k))
+            .collect::<Option<Vec<u64>>>()
+        else {
+            return;
+        };
+        let Ok(mut st) = self.state.lock() else {
+            return;
+        };
+        let p = &mut st.pipeline;
+        p.census_seen = true;
+        p.census.copy_from_slice(&vals);
+        p.census_ts = now_secs();
+    }
+
+    fn observe_refresh(&self, d: &Value) {
+        let (Some(stored), Some(conflicts), Some(rpc)) =
+            (u(d, "stored"), u(d, "conflicts"), u(d, "rpc_errors"))
+        else {
+            return;
+        };
+        let Ok(mut st) = self.state.lock() else {
+            return;
+        };
+        let p = &mut st.pipeline;
+        p.refresh_seen = true;
+        for (i, n) in [stored, conflicts, rpc].into_iter().enumerate() {
+            p.rechecks[i] = p.rechecks[i].saturating_add(n);
+        }
     }
 
     fn observe_advisory(&self, d: &Value) {
@@ -240,6 +310,33 @@ impl Registry {
             );
             ex.sample_u64(&[], s.last_pass_ts);
         }
+        let p = &st.pipeline;
+        if p.census_seen {
+            ex.family(
+                "copper_liq_accounts",
+                "Active borrowers by snapshot state at the last census (hot = debt at or above the cutoff).",
+                Kind::Gauge,
+            );
+            for (i, k) in CENSUS_STATES.iter().enumerate() {
+                ex.sample_u64(&[("state", k)], p.census[i]);
+            }
+            ex.family(
+                "copper_liq_census_timestamp_seconds",
+                "Unix time of the last liquidation snapshot census.",
+                Kind::Gauge,
+            );
+            ex.sample_u64(&[], p.census_ts);
+        }
+        if p.refresh_seen {
+            ex.family(
+                "copper_liq_rechecks_total",
+                "Account rechecks by the snapshot refresh task, by result.",
+                Kind::Counter,
+            );
+            for (i, r) in RECHECK_RESULTS.iter().enumerate() {
+                ex.sample_u64(&[("result", r)], p.rechecks[i]);
+            }
+        }
         let a = &st.advisory;
         if a.seen {
             ex.family(
@@ -295,6 +392,34 @@ mod tests {
             "deadline_misses_backlog_other": 0,
             "coverage_violations": 1
         })
+    }
+
+    #[test]
+    fn census_and_refresh_events_become_gauges_and_counters() {
+        let r = Registry::new();
+        assert!(
+            !r.render().contains("copper_liq_accounts"),
+            "nothing before a census"
+        );
+        r.observe_event(
+            EVENT_CENSUS,
+            &json!({"active": 10, "inactive": 5, "unknown": 1, "hot": 4, "hot_fresh": 3,
+                    "cold": 5, "cold_fresh": 5, "dirty": 2, "eligible": 1}),
+        );
+        r.observe_event(EVENT_CENSUS, &json!({"active": 1})); // malformed: ignored
+        for _ in 0..2 {
+            r.observe_event(
+                EVENT_REFRESH,
+                &json!({"candidates": 9, "attempted": 9, "stored": 7, "conflicts": 1, "rpc_errors": 1}),
+            );
+        }
+        let t = r.render();
+        assert!(t.contains("copper_liq_accounts{state=\"active\"} 10\n"));
+        assert!(t.contains("copper_liq_accounts{state=\"hot_fresh\"} 3\n"));
+        assert!(t.contains("copper_liq_accounts{state=\"eligible\"} 1\n"));
+        assert!(t.contains("copper_liq_rechecks_total{result=\"stored\"} 14\n"));
+        assert!(t.contains("copper_liq_rechecks_total{result=\"rpc_error\"} 2\n"));
+        assert!(t.contains("copper_liq_census_timestamp_seconds "));
     }
 
     #[test]

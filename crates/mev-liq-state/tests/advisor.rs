@@ -845,8 +845,8 @@ fn tables(c: &Connection) -> Vec<String> {
 #[test]
 fn migration_4_up_down_preserves_v1_to_v3_data() {
     let env = Env::new();
-    assert_eq!(env.repo.schema_version().unwrap(), 4);
-    assert_eq!(SCHEMA_VERSION, 4);
+    assert_eq!(env.repo.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(SCHEMA_VERSION, 5);
     env.repo.upsert_cas(&snap(1, 10), 0).unwrap();
     env.repo.rollback_to(3).unwrap();
     assert_eq!(env.repo.schema_version().unwrap(), 3);
@@ -858,11 +858,11 @@ fn migration_4_up_down_preserves_v1_to_v3_data() {
         assert!(t.contains(&kept.to_string()), "{kept} kept");
     }
     assert_eq!(env.repo.fetch_by_key(&key(1)).unwrap().unwrap().revision, 1);
-    // reopening re-applies 4 on top of surviving data
+    // reopening re-applies 4 (and later) on top of surviving data
     let dir = env.dir;
     drop(env.repo);
     let repo = SnapshotRepository::open(&dir.path().join("s.db")).unwrap();
-    assert_eq!(repo.schema_version().unwrap(), 4);
+    assert_eq!(repo.schema_version().unwrap(), SCHEMA_VERSION);
     assert_eq!(repo.fetch_by_key(&key(1)).unwrap().unwrap().revision, 1);
     assert_eq!(repo.export_len().unwrap(), 0);
 }
