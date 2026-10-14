@@ -172,7 +172,7 @@ fn reorg_removes_history_on_the_dropped_fork() {
 fn migration_three_rolls_back_and_reapplies_without_touching_snapshots() {
     let (d, r) = repo();
     canon(&r, 1, 10, 1);
-    assert_eq!(r.schema_version().unwrap(), 3);
+    assert_eq!(r.schema_version().unwrap(), SCHEMA_VERSION);
     r.rollback_to(2).unwrap();
     assert_eq!(r.schema_version().unwrap(), 2);
     assert!(r.previous_canonical(&key(1), 100).is_err(), "table dropped");
@@ -182,6 +182,6 @@ fn migration_three_rolls_back_and_reapplies_without_touching_snapshots() {
     );
     drop(r);
     let r = SnapshotRepository::open(&d.path().join("s.db")).unwrap();
-    assert_eq!(r.schema_version().unwrap(), 3);
+    assert_eq!(r.schema_version().unwrap(), SCHEMA_VERSION);
     assert!(r.previous_canonical(&key(1), 100).unwrap().is_none());
 }

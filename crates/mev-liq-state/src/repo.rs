@@ -20,7 +20,7 @@ use crate::domain::{
     SnapshotStatus,
 };
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 struct Migration {
     version: i64,
@@ -68,6 +68,12 @@ CREATE TABLE checkpoints(block_hash BLOB PRIMARY KEY, block_number INTEGER NOT N
         up: crate::history::MIGRATION_3_UP,
         down: crate::history::MIGRATION_3_DOWN,
     },
+    Migration {
+        version: 4,
+        name: "advisor_export_log",
+        up: crate::advisor::MIGRATION_4_UP,
+        down: crate::advisor::MIGRATION_4_DOWN,
+    },
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -86,6 +92,8 @@ pub enum RepoError {
     Overflow(&'static str),
     #[error("corrupt row: {0}")]
     Corrupt(String),
+    #[error("invalid advisor export: {0}")]
+    BadExport(&'static str),
     #[error("database schema version {found} is newer than this build ({supported})")]
     SchemaTooNew { found: i64, supported: i64 },
 }
@@ -193,7 +201,10 @@ fn row_snapshot(key: AccountKey, r: &rusqlite::Row<'_>) -> Result<BorrowerSnapsh
     })
 }
 
-fn load(tx: &Connection, key: &AccountKey) -> Result<Option<BorrowerSnapshot>, RepoError> {
+pub(crate) fn load(
+    tx: &Connection,
+    key: &AccountKey,
+) -> Result<Option<BorrowerSnapshot>, RepoError> {
     let sql = format!("SELECT {COLS} FROM snapshots WHERE chain_id=?1 AND pool=?2 AND borrower=?3");
     let found = tx
         .query_row(
@@ -297,6 +308,98 @@ pub(crate) fn mark_at(
     Ok(())
 }
 
+/// The CAS write used by `upsert_cas` and by `enqueue_with_snapshot`, run inside the caller's
+/// transaction so account state and advisor export commit or roll back together.
+pub(crate) fn upsert_cas_in(
+    tx: &Transaction<'_>,
+    snapshot: &BorrowerSnapshot,
+    expected_revision: u64,
+) -> Result<BorrowerSnapshot, RepoError> {
+    if !snapshot.digest_matches() {
+        return Err(RepoError::DigestMismatch);
+    }
+    let new_rev = expected_revision
+        .checked_add(1)
+        .filter(|r| i64::try_from(*r).is_ok())
+        .ok_or(RepoError::Overflow("revision"))?;
+    let existing = load(tx, &snapshot.key)?;
+    let actual = existing.as_ref().map_or(0, |e| e.revision);
+    if actual != expected_revision {
+        return Err(RepoError::Stale {
+            expected: expected_revision,
+            actual,
+        });
+    }
+    if let Some(e) = &existing {
+        let older = snapshot.chain.block_number < e.chain.block_number;
+        let downgrade = snapshot.chain.block_number == e.chain.block_number
+            && snapshot.chain.block_hash == e.chain.block_hash
+            && e.chain.source == ChainSource::Canonical
+            && snapshot.chain.source == ChainSource::Provisional;
+        if older || downgrade {
+            return Err(RepoError::OutOfOrder {
+                stored_block: e.chain.block_number,
+                new_block: snapshot.chain.block_number,
+            });
+        }
+    }
+    if snapshot.chain.source == ChainSource::Canonical {
+        let ok: Option<i64> = tx
+            .query_row(
+                "SELECT block_number FROM checkpoints WHERE block_hash=?1",
+                [snapshot.chain.block_hash.as_slice()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if ok != Some(i64_of(snapshot.chain.block_number, "block_number")?) {
+            return Err(RepoError::NotCheckpointed(snapshot.chain.block_hash));
+        }
+    }
+    let k = &snapshot.key;
+    let s = snapshot;
+    tx.execute(
+        &format!(
+            "INSERT OR REPLACE INTO snapshots(chain_id,pool,borrower,{COLS})
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?19)"
+        ),
+        params![
+            i64_of(k.chain_id, "chain_id")?,
+            k.pool.as_slice(),
+            k.borrower.as_slice(),
+            new_rev as i64,
+            i64_of(s.chain.block_number, "block_number")?,
+            s.chain.block_hash.as_slice(),
+            s.chain.source.code(),
+            i64_of(s.chain.observed_at_ns, "observed_at_ns")?,
+            s.health_factor_wad.to_be_bytes::<32>().as_slice(),
+            s.total_debt_base.to_be_bytes::<32>().as_slice(),
+            s.total_collateral_base.to_be_bytes::<32>().as_slice(),
+            s.available_borrows_base.to_be_bytes::<32>().as_slice(),
+            s.liquidation_threshold.to_be_bytes::<32>().as_slice(),
+            s.ltv.to_be_bytes::<32>().as_slice(),
+            encode_reserves(&s.reserves),
+            i64_of(s.risk_metadata_version, "risk_version")?,
+            s.last_successful_check_ns
+                .map(|v| i64_of(v, "last_check_ns"))
+                .transpose()?,
+            s.provenance,
+            s.feature_digest.as_slice(),
+        ],
+    )?;
+    tx.execute(
+        "DELETE FROM dirty WHERE chain_id=?1 AND pool=?2 AND borrower=?3 AND marked_at_ns<=?4",
+        params![
+            i64_of(k.chain_id, "chain_id")?,
+            k.pool.as_slice(),
+            k.borrower.as_slice(),
+            i64_of(s.chain.observed_at_ns, "observed_at_ns")?
+        ],
+    )?;
+    let stored = load(tx, k)?.ok_or_else(|| RepoError::Corrupt("row vanished".into()))?;
+    crate::history::record(tx, &stored)?;
+    Ok(stored)
+}
+
 impl SnapshotRepository {
     /// Open (creating if needed) a durable file database and apply pending migrations.
     pub fn open(path: &Path) -> Result<Self, RepoError> {
@@ -381,90 +484,9 @@ impl SnapshotRepository {
         snapshot: &BorrowerSnapshot,
         expected_revision: u64,
     ) -> Result<BorrowerSnapshot, RepoError> {
-        if !snapshot.digest_matches() {
-            return Err(RepoError::DigestMismatch);
-        }
-        let new_rev = expected_revision
-            .checked_add(1)
-            .filter(|r| i64::try_from(*r).is_ok())
-            .ok_or(RepoError::Overflow("revision"))?;
         let mut c = self.conn();
         let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing = load(&tx, &snapshot.key)?;
-        let actual = existing.as_ref().map_or(0, |e| e.revision);
-        if actual != expected_revision {
-            return Err(RepoError::Stale {
-                expected: expected_revision,
-                actual,
-            });
-        }
-        if let Some(e) = &existing {
-            let older = snapshot.chain.block_number < e.chain.block_number;
-            let downgrade = snapshot.chain.block_number == e.chain.block_number
-                && snapshot.chain.block_hash == e.chain.block_hash
-                && e.chain.source == ChainSource::Canonical
-                && snapshot.chain.source == ChainSource::Provisional;
-            if older || downgrade {
-                return Err(RepoError::OutOfOrder {
-                    stored_block: e.chain.block_number,
-                    new_block: snapshot.chain.block_number,
-                });
-            }
-        }
-        if snapshot.chain.source == ChainSource::Canonical {
-            let ok: Option<i64> = tx
-                .query_row(
-                    "SELECT block_number FROM checkpoints WHERE block_hash=?1",
-                    [snapshot.chain.block_hash.as_slice()],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            if ok != Some(i64_of(snapshot.chain.block_number, "block_number")?) {
-                return Err(RepoError::NotCheckpointed(snapshot.chain.block_hash));
-            }
-        }
-        let k = &snapshot.key;
-        let s = snapshot;
-        tx.execute(
-            &format!(
-                "INSERT OR REPLACE INTO snapshots(chain_id,pool,borrower,{COLS})
-                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,?18,?19)"
-            ),
-            params![
-                i64_of(k.chain_id, "chain_id")?,
-                k.pool.as_slice(),
-                k.borrower.as_slice(),
-                new_rev as i64,
-                i64_of(s.chain.block_number, "block_number")?,
-                s.chain.block_hash.as_slice(),
-                s.chain.source.code(),
-                i64_of(s.chain.observed_at_ns, "observed_at_ns")?,
-                s.health_factor_wad.to_be_bytes::<32>().as_slice(),
-                s.total_debt_base.to_be_bytes::<32>().as_slice(),
-                s.total_collateral_base.to_be_bytes::<32>().as_slice(),
-                s.available_borrows_base.to_be_bytes::<32>().as_slice(),
-                s.liquidation_threshold.to_be_bytes::<32>().as_slice(),
-                s.ltv.to_be_bytes::<32>().as_slice(),
-                encode_reserves(&s.reserves),
-                i64_of(s.risk_metadata_version, "risk_version")?,
-                s.last_successful_check_ns
-                    .map(|v| i64_of(v, "last_check_ns"))
-                    .transpose()?,
-                s.provenance,
-                s.feature_digest.as_slice(),
-            ],
-        )?;
-        tx.execute(
-            "DELETE FROM dirty WHERE chain_id=?1 AND pool=?2 AND borrower=?3 AND marked_at_ns<=?4",
-            params![
-                i64_of(k.chain_id, "chain_id")?,
-                k.pool.as_slice(),
-                k.borrower.as_slice(),
-                i64_of(s.chain.observed_at_ns, "observed_at_ns")?
-            ],
-        )?;
-        let stored = load(&tx, k)?.ok_or_else(|| RepoError::Corrupt("row vanished".into()))?;
-        crate::history::record(&tx, &stored)?;
+        let stored = upsert_cas_in(&tx, snapshot, expected_revision)?;
         tx.commit()?;
         Ok(stored)
     }
