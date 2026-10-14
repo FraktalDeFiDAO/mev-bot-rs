@@ -511,7 +511,19 @@ impl Runner {
         tx: mpsc::UnboundedSender<RunnerEvent>,
     ) {
         if self.slots.is_empty() {
-            return;
+            // No live adapter, but the shadow pass only reads the repository: keep ticking it
+            // until the event receiver is dropped.
+            let Some(s) = self.shadow.clone().filter(|s| s.enabled) else {
+                return;
+            };
+            let mut iv = tokio::time::interval(s.every);
+            iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = iv.tick() => s.spawn_pass(),
+                    () = tx.closed() => return,
+                }
+            }
         }
         let mut hints = self.hints.take();
         let mut shadow_iv = self.shadow.as_ref().filter(|s| s.enabled).map(|s| {

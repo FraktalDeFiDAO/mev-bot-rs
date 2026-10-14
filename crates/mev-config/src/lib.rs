@@ -109,6 +109,37 @@ pub struct LiquidationConfig {
     pub revm_shadow: bool,
 }
 
+/// Shadow-only liquidation pipeline (trigger indexer, snapshot refresh, mandatory-schedule
+/// record). Never plans, simulates or sends. Everything is off unless `enabled`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct LiquidationShadowConfig {
+    pub enabled: bool,
+    /// Snapshot database; `None` = `<data-dir>/liq-state.sqlite`.
+    pub snapshot_db: Option<std::path::PathBuf>,
+    /// Maximum snapshot rechecks in flight.
+    pub recheck_concurrency: usize,
+    /// Rechecks started per minute at most (each costs about two RPC calls on the fast endpoint).
+    pub recheck_budget_per_minute: u32,
+    /// Hard deadline after which an account's snapshot counts as expired.
+    pub max_account_age_seconds: u64,
+    /// Period of the schedule pass and of the refresh task.
+    pub tick_ms: u64,
+}
+
+impl Default for LiquidationShadowConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            snapshot_db: None,
+            recheck_concurrency: 4,
+            recheck_budget_per_minute: 120,
+            max_account_age_seconds: 300,
+            tick_ms: 5000,
+        }
+    }
+}
+
 /// Aave v3 adapter.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AaveConfig {
@@ -572,6 +603,8 @@ pub struct ChainConfig {
     /// Arbitrum sequencer feed (free, unmetered real-time tx stream).
     pub sequencer_feed: Option<String>,
     pub liquidation: Option<LiquidationConfig>,
+    #[serde(default)]
+    pub liquidation_shadow: LiquidationShadowConfig,
     pub aave: Option<AaveConfig>,
     pub compound_v3: Option<CompoundV3Config>,
     pub morpho: Option<MorphoConfig>,
@@ -791,6 +824,20 @@ mod tests {
 
     fn repo_config() -> std::path::PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/arbitrum.toml")
+    }
+
+    #[test]
+    fn liquidation_shadow_defaults_off_and_arbitrum_enables_it() {
+        let d = LiquidationShadowConfig::default();
+        assert!(!d.enabled && d.snapshot_db.is_none());
+        assert_eq!(
+            (d.recheck_concurrency, d.max_account_age_seconds, d.tick_ms),
+            (4, 300, 5000)
+        );
+        let e: LiquidationShadowConfig = toml::from_str("enabled = true").unwrap();
+        assert!(e.enabled && e.max_account_age_seconds == 300);
+        let c = ChainConfig::load(&repo_config()).unwrap();
+        assert!(c.liquidation_shadow.enabled);
     }
 
     #[test]

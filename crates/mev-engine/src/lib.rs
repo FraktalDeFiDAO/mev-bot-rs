@@ -41,6 +41,7 @@ mod accounting;
 mod decode_check;
 mod exact_quote;
 mod journal;
+mod liq_shadow;
 mod pending;
 mod tracked;
 
@@ -412,6 +413,7 @@ impl Engine {
 
         // Liquidation adapters; their assets need swap routes (seized collateral -> debt asset).
         let mut meters = vec![("fast", rpc.meter.clone())];
+        let mut liq_shadow_parts = None;
         let liq_setup = build_liquidation(
             &cfg,
             &rpc,
@@ -420,6 +422,7 @@ impl Engine {
             secrets.executor.unwrap_or_default(),
             mode,
             &mut meters,
+            &mut liq_shadow_parts,
         )
         .await?;
         if let Some((runner, via)) = &liq_setup {
@@ -853,6 +856,16 @@ impl Engine {
                 watched_feeds = runner.watched_feeds();
                 let runner = match hint_rx.take() {
                     Some(rx) => runner.with_hints(rx),
+                    None => runner,
+                };
+                // Shadow-only: the schedule records, the refresh task fills the repository.
+                let runner = match liq_shadow_parts.take() {
+                    Some((parts, rechecker)) => {
+                        let m = metrics.clone();
+                        let sink: mev_liquidate::ShadowSink = Arc::new(move |k, d| m.event(k, d));
+                        liq_shadow::spawn_refresh(parts.clone(), rechecker, sink.clone());
+                        runner.with_shadow_schedule(liq_shadow::schedule(&parts, sink))
+                    }
                     None => runner,
                 };
                 let (tx, rx) = mpsc::unbounded_channel();
@@ -3149,6 +3162,7 @@ fn aave_pin_allows(
 }
 
 /// Build the liquidation runner from config: one adapter per enabled protocol section.
+#[allow(clippy::too_many_arguments)]
 async fn build_liquidation(
     cfg: &ChainConfig,
     rpc: &Rpc,
@@ -3157,6 +3171,10 @@ async fn build_liquidation(
     executor: Address,
     mode: Mode,
     meters: &mut Vec<(&'static str, Arc<RpcMeter>)>,
+    shadow_out: &mut Option<(
+        liq_shadow::ShadowParts,
+        mev_lending_aave_v3::recheck::AaveAccountRechecker,
+    )>,
 ) -> Result<Option<(Runner, Vec<Address>)>> {
     let Some(lcfg) = cfg.liquidation.clone().filter(|l| l.enabled) else {
         return Ok(None);
@@ -3204,9 +3222,46 @@ async fn build_liquidation(
                 warn!(error = %e, "Aave deployment check failed (shadow: continuing)");
             }
             let cache = data_dir.join("aave_v3_borrowers.json");
-            adapters.push(Box::new(
-                mev_lending_aave_v3::AaveV3Adapter::new(a, arpc.clone(), cache).await?,
-            ));
+            let (pool, acfg) = (a.pool, a.clone());
+            let mut adapter =
+                mev_lending_aave_v3::AaveV3Adapter::new(a, arpc.clone(), cache).await?;
+            // Shadow-only pipeline (flag `[liquidation_shadow]`): any failure disables just it.
+            if cfg.liquidation_shadow.enabled {
+                let wired = async {
+                    let repo = liq_shadow::open_repo(&cfg.liquidation_shadow, data_dir)?;
+                    let tcfg =
+                        mev_lending_aave_v3::triggers::TriggerConfig::for_pool(&acfg, cfg.chain_id);
+                    let scan_name = tcfg.name.clone();
+                    adapter.attach_triggers(repo.clone(), tcfg).await?;
+                    anyhow::Ok((repo, scan_name))
+                }
+                .await;
+                match wired {
+                    Ok((repo, scan_name)) => {
+                        info!(
+                            db = ?cfg.liquidation_shadow.snapshot_db,
+                            "liq_shadow_started: trigger indexer attached"
+                        );
+                        *shadow_out = Some((
+                            liq_shadow::ShadowParts {
+                                repo,
+                                chain_id: cfg.chain_id,
+                                pool,
+                                scan_name,
+                                cfg: cfg.liquidation_shadow.clone(),
+                            },
+                            mev_lending_aave_v3::recheck::AaveAccountRechecker {
+                                chain_id: cfg.chain_id,
+                                pool,
+                                provider: arpc.fast.clone(),
+                                risk_metadata_version: 0,
+                            },
+                        ));
+                    }
+                    Err(e) => liq_shadow::alert_disabled("startup", &e),
+                }
+            }
+            adapters.push(Box::new(adapter));
         } else if let Err(e) = &result {
             error!(
                 error = %e,

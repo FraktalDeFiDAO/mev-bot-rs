@@ -3306,6 +3306,8 @@ dependencies = [
  "mev-lending-radiant",
  "mev-lending-silo",
  "mev-lending-spark",
+ "mev-liq-sched",
+ "mev-liq-state",
  "mev-liquidate",
  "mev-localsim",
  "mev-metrics",
@@ -3319,6 +3321,7 @@ dependencies = [
  "mev-state",
  "mev-types",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]
