@@ -57,7 +57,7 @@ route_via = ["WETH", "USDC", "USDT"]
 enabled = true
 # snapshot_db = "<data-dir>/liq-state.sqlite"   # default
 recheck_concurrency = 4
-recheck_budget_per_minute = 120
+recheck_budget_per_minute = 30   # ~2 RPC calls each on the fast RPC; raise only after measuring quota use
 max_account_age_seconds = 300
 tick_ms = 5000
 
