@@ -3490,6 +3490,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mev-liq-replay"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "clap",
+ "mev-liq-sched",
+ "mev-liq-state",
+ "proptest",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "mev-liq-sched"
 version = "0.1.0"
 dependencies = [

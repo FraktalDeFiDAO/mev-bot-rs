@@ -1,0 +1,19 @@
+{
+  "task": "JEV-LIQ-006",
+  "date": "2026-10-13",
+  "source_commit": "4149baf881656812ff58629085455f964cb86154",
+  "environment": "scripts/dev.sh rootless Podman development container",
+  "format": {"command": "cargo fmt --all --check", "exit_code": 0},
+  "clippy": {"command": "cargo clippy -q --workspace --all-targets --locked -- -D warnings", "exit_code": 0},
+  "workspace_tests": {"command": "cargo test -q --workspace --locked", "exit_code": 0, "passed": 707, "failed": 0, "ignored": 28, "test_summaries": 175},
+  "final_replay_tests": {"command": "cargo test -q -p mev-liq-replay --locked", "exit_code": 0, "passed": 16, "failed": 0, "ignored": 0, "permutation_property_cases": 256},
+  "python_tests": {"command": "python3 -m unittest discover -s scripts/tests", "exit_code": 0, "passed": 3},
+  "graph": {"command": "scripts/graph.sh optimize", "exit_code": 0, "generated_files_in_pr": false},
+  "not_run": ["Foundry", "ignored live/fork tests", "browser tests", "historical economic replay", "live Jev"],
+  "github_ci": {
+    "dependency_pr": 126,
+    "status": "blocked before runner startup",
+    "run_url": "https://github.com/FraktalDeFiDAO/mev-bot-rs/actions/runs/38401377439",
+    "annotation": "The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings"
+  }
+}

@@ -3,6 +3,27 @@
 Spec `docs/tasks/sequencer-first-engine.md` · invariants `docs/tasks/sequencer-first-invariants.md` · facts `docs/arbitrum-facts.md`.
 Read this file first in every session. Update at the end of every phase.
 
+## Jev continuation (2026-10-13): JEV-LIQ-006
+
+Baseline replay implemented on `feat/liq-baseline-replay`, stacked on scheduler PR #126.
+Source commit `4149baf`; design and reproduction commands in
+`docs/design/jev-liq-006-baseline-replay.md`, recorded synthetic baseline evidence in
+`docs/audits/evidence/jev-liq-006/`. The same production `BaselinePolicy` handles dispatch;
+the offline runner adds strict event loading, caller-supplied time, in-flight read/reorg
+handling and machine-readable ordering/coverage metrics. No live engine/executor changes.
+
+Verified: format, workspace clippy, 707 workspace Rust tests (0 failed, 28 ignored),
+16 final replay tests including 256 permutation cases, and 3 Python tests. Graph optimized.
+Synthetic shock detected 24/24 eligible labels; modeled p50/p95/p99 20/40/40 ms.
+Overload explicitly reported 50 unique mandatory deadline misses. These are model results,
+not historical economic recall, live latency or profitability claims.
+
+GitHub CI jobs are blocked before startup by account payments/spending limits (PR #126
+annotation); retain a draft and do not merge through red checks. Next independent work:
+complete Claude's existing JEV-LIQ-008 outbox and JEV-LIQ-009 client worktrees, then task 010.
+Task 015/016 still needs historical eligibility/economic labels for comparative evaluation.
+This work does not mark a sequencer-first phase complete or authorize deployment/live Jev.
+
 ## Status
 
 | Phase | State | Evidence |
