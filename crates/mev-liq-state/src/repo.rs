@@ -20,7 +20,7 @@ use crate::domain::{
     SnapshotStatus,
 };
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 struct Migration {
     version: i64,
@@ -61,6 +61,12 @@ CREATE TABLE checkpoints(block_hash BLOB PRIMARY KEY, block_number INTEGER NOT N
         name: "event_index_reverse_deps_gaps",
         up: crate::index::MIGRATION_2_UP,
         down: crate::index::MIGRATION_2_DOWN,
+    },
+    Migration {
+        version: 3,
+        name: "snapshot_history",
+        up: crate::history::MIGRATION_3_UP,
+        down: crate::history::MIGRATION_3_DOWN,
     },
 ];
 
@@ -458,6 +464,7 @@ impl SnapshotRepository {
             ],
         )?;
         let stored = load(&tx, k)?.ok_or_else(|| RepoError::Corrupt("row vanished".into()))?;
+        crate::history::record(&tx, &stored)?;
         tx.commit()?;
         Ok(stored)
     }
@@ -568,6 +575,7 @@ impl SnapshotRepository {
                     s.feature_digest.as_slice()
                 ],
             )?;
+            crate::history::record(&tx, &s)?;
         }
         tx.commit()?;
         Ok(keys.len())
@@ -598,6 +606,7 @@ pub(crate) fn invalidate_in_tx(
 ) -> Result<usize, RepoError> {
     {
         let num = i64_of(ancestor.block_number, "block_number")?;
+        crate::history::prune_reorg(tx, num, ancestor.block_hash.as_slice())?;
         tx.execute("DELETE FROM checkpoints WHERE block_number>?1", [num])?;
         tx.execute(
             "DELETE FROM checkpoints WHERE block_number=?1 AND block_hash<>?2",
