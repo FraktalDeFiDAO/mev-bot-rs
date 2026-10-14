@@ -8,6 +8,8 @@ contracts/broadcast/
 .env
 .env.*
 !.env.example
+# Key files mounted into containers (e.g. secrets/typesafe_api_key, mode 0600)
+secrets/
 
 # Regenerable graph output. Keep the semantic cache: it costs LLM tokens to rebuild.
 graphify-out/*

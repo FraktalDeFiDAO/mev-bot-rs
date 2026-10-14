@@ -145,7 +145,7 @@ log hygiene and root spans), `config.rs` (validation, 0644 key rejected, active 
 * No config reload; `Misconfigured` needs a restart. No Prometheus exporter yet (013). No retention of done/dead rows (008 gap).
 * `alloy` is now pinned lean in four crates; other crates keep the workspace alloy. A new crate that needs signers must not be added
   to this crate's dependency tree (the isolation test will fail).
-* The compose/Containerfile for the advisor is task 014.
+* Container: see `docs/runbooks/jev-advisor.md` (014). Compose runs it as the host uid (keep-id) rather than 65532, so it can write the bot's data dir.
 
 ## What later tasks consume
 
