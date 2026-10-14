@@ -1,0 +1,27 @@
+[package]
+name = "jev-advisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "TypeSafe (Jev) REST transport and strict response validation for the liquidation advisor (JEV-LIQ-009). Advisory only: no retry, breaker or quota here."
+
+[features]
+# Permits `http://` to 127.0.0.1/::1 for local test servers. Never enabled in production builds.
+loopback-http = []
+
+[dependencies]
+alloy = { workspace = true }
+httpdate = { workspace = true }
+mev-liq-features = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+jev-advisor = { path = ".", features = ["loopback-http"] }
+proptest = { workspace = true }
+tempfile = "3"
