@@ -953,6 +953,29 @@ impl AdvisorStore {
         Ok(())
     }
 
+    /// Dead-letter a leased row immediately (the item can never succeed: failed validation,
+    /// non-retryable rejection). Same lease rule as `ack`/`fail`; the attempt count is kept.
+    pub fn dead_letter(
+        &self,
+        owner: &str,
+        id: i64,
+        now_ns: u64,
+        error: &str,
+    ) -> Result<(), AdvisorError> {
+        let now = i64_of(now_ns, "now_ns")?;
+        let err: String = error.chars().take(256).collect();
+        let mut c = self.conn();
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        held_attempts(&tx, owner, id, now)?;
+        tx.execute(
+            "UPDATE advisor_outbox SET state='dead', lease_owner=NULL, lease_until_ns=NULL,
+               last_error=?2 WHERE id=?1",
+            params![id, err],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn stats(&self, now_ns: u64) -> Result<QueueStats, AdvisorError> {
         let now = i64_of(now_ns, "now_ns")?;
         let c = self.conn();
