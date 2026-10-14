@@ -39,6 +39,8 @@ pub struct LocalStats {
     pub local_complete: AtomicU64,
     pub local_moved_pools: AtomicU64,
     pub fallback: AtomicU64,
+    /// Results and fallback txs dropped because the consumer's queue was full (it fell behind).
+    pub dropped: AtomicU64,
     pub blocks_applied: AtomicU64,
     pub fills: AtomicU64,
     pub sim_us_total: AtomicU64,
@@ -89,11 +91,13 @@ impl LocalStats {
         format!(
             "txs={txs} local_complete={complete} local_moved_pools={moved} rpc_fallback={fallback} \
              blocks_applied={blocks} fills={fills} fill_keys={keys_ok}/{keys} fill_dropped={dropped} \
-             mean_sim_us={mean_us} rebuild_ms={rebuild_ms} pending={} refills={} lag_blocks={} resets={}",
+             mean_sim_us={mean_us} rebuild_ms={rebuild_ms} pending={} refills={} lag_blocks={} resets={} \
+             queue_dropped={}",
             self.pending.load(Relaxed),
             t(&self.refills),
             self.lag_blocks.load(Relaxed),
-            self.resets.load(Relaxed)
+            self.resets.load(Relaxed),
+            t(&self.dropped)
         )
     }
 }
@@ -117,11 +121,11 @@ const MAX_FEED_HEAD_LEAD: u64 = 64;
 
 /// Run until the feed closes. `fallback` receives candidate txs that couldn't run locally.
 pub async fn run(
-    mut feed: mpsc::UnboundedReceiver<SequencedTx>,
+    mut feed: mpsc::Receiver<SequencedTx>,
     rpc: Endpoints,
     watch: Watchlist,
-    out: mpsc::UnboundedSender<Presimulated>,
-    fallback: mpsc::UnboundedSender<SequencedTx>,
+    out: mpsc::Sender<Presimulated>,
+    fallback: mpsc::Sender<SequencedTx>,
     stats: Arc<LocalStats>,
 ) {
     let start = loop {
@@ -269,13 +273,15 @@ pub async fn run(
                         .collect();
                     if !logs.is_empty() {
                         stats.local_moved_pools.fetch_add(1, Relaxed);
-                        let _ = out.send(Presimulated {
+                        if out.try_send(Presimulated {
                             tx: st.hash,
                             block: st.block(),
                             received: st.received,
                             logs,
                             call: mev_presim::call_json(&st.tx).unwrap_or_default(),
-                        });
+                        }).is_err() {
+                            stats.dropped.fetch_add(1, Relaxed);
+                        }
                     }
                     continue;
                 }
@@ -284,7 +290,9 @@ pub async fn run(
                 }
                 // Missing state: RPC pre-simulation for this one, fetch its keys for next time.
                 stats.fallback.fetch_add(1, Relaxed);
-                let _ = fallback.send(st);
+                if fallback.try_send(st).is_err() {
+                    stats.dropped.fetch_add(1, Relaxed);
+                }
                 {
                     let mut m = stats.miss_by_addr.lock().unwrap_or_else(|e| e.into_inner());
                     for k in &o.missing {
