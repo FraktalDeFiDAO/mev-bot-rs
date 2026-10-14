@@ -1,0 +1,7 @@
+[Unit]
+Description=mev-bot RAM/CPU sampler (host + containers)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/src/mev-bot
+ExecStart=%h/src/mev-bot/scripts/resources.sh

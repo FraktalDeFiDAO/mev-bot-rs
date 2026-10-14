@@ -5,6 +5,7 @@
 #   scripts/run.sh live             start in live mode (sends trades) — asks for confirmation
 #   scripts/run.sh status           container state, health, last summary line
 #   scripts/run.sh logs             follow logs
+#   scripts/run.sh resources [N]    last N RAM/CPU samples (host + containers) from scripts/resources.sh
 #   scripts/run.sh halt             kill switch: stop sending new trades (process keeps running)
 #   scripts/run.sh resume           remove the kill switch
 #   scripts/run.sh stop             stop and remove the container
@@ -114,6 +115,7 @@ case "${1:-}" in
     podman logs --tail 200 mev-bot-arbitrum 2>&1 | grep -E "summary|landed|sent|ERROR|WARN" | tail -5 || true
     [[ -f $STOP_FILE ]] && echo "KILL SWITCH ACTIVE ($STOP_FILE)" || true ;;
   logs)   podman logs -f mev-bot-arbitrum ;;
+  resources) scripts/resources.sh show "${2:-20}" ;;
   halt)   mkdir -p "data/$CHAIN" && touch "$STOP_FILE" && echo "kill switch on — no new trades will be sent" ;;
   resume)
     if [[ -f $STOP_FILE ]]; then
