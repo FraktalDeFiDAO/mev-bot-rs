@@ -3340,11 +3340,13 @@ dependencies = [
  "mev-lending",
  "mev-lending-index",
  "mev-oracle",
+ "mev-protocol-aave-v3",
  "mev-rpc",
  "proptest",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
  "tokio",
  "tracing",
 ]

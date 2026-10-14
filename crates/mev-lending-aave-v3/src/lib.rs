@@ -6,6 +6,7 @@
 //!   `liquidationCall(collateral, debt, user, type(uint256).max, false)` with an exact approval.
 //! - Price feeds: Aave oracle sources resolved to Chainlink aggregators (sequencer triggers).
 
+pub mod deployment;
 pub mod exact;
 pub mod math;
 

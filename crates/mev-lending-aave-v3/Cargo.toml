@@ -10,6 +10,7 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
+thiserror = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -25,4 +26,5 @@ mev-config = { workspace = true }
 mev-rpc = { workspace = true }
 tokio = { workspace = true }
 proptest = { workspace = true }
+mev-protocol-aave-v3 = { workspace = true }
 tempfile = "3"
