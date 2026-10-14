@@ -6,11 +6,19 @@
 //!
 //! All quantities are exact `U256`; there is no floating point anywhere in this crate.
 
+mod coalesce;
 mod domain;
+mod index;
 mod repo;
 
+pub use coalesce::Coalescer;
 pub use domain::{
     AccountKey, BorrowerSnapshot, ChainPoint, ChainRef, ChainSource, DirtyReason, ReserveBalance,
     SnapshotStatus, WAD,
+};
+pub use index::{
+    ApplyOutcome, BorrowerRecord, CoverageGap, DirtyEntry, Effect, FLAG_BACKLOG_ESCALATED,
+    FLAG_FULL_REVERIFICATION, KIND_COLLATERAL, KIND_DEBT, NewGap, PoolFlag, ReconcileOutcome,
+    RewindOutcome, ScanBatch, ScanCursor, ScanDir,
 };
 pub use repo::{DirtyTarget, RepoError, SCHEMA_VERSION, SnapshotRepository};
