@@ -52,6 +52,11 @@ pub struct ShadowCounters {
     pub deadline_misses_p0: u64,
     pub deadline_misses_p1: u64,
     pub deadline_misses_other: u64,
+    /// Of the misses above, those still undispatched (in the backlog) this round; the rest were
+    /// dispatched late. Feeds `copper_liq_recheck_deadline_miss_total{reason}`.
+    pub deadline_misses_backlog_p0: u64,
+    pub deadline_misses_backlog_p1: u64,
+    pub deadline_misses_backlog_other: u64,
     pub coverage_violations: u64,
     pub stale_rejected: u64,
     pub deferred_discretionary: u64,
@@ -75,6 +80,12 @@ impl ShadowReport {
         let count =
             |t: Tier, v: &[RecheckJob]| v.iter().filter(|j| j.decision.tier == t).count() as u64;
         let miss = |t: Tier| out.deadline_misses.iter().filter(|m| m.tier == t).count() as u64;
+        let miss_backlog = |ts: &[Tier]| {
+            out.deadline_misses
+                .iter()
+                .filter(|m| !m.dispatched && ts.contains(&m.tier))
+                .count() as u64
+        };
         let counters = ShadowCounters {
             now_ns: out.now_ns,
             candidates: out.candidates.clone(),
@@ -84,6 +95,9 @@ impl ShadowReport {
             deadline_misses_p0: miss(Tier::P0),
             deadline_misses_p1: miss(Tier::P1),
             deadline_misses_other: miss(Tier::P2) + miss(Tier::P3),
+            deadline_misses_backlog_p0: miss_backlog(&[Tier::P0]),
+            deadline_misses_backlog_p1: miss_backlog(&[Tier::P1]),
+            deadline_misses_backlog_other: miss_backlog(&[Tier::P2, Tier::P3]),
             coverage_violations: out.coverage_violations.len() as u64,
             stale_rejected: out.stale_rejected.len() as u64,
             deferred_discretionary: out.deferred_discretionary,

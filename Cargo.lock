@@ -1714,6 +1714,8 @@ dependencies = [
  "jev-advisor",
  "mev-liq-features",
  "mev-liq-state",
+ "mev-metrics",
+ "proptest",
  "rusqlite",
  "serde_json",
  "tempfile",
@@ -3585,6 +3587,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3614,6 +3617,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "mev-types",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",

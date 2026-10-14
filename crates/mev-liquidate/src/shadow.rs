@@ -101,9 +101,16 @@ impl ShadowSchedule {
             let now_ns = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
+            // One span per pass: chain, pass id (the scheduler clock) and, once known, the newest block and
+            // highest revision among the recorded jobs. Never an account or pool address.
+            let span = pass_span(me.params.chain_id, now_ns);
+            let _entered = span.enter();
             match &me.advisory {
                 None => match run_shadow_pass(&me.repo, &me.params, now_ns) {
-                    Ok(report) => me.record(&report),
+                    Ok(report) => {
+                        record_pass_span(&span, &report);
+                        me.record(&report)
+                    }
                     Err(e) => warn!(error = %e, "liquidation shadow schedule failed"),
                 },
                 Some(a) => {
@@ -111,6 +118,7 @@ impl ShadowSchedule {
                     let src = |l: &LoadedInputs, n: u64| (a.decisions)(l, n);
                     match run_shadow_pass_advisory(&me.repo, &me.params, now_ns, &policy, &src) {
                         Ok((report, adv)) => {
+                            record_pass_span(&span, &report);
                             me.record(&report);
                             if let Some(adv) = adv {
                                 me.record_advisory(&adv);
@@ -185,6 +193,39 @@ impl ShadowSchedule {
         }
     }
 }
+
+/// Span of one shadow pass (`pass_id` is the scheduler clock in ns, the job id of the pass).
+pub(crate) fn pass_span(chain_id: u64, now_ns: u64) -> tracing::Span {
+    tracing::info_span!(
+        "liq_shadow_pass",
+        chain_id,
+        pass_id = now_ns,
+        block = tracing::field::Empty,
+        revision = tracing::field::Empty,
+        jobs = tracing::field::Empty,
+    )
+}
+
+/// Attach what the pass saw: newest snapshot block, highest snapshot revision (over the recorded jobs
+/// and backlog) and the dispatched count.
+pub(crate) fn record_pass_span(span: &tracing::Span, report: &ShadowReport) {
+    let versions = report
+        .jobs
+        .iter()
+        .chain(report.backlog.iter())
+        .map(|j| &j.decision.source_version);
+    if let Some(b) = versions.clone().filter_map(|v| v.snapshot_block).max() {
+        span.record("block", b);
+    }
+    if let Some(r) = versions.map(|v| v.snapshot_revision).max() {
+        span.record("revision", r);
+    }
+    span.record("jobs", report.counters.dispatched);
+}
+
+#[cfg(test)]
+#[path = "shadow_span_tests.rs"]
+mod span_tests;
 
 /// Wait for the next shadow tick; pending forever when the pass is disabled.
 pub(crate) async fn tick_opt(iv: &mut Option<tokio::time::Interval>) {

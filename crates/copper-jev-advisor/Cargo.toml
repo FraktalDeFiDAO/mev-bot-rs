@@ -20,6 +20,8 @@ alloy = { version = "2.5", default-features = false, features = ["std"] }
 clap = { workspace = true }
 jev-advisor = { path = "../jev-advisor" }
 mev-liq-features = { workspace = true }
+# No default features: the JSONL event log pulls mev-types and the signer-capable workspace alloy (spec invariant 7).
+mev-metrics = { path = "../mev-metrics", default-features = false }
 mev-liq-state = { workspace = true }
 rusqlite = { workspace = true }
 serde_json = { workspace = true }
@@ -33,3 +35,4 @@ tracing-subscriber = { workspace = true, features = ["json"] }
 # Loopback http:// is a test-only feature of the client; the production binary never enables it.
 jev-advisor = { path = "../jev-advisor", features = ["loopback-http"] }
 tempfile = "3"
+proptest = { workspace = true }
