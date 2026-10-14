@@ -13,7 +13,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use mev_liq_sched::{ShadowParams, ShadowReport, run_shadow_pass};
+use mev_liq_sched::{
+    AdvisoryInputs, AdvisoryPolicy, JevHealth, LoadedInputs, ShadowAdvisoryReport, ShadowParams,
+    ShadowReport, run_shadow_pass, run_shadow_pass_advisory,
+};
 use mev_liq_state::SnapshotRepository;
 use tracing::{info, warn};
 
@@ -23,6 +26,22 @@ pub type ShadowSink = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
 pub const EVENT_SCHEDULE: &str = "liq_sched_shadow";
 pub const EVENT_COUNTERS: &str = "liq_sched_counters";
+/// Advisory (Jev) shadow description: what the active ordering would have done (JEV-LIQ-011).
+pub const EVENT_ADVISORY: &str = "liq_advisory_shadow";
+
+/// Supplies already-stored advisory decisions for the loaded state (e.g. from 008's
+/// `AdvisorStore::valid_decision_for`). The policy re-validates every clause.
+pub type DecisionFn = Arc<dyn Fn(&LoadedInputs, u64) -> AdvisoryInputs + Send + Sync>;
+/// Current Jev breaker health (010).
+pub type HealthFn = Arc<dyn Fn() -> JevHealth + Send + Sync>;
+
+/// Optional advisory add-on of the shadow pass. Dispatch stays the baseline schedule.
+#[derive(Clone)]
+pub struct AdvisoryShadow {
+    pub policy: AdvisoryPolicy,
+    pub decisions: DecisionFn,
+    pub health: HealthFn,
+}
 
 #[derive(Clone)]
 pub struct ShadowSchedule {
@@ -32,6 +51,7 @@ pub struct ShadowSchedule {
     pub params: ShadowParams,
     pub repo: Arc<SnapshotRepository>,
     pub sink: Option<ShadowSink>,
+    pub advisory: Option<AdvisoryShadow>,
     busy: Arc<AtomicBool>,
 }
 
@@ -44,6 +64,7 @@ impl ShadowSchedule {
             params,
             repo,
             sink: None,
+            advisory: None,
             busy: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -63,6 +84,12 @@ impl ShadowSchedule {
         self
     }
 
+    /// Also record the advisory shadow report (nothing extra when the policy mode is `Off`).
+    pub fn with_advisory(mut self, a: AdvisoryShadow) -> Self {
+        self.advisory = Some(a);
+        self
+    }
+
     /// Run one pass on a blocking thread unless the previous one is still running. The caller
     /// never waits for it.
     pub fn spawn_pass(&self) {
@@ -74,12 +101,53 @@ impl ShadowSchedule {
             let now_ns = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
-            match run_shadow_pass(&me.repo, &me.params, now_ns) {
-                Ok(report) => me.record(&report),
-                Err(e) => warn!(error = %e, "liquidation shadow schedule failed"),
+            match &me.advisory {
+                None => match run_shadow_pass(&me.repo, &me.params, now_ns) {
+                    Ok(report) => me.record(&report),
+                    Err(e) => warn!(error = %e, "liquidation shadow schedule failed"),
+                },
+                Some(a) => {
+                    let policy = a.policy.clone().with_health((a.health)());
+                    let src = |l: &LoadedInputs, n: u64| (a.decisions)(l, n);
+                    match run_shadow_pass_advisory(&me.repo, &me.params, now_ns, &policy, &src) {
+                        Ok((report, adv)) => {
+                            me.record(&report);
+                            if let Some(adv) = adv {
+                                me.record_advisory(&adv);
+                            }
+                        }
+                        Err(e) => warn!(error = %e, "liquidation advisory shadow failed"),
+                    }
+                }
             }
             me.busy.store(false, Ordering::Release);
         });
+    }
+
+    fn record_advisory(&self, report: &ShadowAdvisoryReport) {
+        let Ok(full) = serde_json::to_value(report) else {
+            warn!("liquidation advisory shadow not serializable");
+            return;
+        };
+        info!(
+            target: "liq_advisory_shadow",
+            p2_jobs = report.p2_jobs,
+            applied = report.applied.len(),
+            order_changed = report.order_changed,
+            stale = report.counters.copper_jev_stale_response_total,
+            mandatory_unchanged = report.mandatory_unchanged,
+            record = %full,
+            "advisory shadow"
+        );
+        if !report.mandatory_unchanged {
+            warn!(
+                target: "liq_advisory_shadow",
+                "ALERT advisory ordering changed P0/P1 output (invariant breach)"
+            );
+        }
+        if let Some(sink) = &self.sink {
+            sink(EVENT_ADVISORY, full);
+        }
     }
 
     fn record(&self, report: &ShadowReport) {

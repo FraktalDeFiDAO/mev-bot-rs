@@ -538,13 +538,7 @@ fn aging_prevents_starvation_under_prolonged_p0_flood() {
 fn optional_decisions_never_change_anything_here() {
     let accounts = [healthy(1, 290), healthy(2, 10)];
     let base = run(&accounts, &[], &cfg());
-    let dec = [OptionalDecision {
-        key: key(2),
-        revision: 1,
-        feature_digest: B256::repeat_byte(1),
-        bonus: 20,
-        expires_at_ns: NOW + 1_000 * SEC,
-    }];
+    let dec = [good_decision(2, 1, B256::repeat_byte(1))];
     let with = schedule(
         &ScheduleInput {
             now_ns: NOW,

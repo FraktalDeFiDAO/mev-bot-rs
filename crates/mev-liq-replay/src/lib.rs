@@ -3,4 +3,6 @@
 pub mod event;
 mod replay;
 
-pub use replay::{CheckRecord, Latency, ReplayConfig, ReplayError, ReplayReport, replay};
+pub use replay::{
+    CheckRecord, Latency, ReplayConfig, ReplayError, ReplayReport, replay, replay_with_policy,
+};

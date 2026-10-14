@@ -103,15 +103,48 @@ pub struct InFlight {
     pub lease_expires_ns: u64,
 }
 
-/// Advisory decision payload. Accepted by the interface so task 011 can plug in; this scheduler
-/// never reads it (`advisory_bonus` is always 0 here).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Advisory decision payload (the fields of 008's decision row). The mandatory `schedule` never
+/// reads it; only `advisory::AdvisoryPolicy` validates it (spec section 7). Every field is an
+/// untrusted claim: the requested bonus is not part of it, the policy derives the bonus.
+#[derive(Debug, Clone, PartialEq)]
 pub struct OptionalDecision {
+    /// Account the decision was filed under (lookup key).
     pub key: AccountKey,
+    /// Chain and pool the decision claims to be about (checked against the current job).
+    pub chain_id: u64,
+    pub pool: Address,
+    pub policy_version: String,
+    pub feature_schema: String,
+    /// Snapshot revision the decision was derived from.
     pub revision: u64,
     pub feature_digest: B256,
-    pub bonus: u8,
     pub expires_at_ns: u64,
+    pub model: String,
+    pub watch_tier: mev_liq_state::WatchTier,
+    pub confidence: f64,
+    pub prep_probability: f64,
+    pub value_score: f64,
+}
+
+impl OptionalDecision {
+    /// Build from a stored 008 decision row (chain and pool come from its account key).
+    pub fn from_stored(d: &mev_liq_state::AdvisoryDecision) -> Self {
+        Self {
+            key: d.key,
+            chain_id: d.key.chain_id,
+            pool: d.key.pool,
+            policy_version: d.policy_version.clone(),
+            feature_schema: d.feature_schema.clone(),
+            revision: d.revision,
+            feature_digest: d.feature_digest,
+            expires_at_ns: d.expires_at_ns,
+            model: d.model.clone(),
+            watch_tier: d.watch_tier,
+            confidence: d.confidence,
+            prep_probability: d.prep_probability,
+            value_score: d.value_score,
+        }
+    }
 }
 
 pub struct ScheduleInput<'a> {
@@ -137,7 +170,7 @@ pub struct SourceVersion {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ScheduleDecision {
     pub tier: Tier,
-    /// Always 0 in the mandatory scheduler.
+    /// 0 unless `schedule_with_advisory` granted a bounded P2 tie-break bonus (never in `schedule`).
     pub advisory_bonus: u8,
     /// Deadline in the scheduler clock (ns): earliest required deadline of the mandatory reasons.
     pub earliest_due: u64,

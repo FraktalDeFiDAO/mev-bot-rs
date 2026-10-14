@@ -67,10 +67,39 @@ fn newer(a: &BorrowerSnapshot, b: &BorrowerSnapshot) -> bool {
     )
 }
 
+/// Hard ceiling of any advisory bonus (spec section 5 step 6: 0-20 points). Enforced inside the
+/// scheduler core, independent of what an evaluator returns.
+pub const MAX_ADVISORY_BONUS: u8 = 20;
+
+/// Per-job advisory evaluator used by `schedule_with_advisory`. Called once per P2 job (with
+/// the job's mandatory decision already computed); the result is clamped by the core.
+pub type BonusFn<'a> = &'a dyn Fn(&RecheckJob) -> u8;
+
 /// Build the deterministic mandatory schedule. See `docs/design/jev-liq-005-scheduler.md`.
+/// Never reads `input.optional_decisions`.
 pub fn schedule(
     input: &ScheduleInput<'_>,
     cfg: &PolicyConfig,
+) -> Result<ScheduleOutput, ScheduleError> {
+    schedule_inner(input, cfg, None)
+}
+
+/// The same schedule with a bounded advisory tie-breaker for P2 jobs (JEV-LIQ-011). The core
+/// grants a bonus only to a P2 job that is not past its aging threshold, clamps it to
+/// `MAX_ADVISORY_BONUS`, and uses it only to order jobs with an equal `earliest_due` inside
+/// the discretionary lane (after deadline and tier). Everything else is the baseline code path.
+pub fn schedule_with_advisory(
+    input: &ScheduleInput<'_>,
+    cfg: &PolicyConfig,
+    bonus: BonusFn<'_>,
+) -> Result<ScheduleOutput, ScheduleError> {
+    schedule_inner(input, cfg, Some(bonus))
+}
+
+fn schedule_inner(
+    input: &ScheduleInput<'_>,
+    cfg: &PolicyConfig,
+    advisory: Option<BonusFn<'_>>,
 ) -> Result<ScheduleOutput, ScheduleError> {
     cfg.validate()?;
     let now = input.now_ns;
@@ -153,7 +182,7 @@ pub fn schedule(
         .unwrap_or(now);
         let codes: BTreeSet<ReasonCode> = reasons.iter().map(|r| r.code).collect();
         let s = acc.snapshot.as_ref();
-        jobs.push(RecheckJob {
+        let mut job = RecheckJob {
             key: *key,
             decision: ScheduleDecision {
                 tier: top,
@@ -170,7 +199,17 @@ pub fn schedule(
             },
             cohort: acc.cohort.unwrap_or(0),
             not_before_ns: reasons.iter().map(|r| r.not_before).min().unwrap_or(0),
-        });
+        };
+        if let Some(f) = advisory
+            && job.decision.tier == Tier::P2
+        {
+            let b = f(&job).min(MAX_ADVISORY_BONUS);
+            // An aged job keeps its strict oldest-first position: no bonus at all.
+            if now.saturating_sub(job.decision.earliest_due) < cfg.aging_ns {
+                job.decision.advisory_bonus = b;
+            }
+        }
+        jobs.push(job);
     }
     stale.sort_by(|a, b| {
         (a.key, a.reason.urgency(), a.event_block).cmp(&(b.key, b.reason.urgency(), b.event_block))
@@ -219,7 +258,20 @@ pub fn schedule(
     };
     lane0.sort_by(edf);
     lane1.sort_by(edf);
-    lane2.sort_by(edf); // strict oldest-first: P2/P3 can never be starved by newer P2 arrivals
+    // Discretionary lane: deadline, then tier, then (advisory only) a higher bonus first, then
+    // the key. The bonus is 0 for every non-P2 job and for every baseline job, so the baseline
+    // order is unchanged.
+    lane2.sort_by(|a, b| {
+        let k = |j: &RecheckJob| {
+            (
+                j.decision.earliest_due,
+                j.decision.tier,
+                std::cmp::Reverse(j.decision.advisory_bonus),
+                j.key,
+            )
+        };
+        k(a).cmp(&k(b))
+    }); // strict oldest-first: P2/P3 can never be starved by newer P2 arrivals
 
     // Steps 4 and 7: reserved shares, P0 preempts only not-yet-running P2 capacity.
     let c = free;

@@ -135,3 +135,39 @@ pub fn run_shadow_pass(
     let out = schedule(&input, &p.policy).map_err(ShadowError::Policy)?;
     Ok(ShadowReport::from_output(&out, p.max_records))
 }
+
+/// One shadow pass with the advisory policy. The returned `ShadowReport` is the dispatched
+/// schedule, which in `Off`/`Shadow` equals `run_shadow_pass` output exactly; the second value
+/// describes what the active ordering would have been (`None` when `Off`). `decisions` builds
+/// the validated-at-read advisory decisions from the loaded state (e.g. 008's
+/// `valid_decision_for`); the policy re-checks every clause.
+pub fn run_shadow_pass_advisory(
+    repo: &SnapshotRepository,
+    p: &ShadowParams,
+    now_ns: u64,
+    policy: &crate::advisory::AdvisoryPolicy,
+    decisions: crate::advisory::DecisionSource<'_>,
+) -> Result<(ShadowReport, Option<crate::advisory::ShadowAdvisoryReport>), ShadowError> {
+    let loaded = load_inputs(repo, p.chain_id, p.pool, &p.scan_name).map_err(ShadowError::Repo)?;
+    let crate::advisory::AdvisoryInputs {
+        decisions: dec,
+        exports,
+    } = decisions(&loaded, now_ns);
+    let input = ScheduleInput {
+        now_ns,
+        accounts: &loaded.accounts,
+        dirty: &loaded.dirty,
+        urgent_events: &[],
+        pools: &loaded.pools,
+        in_flight: &[],
+        optional_decisions: &dec,
+    };
+    // The scheduler config is `p.policy`, exactly as in `run_shadow_pass`.
+    let mut policy = policy.clone();
+    policy.sched = p.policy.clone();
+    let run = policy.run(&input, &exports).map_err(ShadowError::Policy)?;
+    Ok((
+        ShadowReport::from_output(&run.dispatch, p.max_records),
+        run.report,
+    ))
+}
