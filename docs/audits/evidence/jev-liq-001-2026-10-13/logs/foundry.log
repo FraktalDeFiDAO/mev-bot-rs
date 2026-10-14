@@ -1,0 +1,824 @@
+Compiling 29 files with Solc 0.8.28
+Solc 0.8.28 finished in 16.49s
+Compiler run successful!
+
+╭---------------------+------------------+-------------------+--------------------+---------------------╮
+| Contract            | Runtime Size (B) | Initcode Size (B) | Runtime Margin (B) | Initcode Margin (B) |
++=======================================================================================================+
+| ArbExecutor         | 21,376           | 21,717            | 3,200              | 27,435              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| AtlasSolver         | 23,555           | 23,971            | 1,021              | 25,181              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| FastFeedTicketVault | 6,521            | 7,034             | 18,055             | 42,118              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| HijackProtocol      | 1,414            | 1,442             | 23,162             | 47,710              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockAtlas           | 1,026            | 1,058             | 23,550             | 48,094              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockERC20           | 1,073            | 1,101             | 23,503             | 48,051              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockEnv             | 68               | 94                | 24,508             | 49,058              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockPriceSource     | 200              | 226               | 24,376             | 48,926              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockProtocol        | 521              | 549               | 24,055             | 48,603              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockVault           | 1,892            | 1,920             | 22,684             | 47,232              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockWETH            | 87               | 113               | 24,489             | 49,039              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| MockWETH9           | 1,489            | 1,517             | 23,087             | 47,635              |
+|---------------------+------------------+-------------------+--------------------+---------------------|
+| V4Harness           | 21,599           | 21,947            | 2,977              | 27,205              |
+╰---------------------+------------------+-------------------+--------------------+---------------------╯
+
+warning[missing-events-access-control]: `owner` is changed without an event but is used for access control
+    ╭▸ src/FastFeedTicketVault.sol:165:9
+    │
+165 │         owner = msg.sender;
+    │         ━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-events-access-control
+
+warning[missing-events-access-control]: `pendingOwner` is changed without an event but is used for access control
+    ╭▸ src/FastFeedTicketVault.sol:166:9
+    │
+166 │         pendingOwner = address(0);
+    │         ━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-events-access-control
+
+warning[missing-events-arithmetic]: `startingDebt` is changed without an event but is used in arithmetic
+    ╭▸ src/ArbExecutor.sol:215:9
+    │
+215 │         startingDebt = IERC20(token).balanceOf(address(this));
+    │         ━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-events-arithmetic
+
+warning[missing-events-arithmetic]: `startingDebt` is changed without an event but is used in arithmetic
+    ╭▸ src/ArbExecutor.sol:236:9
+    │
+236 │         startingDebt = IERC20(first.tokenIn).balanceOf(address(this));
+    │         ━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-events-arithmetic
+
+warning[missing-events-arithmetic]: `startingDebt` is changed without an event but is used in arithmetic
+    ╭▸ src/ArbExecutor.sol:404:9
+    │
+404 │         startingDebt = IERC20(debt).balanceOf(address(this));
+    │         ━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-events-arithmetic
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+   ╭▸ src/FastFeedTicketVault.sol:89:36
+   │
+89 │     constructor(ITickets tickets_, address owner_) {
+   │                                    ━━━━━━━━━━━━━━
+   │
+   ╰ help: https://getfoundry.sh/forge/linting/missing-zero-check
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:116:9
+    │
+116 │         tickets.purchaseTickets(round, price, wanted, apiKeyHash);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-no-eth
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/FastFeedTicketVault.sol:117:9
+    │
+117 │         emit Renewed(round, price, tickets.thisRoundTicketCount(address(this)) - held, renewalsLeft);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-events
+
+warning[missing-events-access-control]: `flashPool` is changed without an event but is used for access control
+    ╭▸ src/ArbExecutor.sol:237:9
+    │
+237 │         flashPool = first.pool;
+    │         ━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-events-access-control
+
+warning[missing-events-access-control]: `aaveFlashPool` is changed without an event but is used for access control
+    ╭▸ src/ArbExecutor.sol:307:9
+    │
+307 │         aaveFlashPool = aavePool;
+    │         ━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-events-access-control
+
+warning[missing-events-access-control]: `aaveFlashPool` is changed without an event but is used for access control
+    ╭▸ src/ArbExecutor.sol:357:9
+    │
+357 │         aaveFlashPool = address(0);
+    │         ━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-events-access-control
+
+warning[missing-events-access-control]: `expectedPool` is changed without an event but is used for access control
+    ╭▸ src/ArbExecutor.sol:578:13
+    │
+578 │             expectedPool = hop.pool;
+    │             ━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-events-access-control
+
+warning[missing-events-access-control]: `flashActive` is changed without an event but is used for access control
+    ╭▸ src/ArbExecutor.sol:377:9
+    │
+377 │         flashActive = false; // single use per execute()
+    │         ━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-events-access-control
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+    ╭▸ src/ArbExecutor.sol:168:48
+    │
+168 │     constructor(address vault_, address weth_, address profitReceiver_) {
+    │                                                ━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-zero-check
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:198:14
+    │
+198 │         if (!usdg.approve(address(tickets), amount)) revert TransferFailed();
+    │              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-no-eth
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:199:9
+    │
+199 │         tickets.depositToken(amount);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-no-eth
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:205:13
+    │
+205 │             address(usdg).call(abi.encodeWithSelector(IERC20Min.transferFrom.selector, from, address(this), amount));
+    │             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-no-eth
+
+warning[non-reentrant-not-first]: `nonReentrant` is not the first modifier
+    ╭▸ src/FastFeedTicketVault.sol:134:54
+    │
+134 │     function fund(uint256 amount) external onlyOwner nonReentrant {
+    │                                                      ━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/non-reentrant-not-first
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/FastFeedTicketVault.sol:200:9
+    │
+200 │         emit Funded(amount);
+    │         ━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-events
+
+warning[non-reentrant-not-first]: `nonReentrant` is not the first modifier
+    ╭▸ src/FastFeedTicketVault.sol:140:47
+    │
+140 │     function depositHeld() external onlyOwner nonReentrant {
+    │                                               ━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/non-reentrant-not-first
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:146:9
+    │
+146 │         tickets.withdrawToken(amount);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-no-eth
+
+warning[reentrancy-no-eth]: external call can be reentered before `locked` is updated
+    ╭▸ src/FastFeedTicketVault.sol:210:39
+    │
+210 │         (bool ok, bytes memory ret) = token.call(abi.encodeWithSelector(IERC20Min.transfer.selector, to, amount));
+    │                                       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-no-eth
+
+warning[non-reentrant-not-first]: `nonReentrant` is not the first modifier
+    ╭▸ src/FastFeedTicketVault.sol:145:58
+    │
+145 │     function withdraw(uint256 amount) external onlyOwner nonReentrant {
+    │                                                          ━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/non-reentrant-not-first
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/FastFeedTicketVault.sol:148:9
+    │
+148 │         emit Withdrawn(amount);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-events
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+    ╭▸ src/ArbExecutor.sol:188:29
+    │
+188 │     function setPoolManager(address pm) external {
+    │                             ━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-zero-check
+
+warning[non-reentrant-not-first]: `nonReentrant` is not the first modifier
+    ╭▸ src/FastFeedTicketVault.sol:152:54
+    │
+152 │     function sweep(address token) external onlyOwner nonReentrant {
+    │                                                      ━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/non-reentrant-not-first
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+    ╭▸ src/FastFeedTicketVault.sol:157:32
+    │
+157 │     function transferOwnership(address to) external onlyOwner {
+    │                                ━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-zero-check
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+   ╭▸ src/AtlasSolver.sol:46:73
+   │
+46 │     constructor(address vault_, address weth_, address profitReceiver_, address atlas_)
+   │                                                                         ━━━━━━━━━━━━━━
+   │
+   ╰ help: https://getfoundry.sh/forge/linting/missing-zero-check
+
+warning[unused-return]: return value of an external call is not used
+    ╭▸ src/ArbExecutor.sol:238:9
+    │
+238 │ ┏         IUniV3Pool(first.pool)
+239 │ ┃             .swap(
+240 │ ┃                 address(this),
+241 │ ┃                 first.zeroForOne,
+    ‡ ┃
+244 │ ┃                 abi.encode(minProfit, hops)
+245 │ ┃             );
+    │ ┗━━━━━━━━━━━━━┛
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unused-return
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:242:17
+    │
+242 │                 int256(amount),
+    │                 ━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'int256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[missing-zero-check]: address parameter is used in a state write or value transfer without a zero-address check
+    ╭▸ src/ArbExecutor.sol:291:9
+    │
+291 │         address aavePool,
+    │         ━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/missing-zero-check
+
+warning[uninitialized-local]: local variable is read before being initialized
+    ╭▸ src/ArbExecutor.sol:341:19
+    │
+341 │             any = any || success;
+    │                   ━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/uninitialized-local
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:339:31
+    │
+339 │             (bool success,) = address(this).call(calls[i]);
+    │                               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/calls-loop
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/ArbExecutor.sol:342:13
+    │
+342 │             emit BatchItem(i, sel, success);
+    │             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-events
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:333:38
+    │
+333 │             if (calls[i].length < 4) revert BadRoute();
+    │                                      ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:338:15
+    │
+338 │             ) revert BadRoute();
+    │               ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/ArbExecutor.sol:364:9
+    │
+364 │         emit Profit(asset, profit);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-events
+
+warning[arbitrary-send-eth]: ETH is sent to a user-controlled destination; restrict the destination or the caller
+    ╭▸ src/AtlasSolver.sol:113:26
+    │
+113 │             (bool ok,) = to.call{value: amount}("");
+    │                          ━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/arbitrary-send-eth
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/ArbExecutor.sol:393:9
+    │
+393 │         emit Profit(token, profit);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-events
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:611:40
+    │
+611 │         (bool ok, bytes memory data) = token.call(abi.encodeWithSelector(0x095ea7b3, spender, amount));
+    │                                        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/calls-loop
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:420:43
+    │
+420 │             (bool ok, bytes memory ret) = c.target.call(c.data);
+    │                                           ━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/calls-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:415:43
+    │
+415 │             if (!allowedTarget[c.target]) revert TargetNotAllowed(c.target);
+    │                                           ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:417:55
+    │
+417 │                 if (!allowedTarget[c.approveSpender]) revert TargetNotAllowed(c.approveSpender);
+    │                                                       ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:612:69
+    │
+612 │         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+    │                                                                     ━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:423:21
+    │
+423 │                     revert(add(ret, 32), mload(ret))
+    │                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:581:38
+    │
+581 │               (int256 a0, int256 a1) = IUniV3Pool(hop.pool)
+    │ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+582 │ ┃                 .swap(
+583 │ ┃                     address(this),
+584 │ ┃                     hop.zeroForOne,
+    ‡ ┃
+587 │ ┃                     ""
+588 │ ┃                 );
+    │ ┗━━━━━━━━━━━━━━━━━┛
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/calls-loop
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:517:28
+    │
+517 │           bytes memory ret = IPoolManager(pm)
+    │ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+518 │ ┃             .unlock(
+519 │ ┃                 abi.encode(V4Swap(hop.kind, hop.tokenIn, hop.tokenOut, hop.feeBps, int24(uint24(spacing)), amountIn))
+520 │ ┃             );
+    │ ┗━━━━━━━━━━━━━┛
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/calls-loop
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:595:29
+    │
+595 │                 amountOut = ICamelotPair(hop.pool).getAmountOut(amountIn, hop.tokenIn);
+    │                             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/calls-loop
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:597:45
+    │
+597 │                 (uint112 r0, uint112 r1,) = IUniV2Pair(hop.pool).getReserves();
+    │                                             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/calls-loop
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:616:40
+    │
+616 │         (bool ok, bytes memory data) = token.call(abi.encodeWithSelector(0xa9059cbb, to, amount));
+    │                                        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/calls-loop
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/ArbExecutor.sol:606:13
+    │
+606 │             IUniV2Pair(hop.pool).swap(out0, out1, address(this), "");
+    │             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/calls-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:438:67
+    │
+438 │             if (i > 0 && hops[i].tokenIn != hops[i - 1].tokenOut) revert BadRoute();
+    │                                                                   ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:589:45
+    │
+589 │             if (expectedPool != address(0)) revert Unauthorized(); // callback must have run
+    │                                             ━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:515:66
+    │
+515 │         if (pm == address(0) || spacing == 0 || spacing > 32767) revert BadRoute();
+    │                                                                  ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:602:17
+    │
+602 │                 revert BadRoute();
+    │                 ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:617:69
+    │
+617 │         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFailed();
+    │                                                                     ━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/ArbExecutor.sol:481:9
+    │
+481 │         emit Profit(token, profit);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-events
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/ArbExecutor.sol:472:88
+    │
+472 │             if (hops[i].tokenIn != hops[i - 1].tokenOut || hops[i].pool == first.pool) revert BadRoute();
+    │                                                                                        ━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:468:24
+    │
+468 │         uint256 owed = uint256(first.zeroForOne ? amount0Delta : amount1Delta);
+    │                        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:469:28
+    │
+469 │         uint256 received = uint256(-(first.zeroForOne ? amount1Delta : amount0Delta));
+    │                            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:488:24
+    │
+488 │         uint256 owed = uint256(amount0Delta > 0 ? amount0Delta : amount1Delta);
+    │                        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:519:84
+    │
+519 │                 abi.encode(V4Swap(hop.kind, hop.tokenIn, hop.tokenOut, hop.feeBps, int24(uint24(spacing)), amountIn))
+    │                                                                                    ━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'int24' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:519:90
+    │
+519 │                 abi.encode(V4Swap(hop.kind, hop.tokenIn, hop.tokenOut, hop.feeBps, int24(uint24(spacing)), amountIn))
+    │                                                                                          ━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint24' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:549:30
+    │
+549 │                 zeroForOne, -int256(a.amountIn), zeroForOne ? MIN_SQRT_RATIO_PLUS_ONE : MAX_SQRT_RATIO_MINUS_ONE
+    │                              ━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'int256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:554:27
+    │
+554 │             zeroForOne ? (int128(delta >> 128), int128(delta)) : (int128(delta), int128(delta >> 128));
+    │                           ━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'int128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:554:49
+    │
+554 │             zeroForOne ? (int128(delta >> 128), int128(delta)) : (int128(delta), int128(delta >> 128));
+    │                                                 ━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'int128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:554:67
+    │
+554 │             zeroForOne ? (int128(delta >> 128), int128(delta)) : (int128(delta), int128(delta >> 128));
+    │                                                                   ━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'int128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:554:82
+    │
+554 │             zeroForOne ? (int128(delta >> 128), int128(delta)) : (int128(delta), int128(delta >> 128));
+    │                                                                                  ━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'int128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:556:16
+    │
+556 │         owed = uint256(uint128(-inDelta));
+    │                ━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:556:24
+    │
+556 │         owed = uint256(uint128(-inDelta));
+    │                        ━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:557:15
+    │
+557 │         got = uint256(uint128(outDelta));
+    │               ━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:557:23
+    │
+557 │         got = uint256(uint128(outDelta));
+    │                       ━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint128' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[arbitrary-send-eth]: ETH is sent to a user-controlled destination; restrict the destination or the caller
+    ╭▸ src/ArbExecutor.sol:566:13
+    │
+566 │             pm.settle{value: owed}();
+    │             ━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/arbitrary-send-eth
+
+warning[unused-return]: return value of an external call is not used
+    ╭▸ src/ArbExecutor.sol:570:13
+    │
+570 │             pm.settle();
+    │             ━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unused-return
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:585:21
+    │
+585 │                     int256(amountIn),
+    │                     ━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'int256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/ArbExecutor.sol:590:25
+    │
+590 │             amountOut = uint256(-(hop.zeroForOne ? a1 : a0));
+    │                         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │
+    │       // casting to 'uint256' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[unused-return]: return value of an external call is not used
+    ╭▸ src/ArbExecutor.sol:597:45
+    │
+597 │                 (uint112 r0, uint112 r1,) = IUniV2Pair(hop.pool).getReserves();
+    │                                             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/unused-return
+
+No files changed, compilation skipped
+
+Ran 12 tests for test/AtlasSolver.t.sol:AtlasSolverTest
+[PASS] test_bidCapDefaultsToZeroAndIsEnforced() (gas: 86824)
+[PASS] test_borrowRepaidFromCallValue() (gas: 293931)
+[PASS] test_ethOnlyAcceptedDuringSolverCall() (gas: 36274)
+[PASS] test_liquidatesAndPaysBidFromEth() (gas: 217493)
+[PASS] test_onlyLiquidationSelectorsAllowed() (gas: 76795)
+[PASS] test_onlyOwnerStillOwnsTheExecutorSurface() (gas: 56848)
+[PASS] test_prefundedWethFloatCannotSubsidizeLosingLiquidation() (gas: 245469)
+[PASS] test_prefundedWethFloatSurvivesProfitAccountingAndPaysBid() (gas: 308495)
+[PASS] test_rejectsEveryoneButAtlas() (gas: 46381)
+[PASS] test_rejectsOtherSolverOpSigners() (gas: 51699)
+[PASS] test_unprofitableLiquidationRevertsTheWholeSolverCall() (gas: 185400)
+[PASS] test_unwrapsWethWhenEthIsShort() (gas: 264313)
+Suite result: ok. 12 passed; 0 failed; 0 skipped; finished in 31.74ms (20.43ms CPU time)
+
+Ran 7 tests for test/Batch.t.sol:BatchTest
+[PASS] test_aProtocolCannotStartATradeDuringTheBatch() (gas: 610734)
+[PASS] test_allItemsFailingRevertsTheBatch() (gas: 319623)
+[PASS] test_batchingFlagDoesNotLeakAfterTheBatch() (gas: 190770)
+[PASS] test_oneFailingItemDoesNotUndoTheOthers() (gas: 338269)
+[PASS] test_onlyOwnerCanBatch() (gas: 42832)
+[PASS] test_rejectsEmptyOversizedAndForeignCalls() (gas: 181929)
+[PASS] test_runsEveryItemAndPaysEachProfit() (gas: 341370)
+Suite result: ok. 7 passed; 0 failed; 0 skipped; finished in 27.71ms (20.42ms CPU time)
+
+Ran 7 tests for test/ArbExecutorUnit.t.sol:ArbExecutorUnitTest
+[PASS] testFuzz_callbacksRejectAnyone(address,int256,int256,bytes) (runs: 256, μ: 81381, ~: 81086)
+[PASS] testFuzz_disallowedSpenderReverts(address) (runs: 256, μ: 95006, ~: 95088)
+[PASS] testFuzz_disallowedTargetsAlwaysRevert(address) (runs: 256, μ: 90953, ~: 91035)
+[PASS] testFuzz_flashCallbackRejectsAnyoneOutsideATrade(address,bytes) (runs: 256, μ: 34347, ~: 34173)
+[PASS] testFuzz_liquidationProfitAccounting(uint96,uint96,uint96) (runs: 256, μ: 191032, ~: 180675)
+[PASS] testFuzz_mismatchedRoutesRevert(address,address,address) (runs: 256, μ: 36286, ~: 36528)
+[PASS] testFuzz_onlyOwnerCanTrade(address) (runs: 256, μ: 114548, ~: 114630)
+Suite result: ok. 7 passed; 0 failed; 0 skipped; finished in 309.18ms (717.53ms CPU time)
+
+Ran 1 test for test/ArbExecutorUnit.t.sol:ArbExecutorInvariantTest
+[PASS] invariant_executorNeverHoldsFunds() (runs: 256, calls: 128000, reverts: 0)
+
+╭----------+-----------------------+-------+---------+----------╮
+| Contract | Selector              | Calls | Reverts | Discards |
++===============================================================+
+| Handler  | attackerCallsCallback | 32222 | 0       | 0        |
+|----------+-----------------------+-------+---------+----------|
+| Handler  | attackerSendsEth      | 32079 | 0       | 0        |
+|----------+-----------------------+-------+---------+----------|
+| Handler  | attackerToggles       | 31712 | 0       | 0        |
+|----------+-----------------------+-------+---------+----------|
+| Handler  | liquidate             | 31987 | 0       | 0        |
+╰----------+-----------------------+-------+---------+----------╯
+
+Suite result: ok. 1 passed; 0 failed; 0 skipped; finished in 42.33s (42.31s CPU time)
+
+Ran 4 test suites in 42.33s (42.69s CPU time): 27 tests passed, 0 failed, 0 skipped (27 total tests)

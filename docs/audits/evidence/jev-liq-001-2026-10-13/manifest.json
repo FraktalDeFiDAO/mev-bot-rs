@@ -1,0 +1,37 @@
+{
+  "source_commit": "c6f3aa466fb1230424a0dfb41b65e09b5084d72e",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256_hash": "0823624ee91201a16685ea80bee919242e69f47ec8beb750d6884f455b8e0296"
+    },
+    {
+      "path": "logs/browser.log",
+      "sha256_hash": "a1794a28beaed7717ac52bee8c5b5d81ef39e3b80ace92dc088f546336439a69"
+    },
+    {
+      "path": "logs/foundry.log",
+      "sha256_hash": "f4c32783a493d977295ef6bf8121b621d5a751e986ac81e2a873bd5976be3693"
+    },
+    {
+      "path": "logs/rust.log",
+      "sha256_hash": "71d4a3ec81f59c2b5791eb3ae85e9635e0ca28688a6d6da5716af18a418e1e74"
+    },
+    {
+      "path": "reports/feeds-state.md",
+      "sha256_hash": "5c70b643e5c2b8f4bdba72c972aea7c24f94c1d72c906b49f5a698d3447830bf"
+    },
+    {
+      "path": "reports/lending-execution.md",
+      "sha256_hash": "f3601c0b93e145340c51267a3f1a4e5c7276b90cfd8e546b283f3c8bd565abaf"
+    },
+    {
+      "path": "reports/storage-ops.md",
+      "sha256_hash": "200eae57c50d0a6db6036dc879cb867dbc6ce4c715d4c41ea524a558da3874d1"
+    },
+    {
+      "path": "verification.json",
+      "sha256_hash": "ba2edc2d22c2d5eecdc2d35567c67e51df0b69e30edf32b964167c67f7665643"
+    }
+  ]
+}
