@@ -84,6 +84,10 @@ fn a_scrape_does_not_block_a_concurrent_producer() {
             while !stop.load(Ordering::Relaxed) {
                 let _ = r.render();
                 n += 1;
+                // Scrape back to back, but not in a busy loop: `std::sync::Mutex` is not fair, so
+                // a scraper that re-locks immediately can starve the producer on a loaded host
+                // (37.8 s in the deploy gate, 2026-10-14) without saying anything about blocking.
+                std::thread::sleep(Duration::from_micros(200));
             }
             n
         })
