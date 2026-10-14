@@ -41,3 +41,55 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
+
+  # Jev liquidation advisor (Process B, shadow only). Opt-in: `--profile jev` / scripts/run.sh advisor-start.
+  # No ports, no signer, no RPC; reads the bot's snapshot DB, writes its own advisor.sqlite, calls TypeSafe over HTTPS.
+  advisor:
+    profiles: ["jev"]
+    image: localhost/copper-jev-advisor:dev
+    build:
+      context: .
+      dockerfile: Containerfile
+      target: advisor
+      args:
+        APP_UID: "${UID:-1000}"
+        APP_GID: "${GID:-1000}"
+    container_name: mev-jev-advisor
+    userns_mode: keep-id
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      RUST_LOG: "${RUST_LOG:-info}"
+      JEV_MODE: shadow
+      JEV_MODEL: "${JEV_MODEL:-jev-1.13.0}"
+      JEV_POLICY_VERSION: "${JEV_POLICY_VERSION:-}"  # required; advisor-start checks it
+      JEV_MAX_INFLIGHT: "${JEV_MAX_INFLIGHT:-4}"
+      JEV_TIMEOUT_MS: "${JEV_TIMEOUT_MS:-1500}"
+      JEV_BUDGET_PER_HOUR: "${JEV_BUDGET_PER_HOUR:-200}"
+      ADVISOR_SHUTDOWN_GRACE_SECONDS: "10"
+      SNAPSHOT_DB: /var/lib/mev-bot/liq-state.sqlite
+      ADVISOR_DB: /var/lib/mev-bot/advisor.sqlite
+      TYPESAFE_API_KEY_FILE: /run/secrets/typesafe_api_key
+    volumes:
+      # Same host data dir as the bot: snapshot DB (+ -wal/-shm) read, advisor.sqlite written.
+      - ./data:/var/lib/mev-bot:Z
+      # 0600 key file, read-only; never in the image or env. run.sh advisor-start verifies the mode.
+      - ./secrets/typesafe_api_key:/run/secrets/typesafe_api_key:ro,Z
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=16m
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 512m
+    restart: unless-stopped
+    # Must exceed ADVISOR_SHUTDOWN_GRACE_SECONDS (10) + 5.
+    stop_grace_period: 20s
+    healthcheck:
+      # Config + both DBs reachable; never contacts the Jev API.
+      test: ["CMD", "/usr/local/bin/copper-jev-advisor", "check"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

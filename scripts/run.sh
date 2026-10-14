@@ -8,6 +8,8 @@
 #   scripts/run.sh halt             kill switch: stop sending new trades (process keeps running)
 #   scripts/run.sh resume           remove the kill switch
 #   scripts/run.sh stop             stop and remove the container
+#   scripts/run.sh advisor-start    build + start the Jev advisor (shadow; needs secrets/typesafe_api_key, mode 0600)
+#   scripts/run.sh advisor-stop | advisor-status | advisor-logs
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export UID
@@ -53,7 +55,28 @@ start() {
   echo "started in $1 mode — 'scripts/run.sh logs' to follow, 'scripts/run.sh halt' to stop trading"
 }
 
+ADVISOR_CTR=mev-jev-advisor
+ADVISOR_KEY=secrets/typesafe_api_key
+
+advisor_start() {
+  [[ -f $ADVISOR_KEY && ! -L $ADVISOR_KEY ]] || { echo "missing $ADVISOR_KEY (create: install -m 600 /dev/null $ADVISOR_KEY, then put the key in it)" >&2; exit 1; }
+  [[ $(stat -c %a "$ADVISOR_KEY") == 600 ]] || { echo "$ADVISOR_KEY must be mode 0600 (chmod 600 $ADVISOR_KEY)" >&2; exit 1; }
+  [[ -s $ADVISOR_KEY ]] || { echo "$ADVISOR_KEY is empty" >&2; exit 1; }
+  [[ -n ${JEV_POLICY_VERSION:-} ]] || { echo "set JEV_POLICY_VERSION to the bot's liquidation export policy version" >&2; exit 1; }
+  mkdir -p "data/$CHAIN"
+  [[ -n ${NO_BUILD:-} ]] || compose --profile jev build advisor >/dev/null
+  # Only the advisor service: the bot is never touched.
+  compose --profile jev up -d advisor
+  echo "advisor started (shadow) — 'scripts/run.sh advisor-logs' to follow"
+}
+
 case "${1:-}" in
+  advisor-start)  advisor_start ;;
+  advisor-stop)   podman stop -t 20 "$ADVISOR_CTR" && podman rm "$ADVISOR_CTR" ;;
+  advisor-status)
+    podman ps -a --filter name=$ADVISOR_CTR --format '{{.Names}}  {{.Status}}'
+    podman logs --tail 200 "$ADVISOR_CTR" 2>&1 | grep -E "metrics|started|ERROR|WARN" | tail -3 || true ;;
+  advisor-logs)   podman logs -f "$ADVISOR_CTR" ;;
   build)  MEV_ENV_FILE=.env compose build bot ;;
   shadow) start shadow ;;
   live)
@@ -80,5 +103,5 @@ case "${1:-}" in
     fi
     rm -f "$STOP_FILE" && echo "kill switch off" ;;
   stop)   compose down ;;
-  *) sed -n '2,10p' "$0"; exit 2 ;;
+  *) sed -n '2,12p' "$0"; exit 2 ;;
 esac
