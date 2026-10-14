@@ -54,7 +54,10 @@ route_via = ["WETH", "USDC", "USDT"]
 
 # Shadow-only liquidation pipeline (trigger indexer + snapshot refresh + mandatory-schedule record). Never plans or sends.
 [liquidation_shadow]
-enabled = true
+# Off: with ~188k indexed Aave borrowers the shadow scheduler loads every borrower each tick and
+# drove the bot past 1.6 GB RSS on the 2 GB host (15 OOM restarts after deploy-20261014-030250).
+# Re-enable only after the input is bounded (minimum-debt cutoff, incremental scheduling).
+enabled = false
 # snapshot_db = "<data-dir>/liq-state.sqlite"   # default
 recheck_concurrency = 4
 recheck_budget_per_minute = 30   # ~2 RPC calls each on the fast RPC; raise only after measuring quota use
