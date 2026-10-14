@@ -4,7 +4,7 @@ Process B (`copper-jev-advisor`, shadow mode only) runs as its own container, `m
 target of the repo `Containerfile` (same pinned Arch base, only the advisor binary, no signer/RPC path). It is a compose
 profile (`jev`): `scripts/run.sh shadow|live|stop` never start or touch it.
 
-It reads the bot's `data/liq-state.sqlite` and writes `data/advisor.sqlite` (same host `./data` dir, mounted
+It reads the bot's `data/arbitrum/liq-state.sqlite` and writes `data/arbitrum/advisor.sqlite` (same host `./data` dir, mounted
 `/var/lib/mev-bot`), and calls the TypeSafe API over HTTPS. No ports are published.
 
 ## Key file
@@ -43,7 +43,7 @@ Healthcheck is `copper-jev-advisor check` (config + both DBs + schema versions; 
 ## Disable
 
 `scripts/run.sh advisor-stop`. To remove permanently, delete nothing else: the bot and its data are independent;
-`data/advisor.sqlite` may be deleted afterwards (it only holds shadow advisory state).
+`data/arbitrum/advisor.sqlite` may be deleted afterwards (it only holds shadow advisory state).
 
 ## Build / validate by hand
 
