@@ -827,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn liquidation_shadow_defaults_off_and_arbitrum_enables_it() {
+    fn liquidation_shadow_defaults_off_and_arbitrum_keeps_it_off() {
         let d = LiquidationShadowConfig::default();
         assert!(!d.enabled && d.snapshot_db.is_none());
         assert_eq!(
@@ -837,7 +837,7 @@ mod tests {
         let e: LiquidationShadowConfig = toml::from_str("enabled = true").unwrap();
         assert!(e.enabled && e.max_account_age_seconds == 300);
         let c = ChainConfig::load(&repo_config()).unwrap();
-        assert!(c.liquidation_shadow.enabled);
+        assert!(!c.liquidation_shadow.enabled);
     }
 
     #[test]
