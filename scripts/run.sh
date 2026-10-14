@@ -56,6 +56,7 @@ start() {
 }
 
 ADVISOR_CTR=mev-jev-advisor
+ADVISOR_IMAGE=localhost/copper-jev-advisor:dev
 ADVISOR_KEY=secrets/typesafe_api_key
 
 advisor_start() {
@@ -64,9 +65,28 @@ advisor_start() {
   [[ -s $ADVISOR_KEY ]] || { echo "$ADVISOR_KEY is empty" >&2; exit 1; }
   [[ -n ${JEV_POLICY_VERSION:-} ]] || { echo "set JEV_POLICY_VERSION to the bot's liquidation export policy version" >&2; exit 1; }
   mkdir -p "data/$CHAIN"
-  [[ -n ${NO_BUILD:-} ]] || compose --profile jev build advisor >/dev/null
-  # Only the advisor service: the bot is never touched.
-  compose --profile jev up -d advisor
+  # Plain `podman run` with the same settings as compose.yaml's `advisor` service: podman-compose
+  # 1.0.x (the server's) has no profiles and may recreate other services on `up`, and the bot
+  # must never be touched. Build only when the image is missing (deploys stream it in).
+  podman image exists "$ADVISOR_IMAGE" || compose --profile jev build advisor >/dev/null
+  podman rm -f "$ADVISOR_CTR" >/dev/null 2>&1 || true
+  podman run -d --name "$ADVISOR_CTR" \
+    --userns keep-id --user "$(id -u):$(id -g)" \
+    --read-only --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+    --security-opt no-new-privileges:true --cap-drop ALL --pids-limit 128 --memory 512m \
+    --restart unless-stopped --stop-timeout 20 \
+    --health-cmd "/usr/local/bin/copper-jev-advisor check" --health-interval 60s \
+    --health-timeout 10s --health-retries 3 --health-start-period 30s \
+    -e RUST_LOG="${RUST_LOG:-info}" -e JEV_MODE=shadow \
+    -e JEV_MODEL="${JEV_MODEL:-jev-1.13.0}" -e JEV_POLICY_VERSION="$JEV_POLICY_VERSION" \
+    -e JEV_MAX_INFLIGHT="${JEV_MAX_INFLIGHT:-4}" -e JEV_TIMEOUT_MS="${JEV_TIMEOUT_MS:-1500}" \
+    -e JEV_BUDGET_PER_HOUR="${JEV_BUDGET_PER_HOUR:-200}" -e ADVISOR_SHUTDOWN_GRACE_SECONDS=10 \
+    -e SNAPSHOT_DB="/var/lib/mev-bot/$CHAIN/liq-state.sqlite" \
+    -e ADVISOR_DB="/var/lib/mev-bot/$CHAIN/advisor.sqlite" \
+    -e TYPESAFE_API_KEY_FILE=/run/secrets/typesafe_api_key \
+    -v "$PWD/data:/var/lib/mev-bot:Z" \
+    -v "$PWD/$ADVISOR_KEY:/run/secrets/typesafe_api_key:ro,Z" \
+    "$ADVISOR_IMAGE" >/dev/null
   echo "advisor started (shadow) — 'scripts/run.sh advisor-logs' to follow"
 }
 

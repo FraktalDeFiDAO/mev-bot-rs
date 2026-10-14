@@ -66,8 +66,8 @@ services:
       JEV_TIMEOUT_MS: "${JEV_TIMEOUT_MS:-1500}"
       JEV_BUDGET_PER_HOUR: "${JEV_BUDGET_PER_HOUR:-200}"
       ADVISOR_SHUTDOWN_GRACE_SECONDS: "10"
-      SNAPSHOT_DB: /var/lib/mev-bot/liq-state.sqlite
-      ADVISOR_DB: /var/lib/mev-bot/advisor.sqlite
+      SNAPSHOT_DB: /var/lib/mev-bot/arbitrum/liq-state.sqlite  # the bot's <data-dir>/<chain>/
+      ADVISOR_DB: /var/lib/mev-bot/arbitrum/advisor.sqlite
       TYPESAFE_API_KEY_FILE: /run/secrets/typesafe_api_key
     volumes:
       # Same host data dir as the bot: snapshot DB (+ -wal/-shm) read, advisor.sqlite written.
