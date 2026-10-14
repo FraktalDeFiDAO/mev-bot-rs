@@ -15,13 +15,25 @@ async fn run_with(
     script: Script,
     tweak: impl FnOnce(&mut ClientConfig),
 ) -> (Result<AdvisoryAnswer, TransportError>, TestServer) {
+    let (r, server, _) = run_timed(script, tweak).await;
+    (r, server)
+}
+
+/// Like `run_with`, but also returns how long `send` alone took. Server spawn, client
+/// construction (TLS setup) and request building are excluded: under a loaded machine they
+/// can take seconds and are not what the deadline bounds.
+async fn run_timed(
+    script: Script,
+    tweak: impl FnOnce(&mut ClientConfig),
+) -> (Result<AdvisoryAnswer, TransportError>, TestServer, Duration) {
     let server = TestServer::spawn(script).await;
     let mut c = cfg(server.addr);
     tweak(&mut c);
     let client = TypeSafeClient::new(c).unwrap();
     let req = build_request(&features(), MODEL).unwrap();
+    let t = Instant::now();
     let r = client.send(&req, &CancellationToken::new()).await;
-    (r, server)
+    (r, server, t.elapsed())
 }
 
 fn status(code: &str) -> Script {
@@ -297,8 +309,7 @@ async fn oversized_stream_stops_at_cap() {
 
 #[tokio::test]
 async fn silent_server_hits_the_deadline() {
-    let t = Instant::now();
-    let (r, _) = run_with(Script::Hang, |c| {
+    let (r, _, el) = run_timed(Script::Hang, |c| {
         c.total_timeout = Duration::from_millis(300);
         c.read_timeout = Duration::from_millis(250);
     })
@@ -306,7 +317,6 @@ async fn silent_server_hits_the_deadline() {
     let e = r.unwrap_err();
     assert!(matches!(e, TransportError::Timeout(_)), "{e:?}");
     assert_eq!(e.class(), ErrorClass::Retryable);
-    let el = t.elapsed();
     assert!(
         el >= Duration::from_millis(200) && el < Duration::from_secs(5),
         "{el:?}"
@@ -321,9 +331,8 @@ async fn slowloris_body_hits_total_deadline() {
         body.len()
     )
     .into_bytes();
-    let t = Instant::now();
     // One byte every 100ms is well inside the 1s read timeout; only the total deadline stops it.
-    let (r, _) = run_with(
+    let (r, _, el) = run_timed(
         Script::Drip {
             head,
             delay: Duration::from_millis(100),
@@ -336,7 +345,7 @@ async fn slowloris_body_hits_total_deadline() {
     )
     .await;
     assert!(matches!(r.unwrap_err(), TransportError::Timeout(_)));
-    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+    assert!(el < Duration::from_secs(5), "{el:?}");
 }
 
 #[tokio::test]
