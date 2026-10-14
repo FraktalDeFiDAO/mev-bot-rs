@@ -1080,16 +1080,56 @@ impl AaveTriggerIndexer {
     /// `FeedWatcher` match of a pending price-update transaction. Provisional by nature, so no
     /// chain position is attached.
     pub fn mark_assets_price_moved(&self, assets: &[Address]) -> Result<usize, RepoError> {
+        self.marker().mark_assets_price_moved(assets)
+    }
+
+    /// A cheap handle that marks price-move holders without the indexer, so the indexer itself
+    /// can step in its own task while the sequencer path keeps marking.
+    pub fn marker(&self) -> PriceMarker {
+        PriceMarker {
+            repo: self.repo.clone(),
+            chain_id: self.cfg.chain_id,
+            pool: self.aave.pool,
+            fanout_limit: self.cfg.fanout_limit,
+        }
+    }
+
+    /// Step forever, `every` apart (start to start; a step longer than `every` is followed at
+    /// once by the next). Errors are logged and the loop continues. Never returns.
+    pub async fn run(mut self, every: Duration) {
+        let mut iv = tokio::time::interval(every);
+        iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            iv.tick().await;
+            if let Err(e) = self.step().await {
+                warn!(index = %self.cfg.name, error = %format!("{e:#}"), "trigger index step");
+            }
+        }
+    }
+}
+
+/// Marks the holders of reserves whose price moved (`DirtyReason::PriceMove`), bounded by the
+/// indexer's fan-out limit. Cloneable; shares the indexer's repository.
+#[derive(Clone)]
+pub struct PriceMarker {
+    repo: Arc<SnapshotRepository>,
+    chain_id: u64,
+    pool: Address,
+    fanout_limit: usize,
+}
+
+impl PriceMarker {
+    pub fn mark_assets_price_moved(&self, assets: &[Address]) -> Result<usize, RepoError> {
         let mut marked = 0;
         for a in assets {
             let o = self.repo.mark_asset_holders(
-                self.cfg.chain_id,
-                self.aave.pool,
+                self.chain_id,
+                self.pool,
                 *a,
                 DirtyReason::PriceMove,
                 None,
                 now_ns(),
-                self.cfg.fanout_limit,
+                self.fanout_limit,
             )?;
             marked += o.marked;
         }

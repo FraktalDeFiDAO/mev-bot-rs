@@ -73,9 +73,11 @@ pub struct AaveV3Adapter {
     snapshot: Mutex<Snapshot>,
     /// Aggregator -> reserves it prices, for matching price-update transactions (tag = asset).
     feed_watcher: mev_oracle::FeedWatcher<Address>,
-    /// Optional deterministic-trigger indexer (JEV-LIQ-004). `None` unless `attach_triggers` ran,
-    /// in which case `index()` behaves exactly as before.
+    /// Optional deterministic-trigger indexer (JEV-LIQ-004). `None` unless `attach_triggers` ran;
+    /// stepped by `index()` until `spawn_trigger_task` moves it into its own task.
     triggers: Option<triggers::AaveTriggerIndexer>,
+    /// Price-move marking for the sequencer path; set by `attach_triggers`.
+    price_marker: Option<triggers::PriceMarker>,
 }
 
 #[derive(Default)]
@@ -196,6 +198,7 @@ impl AaveV3Adapter {
             snapshot: Mutex::new(Snapshot::default()),
             feed_watcher,
             triggers: None,
+            price_marker: None,
         })
     }
 
@@ -217,12 +220,27 @@ impl AaveV3Adapter {
         let known: Vec<Address> = self.index.accounts().map(|(_, u)| *u).collect();
         let n = t.import_known_borrowers(&known)?;
         info!(protocol = ID, imported = n, "trigger indexer attached");
+        self.price_marker = Some(t.marker());
         self.triggers = Some(t);
         Ok(())
     }
 
     pub fn trigger_indexer(&self) -> Option<&triggers::AaveTriggerIndexer> {
         self.triggers.as_ref()
+    }
+
+    /// Move the attached indexer into its own task, stepping every `every`. A catch-up step can
+    /// take minutes; inside `index()` it held up the whole liquidation runner (sweeps, feed
+    /// handling, the shadow schedule). Price-move marking keeps working through the marker.
+    /// Returns false when no indexer is attached.
+    pub fn spawn_trigger_task(&mut self, every: Duration) -> bool {
+        match self.triggers.take() {
+            Some(t) => {
+                tokio::spawn(t.run(every));
+                true
+            }
+            None => false,
+        }
     }
 
     /// Reserves whose price a transaction to `to` (with calldata `input`) updates, found through
@@ -237,7 +255,7 @@ impl AaveV3Adapter {
     /// Mark the holders of every reserve a pending price-update transaction moves. Returns the
     /// number of immediate marks; `Ok(0)` when no indexer is attached or nothing matched.
     pub fn on_price_update_tx(&self, to: Option<Address>, input: &[u8]) -> Result<usize> {
-        let Some(t) = &self.triggers else {
+        let Some(t) = &self.price_marker else {
             return Ok(0);
         };
         let assets = self.price_update_assets(to, input);

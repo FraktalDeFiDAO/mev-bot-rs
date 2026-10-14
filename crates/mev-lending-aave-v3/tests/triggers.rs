@@ -939,3 +939,54 @@ async fn oracle_source_events_and_feed_matches_mark_asset_holders_with_bounded_f
     assert!(rep.events >= 1 && rep.marked + rep.queued >= 6);
     assert!(r.repo.dirty_entries().unwrap().len() >= before);
 }
+
+/// The indexer can live in its own task: `run` keeps stepping (new chain blocks are scanned and
+/// their borrowers registered) while a detached `PriceMarker` marks holders through the shared
+/// repository, with the same bounded fan-out as the indexer's own method.
+#[tokio::test]
+async fn indexer_runs_in_its_own_task_while_the_marker_keeps_marking() {
+    let cfg = TriggerConfig {
+        fanout_limit: 2,
+        ..tcfg(50, 40, 2)
+    };
+    let r = rig(100, vec![], cfg).await;
+    let marker = r.idx.marker();
+    let (repo, node) = (r.repo.clone(), r.node);
+    let task = tokio::spawn(r.idx.run(Duration::from_millis(20)));
+
+    let who: Vec<Address> = (1..=5u8).map(|n| a(0x40 + n)).collect();
+    repo.register_borrowers(CHAIN, POOL, &who, None, 1).unwrap();
+    assert_eq!(
+        marker.mark_assets_price_moved(&[a(R1)]).unwrap(),
+        2,
+        "bounded"
+    );
+
+    let fresh = a(0x99);
+    grow(
+        &node,
+        1,
+        101,
+        110,
+        vec![rehome("Borrow", 105, 1, 0, &[(1, a(R1)), (2, fresh)])],
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let seen = repo.borrower(CHAIN, POOL, fresh).unwrap().is_some();
+        let drained = repo.fanout_pending(CHAIN, POOL).unwrap() == 0;
+        if seen && drained {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the task never stepped (seen={seen}, drained={drained})"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    for w in &who {
+        assert!(reasons(&repo, *w).contains(&DirtyReason::PriceMove));
+    }
+    assert!(!task.is_finished(), "run never returns");
+    task.abort();
+    drop(r.dir);
+}

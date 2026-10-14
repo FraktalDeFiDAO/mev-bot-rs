@@ -3252,6 +3252,9 @@ async fn build_liquidation(
                     tcfg.reconcile_batch = cfg.liquidation_shadow.reconcile_batch.max(1);
                     let scan_name = tcfg.name.clone();
                     adapter.attach_triggers(repo.clone(), tcfg).await?;
+                    // Its own task: a catch-up step can take minutes and must not hold up the
+                    // runner (sweeps, feed handling, the shadow schedule pass).
+                    adapter.spawn_trigger_task(Duration::from_secs(5));
                     anyhow::Ok((repo, scan_name))
                 }
                 .await;
