@@ -46,6 +46,7 @@ mev-lending = { path = "crates/mev-lending" }
 mev-lending-index = { path = "crates/mev-lending-index" }
 mev-liq-state = { path = "crates/mev-liq-state" }
 mev-liq-features = { path = "crates/mev-liq-features" }
+mev-liq-sched = { path = "crates/mev-liq-sched" }
 mev-lending-spark = { path = "crates/mev-lending-spark" }
 mev-lending-radiant = { path = "crates/mev-lending-radiant" }
 mev-lending-gearbox = { path = "crates/mev-lending-gearbox" }
