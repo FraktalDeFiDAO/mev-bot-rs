@@ -8,6 +8,7 @@
 //! `eth_simulateV1` by `mev-localsim-probe` before anything trades on it.
 
 pub mod diff;
+pub mod liquidation;
 pub mod worker;
 
 use std::{

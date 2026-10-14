@@ -50,6 +50,7 @@ min_debt_usd = 20.0              # bonus on less won't cover gas
 sweep_secs = 300
 fallback_poll_secs = 30          # sequencer price-feed triggers are the fast path
 route_via = ["WETH", "USDC", "USDT"]
+# revm_shadow = false   # shadow only: also simulate the exact final calldata with REVM and log it vs eth_call (JEV-LIQ-015)
 
 [aave]
 enabled = true
