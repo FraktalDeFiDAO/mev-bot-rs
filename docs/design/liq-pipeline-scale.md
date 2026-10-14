@@ -10,8 +10,9 @@ by four orders of magnitude. This note records how the pipeline now keeps every 
 A sample of 233 stored snapshots on mainnet: 70% zero debt, 19% under $10, 11% at or above $10.
 
 - **Zero debt.** The trigger indexer's reconciliation deactivates these, and with them their dirty marks
-  (a later `Borrow` re-registers the borrower). `reconcile_batch` went from 50 to 500 per step, so the
-  backlog clears in well under an hour instead of days.
+  (a later `Borrow` re-registers the borrower). `reconcile_batch` went from 50 to 5000 per step. Until a borrower is reconciled it counts
+  as a holder of every asset, so each oracle move fans out to all unreconciled borrowers. On the
+  first Contabo run that meant 2.4M queue upserts per step, and steps took about 6 minutes.
 - **Dust** (debt < `min_debt_usd`, default $10). Re-read every `cold_max_age_seconds` (3600 s) and at once
   when an event marks them dirty. The schedule pass leaves them out unless they are dirty.
 - **Hot** (debt ≥ cutoff, or an invalidated snapshot). Carries the `max_account_age_seconds` (300 s) guarantee.
