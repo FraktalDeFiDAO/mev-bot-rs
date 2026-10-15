@@ -32,15 +32,32 @@ impl Rpc {
     /// Paid reads rotate across all `http_urls` (falling through on rate limits / provider errors);
     /// the WS connects to the first `ws_urls` entry that answers.
     pub async fn connect(http_urls: &[String], ws_urls: &[String]) -> Result<Self> {
+        Self::connect_with_fallbacks(http_urls, &[], ws_urls).await
+    }
+
+    /// Like [`Rpc::connect`], plus `http_fallbacks` (free public endpoints) that serve reads only
+    /// while every keyed endpoint fails or is rate-limited (e.g. its monthly quota is used up).
+    /// WS fallbacks go at the end of `ws_urls`: the WS fails over in order on its own.
+    pub async fn connect_with_fallbacks(
+        http_urls: &[String],
+        http_fallbacks: &[String],
+        ws_urls: &[String],
+    ) -> Result<Self> {
         anyhow::ensure!(
             !http_urls.is_empty() && !ws_urls.is_empty(),
             "need at least one HTTP and one WS URL"
         );
         let meter = RpcMeter::new();
-        let http = if http_urls.len() == 1 {
+        let http = if http_urls.len() == 1 && http_fallbacks.is_empty() {
             metered_http_provider(&http_urls[0], meter.clone())?
         } else {
-            metered_rotating_provider(http_urls, meter.clone())?
+            let client = ClientBuilder::default()
+                .layer(MeterLayer(meter.clone()))
+                .transport(
+                    RotatingTransport::http_with_fallbacks(http_urls, http_fallbacks)?,
+                    false,
+                );
+            ProviderBuilder::new().connect_client(client).erased()
         };
         let mut last_err = None;
         for (i, url) in ws_urls.iter().enumerate() {

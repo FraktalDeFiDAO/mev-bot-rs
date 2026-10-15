@@ -621,6 +621,14 @@ pub struct ChainConfig {
     pub auto_discovery: Option<AutoDiscovery>,
     /// Arbitrum sequencer feed (free, unmetered real-time tx stream).
     pub sequencer_feed: Option<String>,
+    /// Free public HTTP endpoints for the main reads, used only while every keyed
+    /// `<PREFIX>_HTTP_URL*` fails or is rate-limited (an exhausted monthly quota stopped the bot
+    /// on 2026-10-15).
+    #[serde(default)]
+    pub http_fallbacks: Vec<String>,
+    /// Free public WS endpoints, tried after the keyed `<PREFIX>_WS_URL*` ones.
+    #[serde(default)]
+    pub ws_fallbacks: Vec<String>,
     pub liquidation: Option<LiquidationConfig>,
     #[serde(default)]
     pub liquidation_shadow: LiquidationShadowConfig,
