@@ -74,6 +74,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 3 cross-community edges
 - [[docs/knowledge/communities/C047 - lib.rs (C047)|lib.rs (C047)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C098 - deployment.rs|deployment.rs]] — 2 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C176 - decode (C176)|decode (C176)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 1 cross-community edges
 - [[docs/knowledge/communities/C070 - triggers.rs|triggers.rs]] — 1 cross-community edges

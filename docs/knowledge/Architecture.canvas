@@ -163,29 +163,11 @@
       "height": 220
     },
     {
-      "id": "community-18",
-      "type": "file",
-      "file": "docs/knowledge/communities/C018 - BorrowerSnapshot.md",
-      "x": 840,
-      "y": 1200,
-      "width": 360,
-      "height": 220
-    },
-    {
-      "id": "community-19",
-      "type": "file",
-      "file": "docs/knowledge/communities/C019 - RepoError.md",
-      "x": 1260,
-      "y": 1200,
-      "width": 360,
-      "height": 220
-    },
-    {
       "id": "community-20",
       "type": "file",
       "file": "docs/knowledge/communities/C020 - Auction.md",
-      "x": 0,
-      "y": 1500,
+      "x": 840,
+      "y": 1200,
       "width": 360,
       "height": 220
     },
@@ -193,8 +175,8 @@
       "id": "community-21",
       "type": "file",
       "file": "docs/knowledge/communities/C021 - TxRecorder.md",
-      "x": 420,
-      "y": 1500,
+      "x": 1260,
+      "y": 1200,
       "width": 360,
       "height": 220
     },
@@ -202,7 +184,7 @@
       "id": "community-22",
       "type": "file",
       "file": "docs/knowledge/communities/C022 - lib.rs (C022).md",
-      "x": 840,
+      "x": 0,
       "y": 1500,
       "width": 360,
       "height": 220
@@ -211,7 +193,7 @@
       "id": "community-23",
       "type": "file",
       "file": "docs/knowledge/communities/C023 - lib.rs (C023).md",
-      "x": 1260,
+      "x": 420,
       "y": 1500,
       "width": 360,
       "height": 220
@@ -220,8 +202,8 @@
       "id": "community-24",
       "type": "file",
       "file": "docs/knowledge/communities/C024 - RuleSet.md",
-      "x": 0,
-      "y": 1800,
+      "x": 840,
+      "y": 1500,
       "width": 360,
       "height": 220
     },
@@ -229,8 +211,8 @@
       "id": "community-25",
       "type": "file",
       "file": "docs/knowledge/communities/C025 - PoolStore.md",
-      "x": 420,
-      "y": 1800,
+      "x": 1260,
+      "y": 1500,
       "width": 360,
       "height": 220
     },
@@ -238,7 +220,7 @@
       "id": "community-26",
       "type": "file",
       "file": "docs/knowledge/communities/C026 - load_ticks_at.md",
-      "x": 840,
+      "x": 0,
       "y": 1800,
       "width": 360,
       "height": 220
@@ -247,17 +229,8 @@
       "id": "community-27",
       "type": "file",
       "file": "docs/knowledge/communities/C027 - advisor.rs.md",
-      "x": 1260,
+      "x": 420,
       "y": 1800,
-      "width": 360,
-      "height": 220
-    },
-    {
-      "id": "community-28",
-      "type": "file",
-      "file": "docs/knowledge/communities/C028 - AccountRef.md",
-      "x": 0,
-      "y": 2100,
       "width": 360,
       "height": 220
     },
@@ -265,8 +238,8 @@
       "id": "community-29",
       "type": "file",
       "file": "docs/knowledge/communities/C029 - ShadowSchedule.md",
-      "x": 420,
-      "y": 2100,
+      "x": 840,
+      "y": 1800,
       "width": 360,
       "height": 220
     },
@@ -274,7 +247,25 @@
       "id": "community-30",
       "type": "file",
       "file": "docs/knowledge/communities/C030 - lib.rs (C030).md",
-      "x": 840,
+      "x": 1260,
+      "y": 1800,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-35",
+      "type": "file",
+      "file": "docs/knowledge/communities/C035 - Block.md",
+      "x": 0,
+      "y": 2100,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-19",
+      "type": "file",
+      "file": "docs/knowledge/communities/C019 - RepoError.md",
+      "x": 420,
       "y": 2100,
       "width": 360,
       "height": 220
@@ -283,7 +274,7 @@
       "id": "community-31",
       "type": "file",
       "file": "docs/knowledge/communities/C031 - resilience.rs.md",
-      "x": 1260,
+      "x": 840,
       "y": 2100,
       "width": 360,
       "height": 220
@@ -292,8 +283,8 @@
       "id": "community-32",
       "type": "file",
       "file": "docs/knowledge/communities/C032 - Pool.md",
-      "x": 0,
-      "y": 2400,
+      "x": 1260,
+      "y": 2100,
       "width": 360,
       "height": 220
     },
@@ -301,7 +292,7 @@
       "id": "community-33",
       "type": "file",
       "file": "docs/knowledge/communities/C033 - fast_feed.rs.md",
-      "x": 420,
+      "x": 0,
       "y": 2400,
       "width": 360,
       "height": 220
@@ -310,16 +301,7 @@
       "id": "community-34",
       "type": "file",
       "file": "docs/knowledge/communities/C034 - advisory.rs (C034).md",
-      "x": 840,
-      "y": 2400,
-      "width": 360,
-      "height": 220
-    },
-    {
-      "id": "community-35",
-      "type": "file",
-      "file": "docs/knowledge/communities/C035 - Block.md",
-      "x": 1260,
+      "x": 420,
       "y": 2400,
       "width": 360,
       "height": 220
@@ -328,8 +310,8 @@
       "id": "community-36",
       "type": "file",
       "file": "docs/knowledge/communities/C036 - main.rs (C036).md",
-      "x": 0,
-      "y": 2700,
+      "x": 840,
+      "y": 2400,
       "width": 360,
       "height": 220
     },
@@ -337,8 +319,8 @@
       "id": "community-37",
       "type": "file",
       "file": "docs/knowledge/communities/C037 - Medium findings.md",
-      "x": 420,
-      "y": 2700,
+      "x": 1260,
+      "y": 2400,
       "width": 360,
       "height": 220
     },
@@ -346,7 +328,7 @@
       "id": "community-38",
       "type": "file",
       "file": "docs/knowledge/communities/C038 - ManualClock.md",
-      "x": 840,
+      "x": 0,
       "y": 2700,
       "width": 360,
       "height": 220
@@ -355,7 +337,16 @@
       "id": "community-39",
       "type": "file",
       "file": "docs/knowledge/communities/C039 - AaveTriggerIndexer.md",
-      "x": 1260,
+      "x": 420,
+      "y": 2700,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-28",
+      "type": "file",
+      "file": "docs/knowledge/communities/C028 - AccountRef.md",
+      "x": 840,
       "y": 2700,
       "width": 360,
       "height": 220
@@ -364,6 +355,15 @@
       "id": "community-40",
       "type": "file",
       "file": "docs/knowledge/communities/C040 - sched.rs.md",
+      "x": 1260,
+      "y": 2700,
+      "width": 360,
+      "height": 220
+    },
+    {
+      "id": "community-113",
+      "type": "file",
+      "file": "docs/knowledge/communities/C113 - Protocol.md",
       "x": 0,
       "y": 3000,
       "width": 360,
@@ -379,10 +379,19 @@
       "height": 220
     },
     {
+      "id": "community-52",
+      "type": "file",
+      "file": "docs/knowledge/communities/C052 - lib.rs (C052).md",
+      "x": 840,
+      "y": 3000,
+      "width": 360,
+      "height": 220
+    },
+    {
       "id": "community-42",
       "type": "file",
       "file": "docs/knowledge/communities/C042 - advisory.rs (C042).md",
-      "x": 840,
+      "x": 1260,
       "y": 3000,
       "width": 360,
       "height": 220
@@ -391,8 +400,8 @@
       "id": "community-43",
       "type": "file",
       "file": "docs/knowledge/communities/C043 - RiskGuard.md",
-      "x": 1260,
-      "y": 3000,
+      "x": 0,
+      "y": 3300,
       "width": 360,
       "height": 220
     },
@@ -400,7 +409,7 @@
       "id": "community-44",
       "type": "file",
       "file": "docs/knowledge/communities/C044 - liq_shadow.rs.md",
-      "x": 0,
+      "x": 420,
       "y": 3300,
       "width": 360,
       "height": 220
@@ -409,7 +418,7 @@
       "id": "community-45",
       "type": "file",
       "file": "docs/knowledge/communities/C045 - PoolInfo.md",
-      "x": 420,
+      "x": 840,
       "y": 3300,
       "width": 360,
       "height": 220
@@ -418,15 +427,6 @@
       "id": "community-46",
       "type": "file",
       "file": "docs/knowledge/communities/C046 - event.rs.md",
-      "x": 840,
-      "y": 3300,
-      "width": 360,
-      "height": 220
-    },
-    {
-      "id": "community-47",
-      "type": "file",
-      "file": "docs/knowledge/communities/C047 - lib.rs (C047).md",
       "x": 1260,
       "y": 3300,
       "width": 360,
@@ -441,15 +441,21 @@
       "label": "75"
     },
     {
-      "id": "edge-13-28",
-      "fromNode": "community-13",
-      "toNode": "community-28",
-      "label": "55"
-    },
-    {
       "id": "edge-12-19",
       "fromNode": "community-12",
       "toNode": "community-19",
+      "label": "53"
+    },
+    {
+      "id": "edge-13-28",
+      "fromNode": "community-13",
+      "toNode": "community-28",
+      "label": "53"
+    },
+    {
+      "id": "edge-14-52",
+      "fromNode": "community-14",
+      "toNode": "community-52",
       "label": "53"
     },
     {
@@ -462,13 +468,7 @@
       "id": "edge-19-6",
       "fromNode": "community-19",
       "toNode": "community-6",
-      "label": "38"
-    },
-    {
-      "id": "edge-18-19",
-      "fromNode": "community-18",
-      "toNode": "community-19",
-      "label": "17"
+      "label": "37"
     },
     {
       "id": "edge-42-7",
@@ -495,12 +495,6 @@
       "label": "14"
     },
     {
-      "id": "edge-12-18",
-      "fromNode": "community-12",
-      "toNode": "community-18",
-      "label": "12"
-    },
-    {
       "id": "edge-15-6",
       "fromNode": "community-15",
       "toNode": "community-6",
@@ -519,12 +513,6 @@
       "label": "10"
     },
     {
-      "id": "edge-17-28",
-      "fromNode": "community-17",
-      "toNode": "community-28",
-      "label": "10"
-    },
-    {
       "id": "edge-25-32",
       "fromNode": "community-25",
       "toNode": "community-32",
@@ -537,6 +525,12 @@
       "label": "9"
     },
     {
+      "id": "edge-17-28",
+      "fromNode": "community-17",
+      "toNode": "community-28",
+      "label": "9"
+    },
+    {
       "id": "edge-26-32",
       "fromNode": "community-26",
       "toNode": "community-32",
@@ -546,12 +540,6 @@
       "id": "edge-1-23",
       "fromNode": "community-1",
       "toNode": "community-23",
-      "label": "8"
-    },
-    {
-      "id": "edge-18-7",
-      "fromNode": "community-18",
-      "toNode": "community-7",
       "label": "8"
     },
     {
@@ -573,16 +561,16 @@
       "label": "7"
     },
     {
-      "id": "edge-28-3",
-      "fromNode": "community-28",
-      "toNode": "community-3",
-      "label": "7"
-    },
-    {
       "id": "edge-12-39",
       "fromNode": "community-12",
       "toNode": "community-39",
       "label": "7"
+    },
+    {
+      "id": "edge-28-3",
+      "fromNode": "community-28",
+      "toNode": "community-3",
+      "label": "6"
     },
     {
       "id": "edge-12-40",
@@ -595,12 +583,6 @@
       "fromNode": "community-16",
       "toNode": "community-41",
       "label": "6"
-    },
-    {
-      "id": "edge-18-6",
-      "fromNode": "community-18",
-      "toNode": "community-6",
-      "label": "5"
     },
     {
       "id": "edge-13-29",
@@ -657,15 +639,9 @@
       "label": "3"
     },
     {
-      "id": "edge-18-44",
-      "fromNode": "community-18",
-      "toNode": "community-44",
-      "label": "3"
-    },
-    {
-      "id": "edge-18-40",
-      "fromNode": "community-18",
-      "toNode": "community-40",
+      "id": "edge-24-36",
+      "fromNode": "community-24",
+      "toNode": "community-36",
       "label": "3"
     },
     {
@@ -684,12 +660,6 @@
       "id": "edge-19-40",
       "fromNode": "community-19",
       "toNode": "community-40",
-      "label": "3"
-    },
-    {
-      "id": "edge-24-36",
-      "fromNode": "community-24",
-      "toNode": "community-36",
       "label": "3"
     },
     {
@@ -720,6 +690,36 @@
       "id": "edge-15-4",
       "fromNode": "community-15",
       "toNode": "community-4",
+      "label": "2"
+    },
+    {
+      "id": "edge-11-14",
+      "fromNode": "community-11",
+      "toNode": "community-14",
+      "label": "2"
+    },
+    {
+      "id": "edge-13-14",
+      "fromNode": "community-13",
+      "toNode": "community-14",
+      "label": "2"
+    },
+    {
+      "id": "edge-14-25",
+      "fromNode": "community-14",
+      "toNode": "community-25",
+      "label": "2"
+    },
+    {
+      "id": "edge-15-41",
+      "fromNode": "community-15",
+      "toNode": "community-41",
+      "label": "2"
+    },
+    {
+      "id": "edge-30-45",
+      "fromNode": "community-30",
+      "toNode": "community-45",
       "label": "2"
     }
   ]

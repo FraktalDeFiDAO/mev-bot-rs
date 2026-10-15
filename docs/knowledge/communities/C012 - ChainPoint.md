@@ -84,11 +84,12 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 53 cross-community edges
 - [[docs/knowledge/communities/C006 - Result|Result]] — 14 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 12 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 9 cross-community edges
 - [[docs/knowledge/communities/C143 - addr_of|addr_of]] — 8 cross-community edges
 - [[docs/knowledge/communities/C039 - AaveTriggerIndexer|AaveTriggerIndexer]] — 7 cross-community edges
 - [[docs/knowledge/communities/C040 - sched.rs|sched.rs]] — 6 cross-community edges
 - [[docs/knowledge/communities/C080 - index.rs|index.rs]] — 5 cross-community edges
 - [[docs/knowledge/communities/C007 - ScheduleOutput|ScheduleOutput]] — 4 cross-community edges
+- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 3 cross-community edges
 - [[docs/knowledge/communities/C071 - replay_with_policy|replay_with_policy]] — 3 cross-community edges
 - [[docs/knowledge/communities/C060 - mod.rs (C060)|mod.rs (C060)]] — 1 cross-community edges

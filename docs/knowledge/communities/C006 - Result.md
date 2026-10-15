@@ -101,13 +101,13 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 38 cross-community edges
+- [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 37 cross-community edges
 - [[docs/knowledge/communities/C012 - ChainPoint|ChainPoint]] — 14 cross-community edges
 - [[docs/knowledge/communities/C015 - Worker|Worker]] — 11 cross-community edges
 - [[docs/knowledge/communities/C027 - advisor.rs|advisor.rs]] — 11 cross-community edges
 - [[docs/knowledge/communities/C143 - addr_of|addr_of]] — 9 cross-community edges
 - [[docs/knowledge/communities/C142 - advisory_store.rs|advisory_store.rs]] — 6 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 5 cross-community edges
+- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 6 cross-community edges
 - [[docs/knowledge/communities/C107 - AdvisorSnapshot|AdvisorSnapshot]] — 2 cross-community edges
 - [[docs/knowledge/communities/C199 - reasons|reasons]] — 1 cross-community edges
 - [[docs/knowledge/communities/C024 - RuleSet|RuleSet]] — 1 cross-community edges

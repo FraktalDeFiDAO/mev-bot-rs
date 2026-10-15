@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "130"
-graphify-node-count: 19
-graphify-internal-edges: 20
+graphify-node-count: 22
+graphify-internal-edges: 23
 tags:
   - graphify/community
 ---
@@ -13,8 +13,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `graph` — 6 nodes
-- `crates/mev-lending/src/lib.rs` — 4 nodes
+- `graph` — 8 nodes
+- `crates/mev-lending/src/lib.rs` — 5 nodes
 - `crates/mev-liquidate/src/lib.rs` — 3 nodes
 - `crates/mev-lending-aave-v3/src/lib.rs` — 1 node
 - `crates/mev-lending-compound-v3/src/lib.rs` — 1 node
@@ -23,8 +23,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - `crates/mev-lending-gearbox/src/lib.rs` — 1 node
 - `crates/mev-lending-morpho/src/lib.rs` — 1 node
 
-## Nodes (19)
+## Nodes (22)
 
+- **LiquidationAdapter** — `crates/mev-lending/src/lib.rs:L65`
 - **AdapterStatus** — `crates/mev-lending/src/lib.rs:L19`
 - **feed_index()** — `crates/mev-lending/src/lib.rs:L54`
 - **lib.rs** — `crates/mev-lending/src/lib.rs:L1`
@@ -43,19 +44,21 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **HashMap** — `graph`
 - **HashSet** — `graph`
 - **K** — `graph`
+- **Send** — `graph`
+- **Sync** — `graph`
 - **Vec** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 6 cross-community edges
-- [[docs/knowledge/communities/C003 - CompoundV3Adapter|CompoundV3Adapter]] — 2 cross-community edges
-- [[docs/knowledge/communities/C121 - Adapter (C121)|Adapter (C121)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C122 - Adapter (C122)|Adapter (C122)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C013 - Runner|Runner]] — 1 cross-community edges
-- [[docs/knowledge/communities/C131 - Adapter (C131)|Adapter (C131)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C132 - Adapter (C132)|Adapter (C132)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C133 - Adapter (C133)|Adapter (C133)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C017 - AaveV3Adapter|AaveV3Adapter]] — 1 cross-community edges
-- [[docs/knowledge/communities/C053 - MorphoAdapter|MorphoAdapter]] — 1 cross-community edges
-- [[docs/knowledge/communities/C061 - FluidAdapter|FluidAdapter]] — 1 cross-community edges
+- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 8 cross-community edges
+- [[docs/knowledge/communities/C013 - Runner|Runner]] — 3 cross-community edges
+- [[docs/knowledge/communities/C003 - CompoundV3Adapter|CompoundV3Adapter]] — 3 cross-community edges
+- [[docs/knowledge/communities/C121 - Adapter (C121)|Adapter (C121)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C122 - Adapter (C122)|Adapter (C122)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C131 - Adapter (C131)|Adapter (C131)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C132 - Adapter (C132)|Adapter (C132)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C133 - Adapter (C133)|Adapter (C133)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C017 - AaveV3Adapter|AaveV3Adapter]] — 2 cross-community edges
+- [[docs/knowledge/communities/C053 - MorphoAdapter|MorphoAdapter]] — 2 cross-community edges
+- [[docs/knowledge/communities/C061 - FluidAdapter|FluidAdapter]] — 2 cross-community edges
 - [[docs/knowledge/communities/C007 - ScheduleOutput|ScheduleOutput]] — 1 cross-community edges

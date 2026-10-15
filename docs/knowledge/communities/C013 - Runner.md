@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "13"
-graphify-node-count: 57
-graphify-internal-edges: 160
+graphify-node-count: 58
+graphify-internal-edges: 161
 tags:
   - graphify/community
 ---
@@ -13,16 +13,17 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-liquidate/src/lib.rs` — 43 nodes
-- `graph` — 14 nodes
+- `crates/mev-liquidate/src/lib.rs` — 42 nodes
+- `graph` — 16 nodes
 
-## Nodes (57)
+## Nodes (58)
 
 - **Runner** — `crates/mev-liquidate/src/lib.rs:L124`
 - **lib.rs** — `crates/mev-liquidate/src/lib.rs:L1`
 - **.new()** — `crates/mev-liquidate/src/lib.rs:L154`
 - **.poll()** — `crates/mev-liquidate/src/lib.rs:L382`
 - **cfg()** — `crates/mev-liquidate/src/lib.rs:L742`
+- **Slot** — `crates/mev-liquidate/src/lib.rs:L96`
 - **shadow_for()** — `crates/mev-liquidate/src/lib.rs:L1150`
 - **Option** — `graph`
 - **RunnerEvent** — `crates/mev-liquidate/src/lib.rs:L62`
@@ -32,10 +33,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.run()** — `crates/mev-liquidate/src/lib.rs:L533`
 - **.apply_sweep()** — `crates/mev-liquidate/src/lib.rs:L332`
 - **.on_hint()** — `crates/mev-liquidate/src/lib.rs:L499`
-- **.plan()** — `crates/mev-liquidate/src/lib.rs:L841`
 - **.sweep()** — `crates/mev-liquidate/src/lib.rs:L324`
 - **one_successful_adapter_cannot_restore_another_failed_adapter()** — `crates/mev-liquidate/src/lib.rs:L919`
-- **Plan** — `graph`
 - **.invalidate()** — `crates/mev-liquidate/src/lib.rs:L206`
 - **.stamp_plan()** — `crates/mev-liquidate/src/lib.rs:L197`
 - **advisory_hook()** — `crates/mev-liquidate/src/lib.rs:L1228`
@@ -61,6 +60,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **UnboundedSender** — `graph`
 - **.index_all()** — `crates/mev-liquidate/src/lib.rs:L266`
 - **.restore_confidence()** — `crates/mev-liquidate/src/lib.rs:L216`
+- **Box** — `graph`
 - **Duration** — `graph`
 - **index_errors_back_off_instead_of_hammering()** — `crates/mev-liquidate/src/lib.rs:L896`
 - **Instant** — `graph`
@@ -68,22 +68,23 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **Self** — `graph`
 - **String** — `graph`
 - **UnboundedReceiver** — `graph`
-- **borrower()** — `crates/mev-liquidate/src/lib.rs:L805`
+- **HashMap** — `graph`
 - **Receiver** — `graph`
 - **AtomicBool** — `graph`
 - **AtomicU64** — `graph`
+- **HashSet** — `graph`
 - **T** — `graph`
 - **TempDir** — `graph`
 - **Value** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 55 cross-community edges
+- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 53 cross-community edges
 - [[docs/knowledge/communities/C137 - SequencedTx|SequencedTx]] — 5 cross-community edges
 - [[docs/knowledge/communities/C029 - ShadowSchedule|ShadowSchedule]] — 5 cross-community edges
 - [[docs/knowledge/communities/C109 - Hub|Hub]] — 3 cross-community edges
+- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 3 cross-community edges
 - [[docs/knowledge/communities/C014 - Engine|Engine]] — 2 cross-community edges
 - [[docs/knowledge/communities/C081 - Address|Address]] — 2 cross-community edges
-- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 1 cross-community edges
 - [[docs/knowledge/communities/C034 - advisory.rs (C034)|advisory.rs (C034)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C052 - lib.rs (C052)|lib.rs (C052)]] — 1 cross-community edges

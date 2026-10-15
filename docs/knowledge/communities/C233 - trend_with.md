@@ -33,8 +33,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - [[docs/knowledge/communities/C067 - features.rs (C067)|features.rs (C067)]] — 5 cross-community edges
 - [[docs/knowledge/communities/C100 - build_features|build_features]] — 4 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 3 cross-community edges
-- [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 2 cross-community edges
+- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 4 cross-community edges
 - [[docs/knowledge/communities/C048 - FeatureV1|FeatureV1]] — 2 cross-community edges
 - [[docs/knowledge/communities/C101 - repo.rs|repo.rs]] — 1 cross-community edges
 - [[docs/knowledge/communities/C173 - history.rs|history.rs]] — 1 cross-community edges
+- [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 1 cross-community edges

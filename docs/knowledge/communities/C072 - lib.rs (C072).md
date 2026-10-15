@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "72"
-graphify-node-count: 30
-graphify-internal-edges: 61
+graphify-node-count: 26
+graphify-internal-edges: 51
 tags:
   - graphify/community
 ---
@@ -13,17 +13,14 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-protocol/src/lib.rs` — 20 nodes
+- `crates/mev-protocol/src/lib.rs` — 18 nodes
 - `graph` — 6 nodes
 - `crates/mev-protocol-pancake-v3/src/lib.rs` — 1 node
 - `crates/mev-protocol-uniswap-v2/src/lib.rs` — 1 node
-- `crates/mev-protocol-uniswap-v3/src/lib.rs` — 1 node
-- `crates/mev-protocol-uniswap-v4/src/lib.rs` — 1 node
 
-## Nodes (30)
+## Nodes (26)
 
 - **lib.rs** — `crates/mev-protocol/src/lib.rs:L1`
-- **LiquidityIntent** — `crates/mev-protocol/src/lib.rs:L129`
 - **Address** — `graph`
 - **Option** — `graph`
 - **PriceUpdate** — `crates/mev-protocol/src/lib.rs:L57`
@@ -36,9 +33,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **reserves_update()** — `crates/mev-protocol/src/lib.rs:L291`
 - **U256** — `graph`
 - **addr()** — `crates/mev-protocol/src/lib.rs:L212`
-- **intent()** — `crates/mev-protocol-uniswap-v4/src/lib.rs:L39`
-- **liquidity()** — `crates/mev-protocol-uniswap-v3/src/lib.rs:L48`
-- **LiquidityAction** — `crates/mev-protocol/src/lib.rs:L121`
 - **pool_id()** — `crates/mev-protocol/src/lib.rs:L246`
 - **PoolRef** — `crates/mev-protocol/src/lib.rs:L70`
 - **PoolSet** — `crates/mev-protocol/src/lib.rs:L150`
@@ -55,11 +49,11 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C102 - EventKind|EventKind]] — 12 cross-community edges
+- [[docs/knowledge/communities/C113 - Protocol|Protocol]] — 8 cross-community edges
+- [[docs/knowledge/communities/C102 - EventKind|EventKind]] — 7 cross-community edges
 - [[docs/knowledge/communities/C103 - SwapIntent|SwapIntent]] — 5 cross-community edges
-- [[docs/knowledge/communities/C157 - UniswapV4|UniswapV4]] — 5 cross-community edges
 - [[docs/knowledge/communities/C114 - Contract|Contract]] — 4 cross-community edges
-- [[docs/knowledge/communities/C136 - Decoded|Decoded]] — 4 cross-community edges
-- [[docs/knowledge/communities/C113 - Protocol|Protocol]] — 2 cross-community edges
-- [[docs/knowledge/communities/C189 - main.rs (C189)|main.rs (C189)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C136 - Decoded|Decoded]] — 3 cross-community edges
+- [[docs/knowledge/communities/C157 - UniswapV4|UniswapV4]] — 2 cross-community edges
+- [[docs/knowledge/communities/C189 - main.rs (C189)|main.rs (C189)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C091 - events.rs|events.rs]] — 1 cross-community edges

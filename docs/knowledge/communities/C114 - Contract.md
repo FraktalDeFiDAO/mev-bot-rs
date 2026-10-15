@@ -44,14 +44,14 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Related communities
 
 - [[docs/knowledge/communities/C136 - Decoded|Decoded]] — 5 cross-community edges
+- [[docs/knowledge/communities/C113 - Protocol|Protocol]] — 4 cross-community edges
 - [[docs/knowledge/communities/C072 - lib.rs (C072)|lib.rs (C072)]] — 4 cross-community edges
-- [[docs/knowledge/communities/C102 - EventKind|EventKind]] — 2 cross-community edges
 - [[docs/knowledge/communities/C103 - SwapIntent|SwapIntent]] — 2 cross-community edges
-- [[docs/knowledge/communities/C113 - Protocol|Protocol]] — 2 cross-community edges
 - [[docs/knowledge/communities/C140 - lib.rs (C140)|lib.rs (C140)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C102 - EventKind|EventKind]] — 1 cross-community edges
 - [[docs/knowledge/communities/C115 - lib.rs (C115)|lib.rs (C115)]] — 1 cross-community edges
-- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C156 - lib.rs (C156)|lib.rs (C156)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C157 - UniswapV4|UniswapV4]] — 1 cross-community edges
 - [[docs/knowledge/communities/C165 - .decode_call|.decode_call]] — 1 cross-community edges
 - [[docs/knowledge/communities/C180 - Cow|Cow]] — 1 cross-community edges
+- [[docs/knowledge/communities/C192 - Paraswap|Paraswap]] — 1 cross-community edges

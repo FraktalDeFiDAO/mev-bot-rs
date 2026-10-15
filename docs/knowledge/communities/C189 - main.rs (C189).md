@@ -33,6 +33,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C072 - lib.rs (C072)|lib.rs (C072)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C102 - EventKind|EventKind]] — 1 cross-community edges
 - [[docs/knowledge/communities/C103 - SwapIntent|SwapIntent]] — 1 cross-community edges
 - [[docs/knowledge/communities/C136 - Decoded|Decoded]] — 1 cross-community edges
+- [[docs/knowledge/communities/C072 - lib.rs (C072)|lib.rs (C072)]] — 1 cross-community edges

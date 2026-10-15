@@ -60,9 +60,10 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - [[docs/knowledge/communities/C040 - sched.rs|sched.rs]] — 21 cross-community edges
 - [[docs/knowledge/communities/C029 - ShadowSchedule|ShadowSchedule]] — 8 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 5 cross-community edges
 - [[docs/knowledge/communities/C007 - ScheduleOutput|ScheduleOutput]] — 5 cross-community edges
+- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 3 cross-community edges
 - [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 3 cross-community edges
 - [[docs/knowledge/communities/C042 - advisory.rs (C042)|advisory.rs (C042)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C012 - ChainPoint|ChainPoint]] — 1 cross-community edges
 - [[docs/knowledge/communities/C071 - replay_with_policy|replay_with_policy]] — 1 cross-community edges

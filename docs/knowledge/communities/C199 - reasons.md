@@ -34,7 +34,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Related communities
 
 - [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C170 - AaveConfig|AaveConfig]] — 1 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 1 cross-community edges
 - [[docs/knowledge/communities/C029 - ShadowSchedule|ShadowSchedule]] — 1 cross-community edges
 - [[docs/knowledge/communities/C006 - Result|Result]] — 1 cross-community edges

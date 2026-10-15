@@ -36,5 +36,5 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 - [[docs/knowledge/communities/C040 - sched.rs|sched.rs]] — 6 cross-community edges
 - [[docs/knowledge/communities/C007 - ScheduleOutput|ScheduleOutput]] — 5 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 1 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C093 - Strategy|Strategy]] — 1 cross-community edges

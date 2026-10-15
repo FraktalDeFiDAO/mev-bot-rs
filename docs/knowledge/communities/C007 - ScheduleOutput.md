@@ -103,11 +103,11 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - [[docs/knowledge/communities/C042 - advisory.rs (C042)|advisory.rs (C042)]] — 15 cross-community edges
 - [[docs/knowledge/communities/C040 - sched.rs|sched.rs]] — 10 cross-community edges
 - [[docs/knowledge/communities/C029 - ShadowSchedule|ShadowSchedule]] — 9 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 8 cross-community edges
 - [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 8 cross-community edges
 - [[docs/knowledge/communities/C071 - replay_with_policy|replay_with_policy]] — 8 cross-community edges
 - [[docs/knowledge/communities/C179 - World|World]] — 5 cross-community edges
 - [[docs/knowledge/communities/C060 - mod.rs (C060)|mod.rs (C060)]] — 5 cross-community edges
 - [[docs/knowledge/communities/C012 - ChainPoint|ChainPoint]] — 4 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 4 cross-community edges
 - [[docs/knowledge/communities/C142 - advisory_store.rs|advisory_store.rs]] — 2 cross-community edges
-- [[docs/knowledge/communities/C105 - bad|bad]] — 1 cross-community edges

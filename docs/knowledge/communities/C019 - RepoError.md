@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "19"
-graphify-node-count: 53
-graphify-internal-edges: 157
+graphify-node-count: 48
+graphify-internal-edges: 147
 tags:
   - graphify/community
 ---
@@ -14,12 +14,12 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Source files
 
 - `crates/mev-liq-state/src/repo.rs` — 28 nodes
-- `graph` — 17 nodes
-- `crates/mev-liq-state/src/history.rs` — 6 nodes
+- `graph` — 15 nodes
+- `crates/mev-liq-state/src/history.rs` — 3 nodes
 - `crates/mev-liq-state/src/domain.rs` — 1 node
 - `crates/mev-liq-state/src/tiering.rs` — 1 node
 
-## Nodes (53)
+## Nodes (48)
 
 - **RepoError** — `crates/mev-liq-state/src/repo.rs:L86`
 - **AccountKey** — `crates/mev-liq-state/src/domain.rs:L7`
@@ -48,20 +48,15 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.invalidate_from_reorg()** — `crates/mev-liq-state/src/repo.rs:L619`
 - **.open()** — `crates/mev-liq-state/src/repo.rs:L414`
 - **.upsert_cas()** — `crates/mev-liq-state/src/repo.rs:L491`
-- **record()** — `crates/mev-liq-state/src/history.rs:L41`
 - **.migrate_up()** — `crates/mev-liq-state/src/repo.rs:L430`
 - **Vec** — `graph`
 - **.history_len()** — `crates/mev-liq-state/src/history.rs:L137`
 - **.rollback_to()** — `crates/mev-liq-state/src/repo.rs:L461`
 - **.schema_version()** — `crates/mev-liq-state/src/repo.rs:L475`
 - **DirtyTarget** — `crates/mev-liq-state/src/repo.rs:L109`
-- **history.rs** — `crates/mev-liq-state/src/history.rs:L1`
-- **prune_reorg()** — `crates/mev-liq-state/src/history.rs:L79`
-- **Result** — `graph`
 - **encode_reserves()** — `crates/mev-liq-state/src/repo.rs:L148`
 - **Option** — `graph`
 - **B256** — `graph`
-- **Connection** — `graph`
 - **Path** — `graph`
 - **SnapshotRepository** — `crates/mev-liq-state/src/history.rs:L92`
 - **Error** — `graph`
@@ -78,14 +73,14 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Related communities
 
 - [[docs/knowledge/communities/C012 - ChainPoint|ChainPoint]] — 53 cross-community edges
-- [[docs/knowledge/communities/C006 - Result|Result]] — 38 cross-community edges
+- [[docs/knowledge/communities/C006 - Result|Result]] — 37 cross-community edges
 - [[docs/knowledge/communities/C143 - addr_of|addr_of]] — 17 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 17 cross-community edges
+- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 16 cross-community edges
 - [[docs/knowledge/communities/C007 - ScheduleOutput|ScheduleOutput]] — 8 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C034 - advisory.rs (C034)|advisory.rs (C034)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C039 - AaveTriggerIndexer|AaveTriggerIndexer]] — 3 cross-community edges
 - [[docs/knowledge/communities/C040 - sched.rs|sched.rs]] — 3 cross-community edges
 - [[docs/knowledge/communities/C060 - mod.rs (C060)|mod.rs (C060)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C233 - trend_with|trend_with]] — 2 cross-community edges
 - [[docs/knowledge/communities/C071 - replay_with_policy|replay_with_policy]] — 2 cross-community edges
 - [[docs/knowledge/communities/C101 - repo.rs|repo.rs]] — 1 cross-community edges
