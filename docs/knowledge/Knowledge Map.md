@@ -16,56 +16,347 @@ than reading any of this.
 
 ## Communities
 
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 80 nodes, 164 internal edges
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 73 nodes, 173 internal edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 66 nodes, 112 internal edges
-- [[docs/knowledge/communities/C026 - lib.rs (C026)|lib.rs (C026)]] — 63 nodes, 160 internal edges
-- [[docs/knowledge/communities/C034 - Engine|Engine]] — 55 nodes, 132 internal edges
-- [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 54 nodes, 94 internal edges
-- [[docs/knowledge/communities/C000 - L2 MEV Bot — Profit-First Plan|L2 MEV Bot — Profit-First Plan]] — 43 nodes, 44 internal edges
-- [[docs/knowledge/communities/C041 - lib.rs (C041)|lib.rs (C041)]] — 41 nodes, 82 internal edges
-- [[docs/knowledge/communities/C021 - lib.rs (C021)|lib.rs (C021)]] — 37 nodes, 88 internal edges
-- [[docs/knowledge/communities/C031 - EventIndex|EventIndex]] — 35 nodes, 65 internal edges
-- [[docs/knowledge/communities/C043 - lib.rs (C043)|lib.rs (C043)]] — 33 nodes, 76 internal edges
-- [[docs/knowledge/communities/C003 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 32 nodes, 66 internal edges
-- [[docs/knowledge/communities/C039 - lib.rs (C039)|lib.rs (C039)]] — 29 nodes, 78 internal edges
-- [[docs/knowledge/communities/C051 - Adapter (C051)|Adapter (C051)]] — 25 nodes, 33 internal edges
-- [[docs/knowledge/communities/C037 - PoolInfo|PoolInfo]] — 23 nodes, 61 internal edges
-- [[docs/knowledge/communities/C028 - lib.rs (C028)|lib.rs (C028)]] — 22 nodes, 41 internal edges
-- [[docs/knowledge/communities/C027 - lib.rs (C027)|lib.rs (C027)]] — 20 nodes, 33 internal edges
-- [[docs/knowledge/communities/C029 - lib.rs (C029)|lib.rs (C029)]] — 19 nodes, 33 internal edges
-- [[docs/knowledge/communities/C042 - lib.rs (C042)|lib.rs (C042)]] — 19 nodes, 29 internal edges
-- [[docs/knowledge/communities/C045 - lib.rs (C045)|lib.rs (C045)]] — 19 nodes, 29 internal edges
-- [[docs/knowledge/communities/C044 - lib.rs (C044)|lib.rs (C044)]] — 18 nodes, 28 internal edges
-- [[docs/knowledge/communities/C046 - lib.rs (C046)|lib.rs (C046)]] — 18 nodes, 28 internal edges
-- [[docs/knowledge/communities/C020 - Simulator|Simulator]] — 16 nodes, 35 internal edges
-- [[docs/knowledge/communities/C005 - Stage 3- own node near the sequencer — trigger- 30-day profit ≥ 3× node cost AND|Stage 3: own node near the sequencer — trigger: 30-day profit ≥ 3× node cost AND shadow logs show latency is losing us trades]] — 12 nodes, 11 internal edges
-- [[docs/knowledge/communities/C040 - lib.rs (C040)|lib.rs (C040)]] — 11 nodes, 14 internal edges
-- [[docs/knowledge/communities/C010 - Contributing - Git workflow|Contributing / Git workflow]] — 10 nodes, 9 internal edges
-- [[docs/knowledge/communities/C002 - Context policy|Context policy]] — 9 nodes, 8 internal edges
-- [[docs/knowledge/communities/C024 - lib.rs (C024)|lib.rs (C024)]] — 9 nodes, 9 internal edges
-- [[docs/knowledge/communities/C004 - graphify-obsidian.mjs|graphify-obsidian.mjs]] — 8 nodes, 13 internal edges
-- [[docs/knowledge/communities/C032 - lib.rs (C032)|lib.rs (C032)]] — 7 nodes, 11 internal edges
-- [[docs/knowledge/communities/C035 - main.rs|main.rs]] — 6 nodes, 8 internal edges
-- [[docs/knowledge/communities/C048 - Adapter (C048)|Adapter (C048)]] — 6 nodes, 8 internal edges
-- [[docs/knowledge/communities/C049 - test-e2e.sh|test-e2e.sh]] — 6 nodes, 6 internal edges
-- [[docs/knowledge/communities/C011 - pull_request_template.md|pull_request_template.md]] — 5 nodes, 4 internal edges
-- [[docs/knowledge/communities/C050 - Testing|Testing]] — 5 nodes, 4 internal edges
-- [[docs/knowledge/communities/C007 - mev-bot|mev-bot]] — 5 nodes, 4 internal edges
-- [[docs/knowledge/communities/C006 - Session state|Session state]] — 4 nodes, 3 internal edges
-- [[docs/knowledge/communities/C001 - deploy-executor.sh|deploy-executor.sh]] — 3 nodes, 2 internal edges
-- [[docs/knowledge/communities/C014 - pre-commit|pre-commit]] — 3 nodes, 2 internal edges
-- [[docs/knowledge/communities/C019 - lib.rs (C019)|lib.rs (C019)]] — 3 nodes, 3 internal edges
-- [[docs/knowledge/communities/C022 - main|main]] — 3 nodes, 2 internal edges
-- [[docs/knowledge/communities/C038 - mev-scan.rs|mev-scan.rs]] — 3 nodes, 3 internal edges
-- [[docs/knowledge/communities/C047 - check.sh|check.sh]] — 3 nodes, 2 internal edges
-- [[docs/knowledge/communities/C012 - commit-msg|commit-msg]] — 2 nodes, 1 internal edges
-- [[docs/knowledge/communities/C013 - post-commit|post-commit]] — 2 nodes, 1 internal edges
-- [[docs/knowledge/communities/C015 - setup-dev.sh|setup-dev.sh]] — 2 nodes, 1 internal edges
-- [[docs/knowledge/communities/C016 - SECURITY.md|SECURITY.md]] — 2 nodes, 1 internal edges
-- [[docs/knowledge/communities/C018 - pre-push|pre-push]] — 2 nodes, 1 internal edges
-- [[docs/knowledge/communities/C036 - dev.sh|dev.sh]] — 2 nodes, 1 internal edges
-- [[docs/knowledge/communities/C052 - test-integration.sh|test-integration.sh]] — 2 nodes, 1 internal edges
-- [[docs/knowledge/communities/C008 - SUBAGENT_PREAMBLE.md|SUBAGENT_PREAMBLE.md]] — 2 nodes, 1 internal edges
-- [[docs/knowledge/communities/C009 - graph.sh|graph.sh]] — 2 nodes, 1 internal edges
-- [[docs/knowledge/communities/C017 - auto-memory-hook.mjs|auto-memory-hook.mjs]] — 1 nodes, 0 internal edges
+- [[docs/knowledge/communities/C000 - liquidation.rs|liquidation.rs]] — 111 nodes, 336 internal edges
+- [[docs/knowledge/communities/C001 - lib.rs (C001)|lib.rs (C001)]] — 101 nodes, 266 internal edges
+- [[docs/knowledge/communities/C002 - StateCache|StateCache]] — 97 nodes, 249 internal edges
+- [[docs/knowledge/communities/C003 - CompoundV3Adapter|CompoundV3Adapter]] — 94 nodes, 248 internal edges
+- [[docs/knowledge/communities/C004 - mod.rs (C004)|mod.rs (C004)]] — 86 nodes, 195 internal edges
+- [[docs/knowledge/communities/C005 - api.rs|api.rs]] — 80 nodes, 179 internal edges
+- [[docs/knowledge/communities/C006 - Result|Result]] — 79 nodes, 264 internal edges
+- [[docs/knowledge/communities/C007 - ScheduleOutput|ScheduleOutput]] — 74 nodes, 167 internal edges
+- [[docs/knowledge/communities/C008 - Metrics|Metrics]] — 71 nodes, 136 internal edges
+- [[docs/knowledge/communities/C009 - audit.rs|audit.rs]] — 69 nodes, 151 internal edges
+- [[docs/knowledge/communities/C010 - app.js|app.js]] — 65 nodes, 129 internal edges
+- [[docs/knowledge/communities/C011 - gate.rs|gate.rs]] — 62 nodes, 139 internal edges
+- [[docs/knowledge/communities/C012 - ChainPoint|ChainPoint]] — 60 nodes, 225 internal edges
+- [[docs/knowledge/communities/C013 - Runner|Runner]] — 57 nodes, 160 internal edges
+- [[docs/knowledge/communities/C014 - Engine|Engine]] — 55 nodes, 158 internal edges
+- [[docs/knowledge/communities/C015 - Worker|Worker]] — 54 nodes, 130 internal edges
+- [[docs/knowledge/communities/C016 - client.rs|client.rs]] — 54 nodes, 132 internal edges
+- [[docs/knowledge/communities/C017 - AaveV3Adapter|AaveV3Adapter]] — 53 nodes, 124 internal edges
+- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 53 nodes, 98 internal edges
+- [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 53 nodes, 157 internal edges
+- [[docs/knowledge/communities/C020 - Auction|Auction]] — 52 nodes, 99 internal edges
+- [[docs/knowledge/communities/C021 - TxRecorder|TxRecorder]] — 52 nodes, 102 internal edges
+- [[docs/knowledge/communities/C022 - lib.rs (C022)|lib.rs (C022)]] — 52 nodes, 130 internal edges
+- [[docs/knowledge/communities/C023 - lib.rs (C023)|lib.rs (C023)]] — 51 nodes, 96 internal edges
+- [[docs/knowledge/communities/C024 - RuleSet|RuleSet]] — 51 nodes, 125 internal edges
+- [[docs/knowledge/communities/C025 - PoolStore|PoolStore]] — 50 nodes, 149 internal edges
+- [[docs/knowledge/communities/C026 - load_ticks_at|load_ticks_at]] — 50 nodes, 95 internal edges
+- [[docs/knowledge/communities/C027 - advisor.rs|advisor.rs]] — 50 nodes, 153 internal edges
+- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 49 nodes, 116 internal edges
+- [[docs/knowledge/communities/C029 - ShadowSchedule|ShadowSchedule]] — 49 nodes, 96 internal edges
+- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 49 nodes, 154 internal edges
+- [[docs/knowledge/communities/C031 - resilience.rs|resilience.rs]] — 47 nodes, 195 internal edges
+- [[docs/knowledge/communities/C032 - Pool|Pool]] — 47 nodes, 141 internal edges
+- [[docs/knowledge/communities/C033 - fast_feed.rs|fast_feed.rs]] — 47 nodes, 97 internal edges
+- [[docs/knowledge/communities/C034 - advisory.rs (C034)|advisory.rs (C034)]] — 47 nodes, 115 internal edges
+- [[docs/knowledge/communities/C035 - Block|Block]] — 47 nodes, 130 internal edges
+- [[docs/knowledge/communities/C036 - main.rs (C036)|main.rs (C036)]] — 47 nodes, 132 internal edges
+- [[docs/knowledge/communities/C037 - Medium findings|Medium findings]] — 47 nodes, 46 internal edges
+- [[docs/knowledge/communities/C038 - ManualClock|ManualClock]] — 46 nodes, 78 internal edges
+- [[docs/knowledge/communities/C039 - AaveTriggerIndexer|AaveTriggerIndexer]] — 45 nodes, 154 internal edges
+- [[docs/knowledge/communities/C040 - sched.rs|sched.rs]] — 44 nodes, 133 internal edges
+- [[docs/knowledge/communities/C041 - TransportError|TransportError]] — 43 nodes, 79 internal edges
+- [[docs/knowledge/communities/C042 - advisory.rs (C042)|advisory.rs (C042)]] — 41 nodes, 117 internal edges
+- [[docs/knowledge/communities/C043 - RiskGuard|RiskGuard]] — 41 nodes, 84 internal edges
+- [[docs/knowledge/communities/C044 - liq_shadow.rs|liq_shadow.rs]] — 40 nodes, 96 internal edges
+- [[docs/knowledge/communities/C045 - PoolInfo|PoolInfo]] — 40 nodes, 64 internal edges
+- [[docs/knowledge/communities/C046 - event.rs|event.rs]] — 40 nodes, 107 internal edges
+- [[docs/knowledge/communities/C047 - lib.rs (C047)|lib.rs (C047)]] — 39 nodes, 90 internal edges
+- [[docs/knowledge/communities/C048 - FeatureV1|FeatureV1]] — 38 nodes, 63 internal edges
+- [[docs/knowledge/communities/C049 - response.rs|response.rs]] — 38 nodes, 88 internal edges
+- [[docs/knowledge/communities/C050 - lead.rs|lead.rs]] — 38 nodes, 75 internal edges
+- [[docs/knowledge/communities/C051 - Rpc|Rpc]] — 38 nodes, 98 internal edges
+- [[docs/knowledge/communities/C052 - lib.rs (C052)|lib.rs (C052)]] — 38 nodes, 79 internal edges
+- [[docs/knowledge/communities/C053 - MorphoAdapter|MorphoAdapter]] — 38 nodes, 90 internal edges
+- [[docs/knowledge/communities/C054 - transport.rs|transport.rs]] — 37 nodes, 91 internal edges
+- [[docs/knowledge/communities/C055 - Expr|Expr]] — 37 nodes, 96 internal edges
+- [[docs/knowledge/communities/C056 - engine.rs|engine.rs]] — 37 nodes, 79 internal edges
+- [[docs/knowledge/communities/C057 - v4.rs|v4.rs]] — 36 nodes, 84 internal edges
+- [[docs/knowledge/communities/C058 - exact.rs|exact.rs]] — 36 nodes, 112 internal edges
+- [[docs/knowledge/communities/C059 - JEV-LIQ-001- feed and state inventory|JEV-LIQ-001: feed and state inventory]] — 36 nodes, 35 internal edges
+- [[docs/knowledge/communities/C060 - mod.rs (C060)|mod.rs (C060)]] — 35 nodes, 72 internal edges
+- [[docs/knowledge/communities/C061 - FluidAdapter|FluidAdapter]] — 34 nodes, 87 internal edges
+- [[docs/knowledge/communities/C062 - RotatingTransport|RotatingTransport]] — 33 nodes, 56 internal edges
+- [[docs/knowledge/communities/C063 - Copper Jev Liquidation Watchlist — Implementation-Ready Rust Architecture and De|Copper Jev Liquidation Watchlist — Implementation-Ready Rust Architecture and Development Plan]] — 33 nodes, 32 internal edges
+- [[docs/knowledge/communities/C064 - registry.rs|registry.rs]] — 32 nodes, 75 internal edges
+- [[docs/knowledge/communities/C065 - RedactedFeatures|RedactedFeatures]] — 32 nodes, 54 internal edges
+- [[docs/knowledge/communities/C066 - Breaker|Breaker]] — 31 nodes, 85 internal edges
+- [[docs/knowledge/communities/C067 - features.rs (C067)|features.rs (C067)]] — 31 nodes, 50 internal edges
+- [[docs/knowledge/communities/C068 - observability.rs|observability.rs]] — 30 nodes, 59 internal edges
+- [[docs/knowledge/communities/C069 - Item|Item]] — 30 nodes, 51 internal edges
+- [[docs/knowledge/communities/C070 - triggers.rs|triggers.rs]] — 30 nodes, 77 internal edges
+- [[docs/knowledge/communities/C071 - replay_with_policy|replay_with_policy]] — 30 nodes, 56 internal edges
+- [[docs/knowledge/communities/C072 - lib.rs (C072)|lib.rs (C072)]] — 30 nodes, 61 internal edges
+- [[docs/knowledge/communities/C073 - explain.rs|explain.rs]] — 30 nodes, 69 internal edges
+- [[docs/knowledge/communities/C074 - lib.rs (C074)|lib.rs (C074)]] — 29 nodes, 56 internal edges
+- [[docs/knowledge/communities/C075 - Exposition|Exposition]] — 29 nodes, 62 internal edges
+- [[docs/knowledge/communities/C076 - e2e.rs|e2e.rs]] — 29 nodes, 71 internal edges
+- [[docs/knowledge/communities/C077 - calls.rs|calls.rs]] — 28 nodes, 80 internal edges
+- [[docs/knowledge/communities/C078 - pending.rs|pending.rs]] — 28 nodes, 65 internal edges
+- [[docs/knowledge/communities/C079 - math.rs (C079)|math.rs (C079)]] — 28 nodes, 80 internal edges
+- [[docs/knowledge/communities/C080 - index.rs|index.rs]] — 28 nodes, 117 internal edges
+- [[docs/knowledge/communities/C081 - Address|Address]] — 28 nodes, 65 internal edges
+- [[docs/knowledge/communities/C082 - Simulator|Simulator]] — 28 nodes, 67 internal edges
+- [[docs/knowledge/communities/C083 - lib.rs (C083)|lib.rs (C083)]] — 27 nodes, 58 internal edges
+- [[docs/knowledge/communities/C084 - RpcMeter|RpcMeter]] — 27 nodes, 37 internal edges
+- [[docs/knowledge/communities/C085 - quota.rs|quota.rs]] — 26 nodes, 49 internal edges
+- [[docs/knowledge/communities/C086 - lib.rs (C086)|lib.rs (C086)]] — 26 nodes, 36 internal edges
+- [[docs/knowledge/communities/C087 - Self|Self]] — 25 nodes, 36 internal edges
+- [[docs/knowledge/communities/C088 - bid.rs|bid.rs]] — 25 nodes, 52 internal edges
+- [[docs/knowledge/communities/C089 - EventIndex|EventIndex]] — 25 nodes, 51 internal edges
+- [[docs/knowledge/communities/C090 - replay|replay]] — 25 nodes, 99 internal edges
+- [[docs/knowledge/communities/C091 - events.rs|events.rs]] — 24 nodes, 53 internal edges
+- [[docs/knowledge/communities/C092 - event_line|event_line]] — 23 nodes, 45 internal edges
+- [[docs/knowledge/communities/C093 - Strategy|Strategy]] — 23 nodes, 43 internal edges
+- [[docs/knowledge/communities/C094 - report|report]] — 23 nodes, 38 internal edges
+- [[docs/knowledge/communities/C095 - lib.rs (C095)|lib.rs (C095)]] — 23 nodes, 49 internal edges
+- [[docs/knowledge/communities/C100 - build_features|build_features]] — 22 nodes, 57 internal edges
+- [[docs/knowledge/communities/C101 - repo.rs|repo.rs]] — 22 nodes, 43 internal edges
+- [[docs/knowledge/communities/C102 - EventKind|EventKind]] — 22 nodes, 36 internal edges
+- [[docs/knowledge/communities/C103 - SwapIntent|SwapIntent]] — 22 nodes, 74 internal edges
+- [[docs/knowledge/communities/C104 - CycleIndex|CycleIndex]] — 22 nodes, 48 internal edges
+- [[docs/knowledge/communities/C105 - bad|bad]] — 22 nodes, 49 internal edges
+- [[docs/knowledge/communities/C106 - System Audit — mev-bot|System Audit — mev-bot]] — 22 nodes, 21 internal edges
+- [[docs/knowledge/communities/C096 - decode_check.rs|decode_check.rs]] — 22 nodes, 40 internal edges
+- [[docs/knowledge/communities/C097 - lib.rs (C097)|lib.rs (C097)]] — 22 nodes, 44 internal edges
+- [[docs/knowledge/communities/C098 - deployment.rs|deployment.rs]] — 22 nodes, 43 internal edges
+- [[docs/knowledge/communities/C099 - math.rs (C099)|math.rs (C099)]] — 22 nodes, 55 internal edges
+- [[docs/knowledge/communities/C107 - AdvisorSnapshot|AdvisorSnapshot]] — 21 nodes, 39 internal edges
+- [[docs/knowledge/communities/C108 - ChainConfig|ChainConfig]] — 21 nodes, 48 internal edges
+- [[docs/knowledge/communities/C109 - Hub|Hub]] — 21 nodes, 26 internal edges
+- [[docs/knowledge/communities/C110 - nonce.rs|nonce.rs]] — 21 nodes, 44 internal edges
+- [[docs/knowledge/communities/C111 - scanner.rs|scanner.rs]] — 21 nodes, 38 internal edges
+- [[docs/knowledge/communities/C112 - fake_node.rs|fake_node.rs]] — 21 nodes, 36 internal edges
+- [[docs/knowledge/communities/C113 - Protocol|Protocol]] — 21 nodes, 24 internal edges
+- [[docs/knowledge/communities/C114 - Contract|Contract]] — 21 nodes, 33 internal edges
+- [[docs/knowledge/communities/C115 - lib.rs (C115)|lib.rs (C115)]] — 21 nodes, 45 internal edges
+- [[docs/knowledge/communities/C116 - cache.rs|cache.rs]] — 20 nodes, 43 internal edges
+- [[docs/knowledge/communities/C117 - mod.rs (C117)|mod.rs (C117)]] — 20 nodes, 36 internal edges
+- [[docs/knowledge/communities/C118 - jev-advisor.md|jev-advisor.md]] — 20 nodes, 27 internal edges
+- [[docs/knowledge/communities/C119 - chain|chain]] — 20 nodes, 41 internal edges
+- [[docs/knowledge/communities/C120 - lib.rs (C120)|lib.rs (C120)]] — 20 nodes, 42 internal edges
+- [[docs/knowledge/communities/C121 - Adapter (C121)|Adapter (C121)]] — 20 nodes, 30 internal edges
+- [[docs/knowledge/communities/C122 - Adapter (C122)|Adapter (C122)]] — 20 nodes, 30 internal edges
+- [[docs/knowledge/communities/C123 - tiering.rs|tiering.rs]] — 20 nodes, 56 internal edges
+- [[docs/knowledge/communities/C124 - lib.rs (C124)|lib.rs (C124)]] — 20 nodes, 44 internal edges
+- [[docs/knowledge/communities/C125 - stream_once|stream_once]] — 20 nodes, 28 internal edges
+- [[docs/knowledge/communities/C126 - names.rs|names.rs]] — 20 nodes, 37 internal edges
+- [[docs/knowledge/communities/C127 - store.rs|store.rs]] — 20 nodes, 49 internal edges
+- [[docs/knowledge/communities/C128 - Advisory-only (no page)|Advisory-only (no page)]] — 20 nodes, 19 internal edges
+- [[docs/knowledge/communities/C129 - config.rs (C129)|config.rs (C129)]] — 19 nodes, 38 internal edges
+- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 19 nodes, 20 internal edges
+- [[docs/knowledge/communities/C131 - Adapter (C131)|Adapter (C131)]] — 19 nodes, 29 internal edges
+- [[docs/knowledge/communities/C132 - Adapter (C132)|Adapter (C132)]] — 19 nodes, 29 internal edges
+- [[docs/knowledge/communities/C133 - Adapter (C133)|Adapter (C133)]] — 19 nodes, 27 internal edges
+- [[docs/knowledge/communities/C134 - bands.rs|bands.rs]] — 19 nodes, 30 internal edges
+- [[docs/knowledge/communities/C135 - pool_events|pool_events]] — 19 nodes, 27 internal edges
+- [[docs/knowledge/communities/C136 - Decoded|Decoded]] — 19 nodes, 26 internal edges
+- [[docs/knowledge/communities/C137 - SequencedTx|SequencedTx]] — 19 nodes, 28 internal edges
+- [[docs/knowledge/communities/C138 - browser.test.js|browser.test.js]] — 19 nodes, 22 internal edges
+- [[docs/knowledge/communities/C139 - MetricsInner|MetricsInner]] — 18 nodes, 25 internal edges
+- [[docs/knowledge/communities/C140 - lib.rs (C140)|lib.rs (C140)]] — 18 nodes, 32 internal edges
+- [[docs/knowledge/communities/C141 - ClassRegistry|ClassRegistry]] — 18 nodes, 30 internal edges
+- [[docs/knowledge/communities/C142 - advisory_store.rs|advisory_store.rs]] — 18 nodes, 29 internal edges
+- [[docs/knowledge/communities/C143 - addr_of|addr_of]] — 18 nodes, 41 internal edges
+- [[docs/knowledge/communities/C144 - Capture|Capture]] — 18 nodes, 24 internal edges
+- [[docs/knowledge/communities/C145 - decode (C145)|decode (C145)]] — 18 nodes, 31 internal edges
+- [[docs/knowledge/communities/C146 - v4_bots.rs|v4_bots.rs]] — 18 nodes, 40 internal edges
+- [[docs/knowledge/communities/C147 - prepare|prepare]] — 17 nodes, 20 internal edges
+- [[docs/knowledge/communities/C148 - created.rs|created.rs]] — 17 nodes, 25 internal edges
+- [[docs/knowledge/communities/C149 - Sender|Sender]] — 17 nodes, 24 internal edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 17 nodes, 22 internal edges
+- [[docs/knowledge/communities/C151 - Task- Sequencer-first, block-reconciled MEV engine for Arbitrum One|Task: Sequencer-first, block-reconciled MEV engine for Arbitrum One]] — 17 nodes, 16 internal edges
+- [[docs/knowledge/communities/C152 - config.rs (C152)|config.rs (C152)]] — 16 nodes, 21 internal edges
+- [[docs/knowledge/communities/C153 - mod.rs (C153)|mod.rs (C153)]] — 16 nodes, 24 internal edges
+- [[docs/knowledge/communities/C154 - Secret|Secret]] — 16 nodes, 27 internal edges
+- [[docs/knowledge/communities/C155 - LocalStats|LocalStats]] — 16 nodes, 18 internal edges
+- [[docs/knowledge/communities/C156 - lib.rs (C156)|lib.rs (C156)]] — 16 nodes, 27 internal edges
+- [[docs/knowledge/communities/C157 - UniswapV4|UniswapV4]] — 16 nodes, 26 internal edges
+- [[docs/knowledge/communities/C158 - Ratio|Ratio]] — 16 nodes, 38 internal edges
+- [[docs/knowledge/communities/C159 - Lit|Lit]] — 16 nodes, 24 internal edges
+- [[docs/knowledge/communities/C160 - JEV-LIQ-015 - REVM exact-call liquidation simulation and Aave fork evidence|JEV-LIQ-015 - REVM exact-call liquidation simulation and Aave fork evidence]] — 16 nodes, 15 internal edges
+- [[docs/knowledge/communities/C161 - Design- sequencer-first, block-reconciled engine (Phase 1)|Design: sequencer-first, block-reconciled engine (Phase 1)]] — 16 nodes, 15 internal edges
+- [[docs/knowledge/communities/C162 - assemble|assemble]] — 15 nodes, 27 internal edges
+- [[docs/knowledge/communities/C163 - Opportunity|Opportunity]] — 15 nodes, 40 internal edges
+- [[docs/knowledge/communities/C164 - Maint|Maint]] — 15 nodes, 23 internal edges
+- [[docs/knowledge/communities/C165 - .decode_call|.decode_call]] — 15 nodes, 21 internal edges
+- [[docs/knowledge/communities/C166 - decode (C166)|decode (C166)]] — 15 nodes, 31 internal edges
+- [[docs/knowledge/communities/C167 - catalogue.rs|catalogue.rs]] — 15 nodes, 29 internal edges
+- [[docs/knowledge/communities/C168 - bench.rs|bench.rs]] — 15 nodes, 33 internal edges
+- [[docs/knowledge/communities/C169 - .new|.new]] — 14 nodes, 24 internal edges
+- [[docs/knowledge/communities/C170 - AaveConfig|AaveConfig]] — 14 nodes, 20 internal edges
+- [[docs/knowledge/communities/C171 - Fees|Fees]] — 14 nodes, 31 internal edges
+- [[docs/knowledge/communities/C172 - poll_logs|poll_logs]] — 14 nodes, 18 internal edges
+- [[docs/knowledge/communities/C173 - history.rs|history.rs]] — 14 nodes, 29 internal edges
+- [[docs/knowledge/communities/C174 - parse_strict|parse_strict]] — 14 nodes, 34 internal edges
+- [[docs/knowledge/communities/C175 - features.rs (C175)|features.rs (C175)]] — 13 nodes, 17 internal edges
+- [[docs/knowledge/communities/C176 - decode (C176)|decode (C176)]] — 13 nodes, 18 internal edges
+- [[docs/knowledge/communities/C177 - topic_address|topic_address]] — 13 nodes, 12 internal edges
+- [[docs/knowledge/communities/C178 - advisory_policy|advisory_policy]] — 13 nodes, 22 internal edges
+- [[docs/knowledge/communities/C179 - World|World]] — 13 nodes, 17 internal edges
+- [[docs/knowledge/communities/C180 - Cow|Cow]] — 13 nodes, 19 internal edges
+- [[docs/knowledge/communities/C181 - L2 MEV Bot — Profit-First Plan|L2 MEV Bot — Profit-First Plan]] — 13 nodes, 12 internal edges
+- [[docs/knowledge/communities/C182 - Simulation engine- audit (Phase 0) and roadmap|Simulation engine: audit (Phase 0) and roadmap]] — 13 nodes, 12 internal edges
+- [[docs/knowledge/communities/C183 - Arbitrum MEV Live Intel — 2026-10-06 (afternoon session)|Arbitrum MEV Live Intel — 2026-10-06 (afternoon session)]] — 13 nodes, 12 internal edges
+- [[docs/knowledge/communities/C184 - arbitrum-snapshot-init.py|arbitrum-snapshot-init.py]] — 13 nodes, 25 internal edges
+- [[docs/knowledge/communities/C185 - Usage|Usage]] — 12 nodes, 11 internal edges
+- [[docs/knowledge/communities/C186 - main (C186)|main (C186)]] — 12 nodes, 14 internal edges
+- [[docs/knowledge/communities/C187 - isolation.rs|isolation.rs]] — 12 nodes, 21 internal edges
+- [[docs/knowledge/communities/C188 - main.rs (C188)|main.rs (C188)]] — 12 nodes, 17 internal edges
+- [[docs/knowledge/communities/C189 - main.rs (C189)|main.rs (C189)]] — 12 nodes, 20 internal edges
+- [[docs/knowledge/communities/C190 - now_secs|now_secs]] — 12 nodes, 18 internal edges
+- [[docs/knowledge/communities/C191 - continuity.rs|continuity.rs]] — 12 nodes, 15 internal edges
+- [[docs/knowledge/communities/C192 - Paraswap|Paraswap]] — 12 nodes, 14 internal edges
+- [[docs/knowledge/communities/C193 - Seed|Seed]] — 12 nodes, 16 internal edges
+- [[docs/knowledge/communities/C194 - Domain reports|Domain reports]] — 12 nodes, 11 internal edges
+- [[docs/knowledge/communities/C195 - JEV-LIQ-010- retry, breaker, quota, cache around the Jev transport|JEV-LIQ-010: retry, breaker, quota, cache around the Jev transport]] — 12 nodes, 11 internal edges
+- [[docs/knowledge/communities/C196 - JEV-LIQ-011- advisory policy validation (shadow only)|JEV-LIQ-011: advisory policy validation (shadow only)]] — 12 nodes, 11 internal edges
+- [[docs/knowledge/communities/C197 - Progress- sequencer-first engine|Progress: sequencer-first engine]] — 12 nodes, 11 internal edges
+- [[docs/knowledge/communities/C198 - TipBook|TipBook]] — 11 nodes, 14 internal edges
+- [[docs/knowledge/communities/C199 - reasons|reasons]] — 11 nodes, 15 internal edges
+- [[docs/knowledge/communities/C200 - exposition.rs|exposition.rs]] — 11 nodes, 19 internal edges
+- [[docs/knowledge/communities/C201 - AaveV3|AaveV3]] — 11 nodes, 13 internal edges
+- [[docs/knowledge/communities/C202 - CamelotRouter|CamelotRouter]] — 11 nodes, 12 internal edges
+- [[docs/knowledge/communities/C203 - Kyber|Kyber]] — 11 nodes, 12 internal edges
+- [[docs/knowledge/communities/C204 - cost_microusd|cost_microusd]] — 11 nodes, 21 internal edges
+- [[docs/knowledge/communities/C205 - spawn|spawn]] — 11 nodes, 13 internal edges
+- [[docs/knowledge/communities/C206 - JEV-LIQ-012- async advisor worker (Process B)|JEV-LIQ-012: async advisor worker (Process B)]] — 11 nodes, 10 internal edges
+- [[docs/knowledge/communities/C207 - JEV-LIQ-013- metrics, traces, dashboards, runbooks|JEV-LIQ-013: metrics, traces, dashboards, runbooks]] — 11 nodes, 10 internal edges
+- [[docs/knowledge/communities/C208 - Runbook- Experiment 0, does the paid Fast Feed lead the free feed-|Runbook: Experiment 0, does the paid Fast Feed lead the free feed?]] — 11 nodes, 10 internal edges
+- [[docs/knowledge/communities/C209 - Contributing - Git workflow|Contributing / Git workflow]] — 10 nodes, 9 internal edges
+- [[docs/knowledge/communities/C210 - aggregate|aggregate]] — 10 nodes, 15 internal edges
+- [[docs/knowledge/communities/C211 - CompoundV3|CompoundV3]] — 10 nodes, 11 internal edges
+- [[docs/knowledge/communities/C212 - decode (C212)|decode (C212)]] — 10 nodes, 17 internal edges
+- [[docs/knowledge/communities/C213 - What we watch, what we decode, and what is missing|What we watch, what we decode, and what is missing]] — 10 nodes, 9 internal edges
+- [[docs/knowledge/communities/C214 - Infrastructure & Cost Plan|Infrastructure & Cost Plan]] — 10 nodes, 9 internal edges
+- [[docs/knowledge/communities/C215 - Live cutover- audited revision (H01 - M11)|Live cutover: audited revision (H01 / M11)]] — 10 nodes, 9 internal edges
+- [[docs/knowledge/communities/C216 - provision-arbitrum-node.sh|provision-arbitrum-node.sh]] — 10 nodes, 16 internal edges
+- [[docs/knowledge/communities/C217 - fast-feed-ticket.sh|fast-feed-ticket.sh]] — 10 nodes, 18 internal edges
+- [[docs/knowledge/communities/C218 - Context policy|Context policy]] — 9 nodes, 8 internal edges
+- [[docs/knowledge/communities/C219 - run|run]] — 9 nodes, 12 internal edges
+- [[docs/knowledge/communities/C220 - lib.rs (C220)|lib.rs (C220)]] — 9 nodes, 14 internal edges
+- [[docs/knowledge/communities/C221 - decode (C221)|decode (C221)]] — 9 nodes, 13 internal edges
+- [[docs/knowledge/communities/C222 - decode (C222)|decode (C222)]] — 9 nodes, 14 internal edges
+- [[docs/knowledge/communities/C223 - Arbitrum One facts (verified against docs.arbitrum.io on 2026-10-07)|Arbitrum One facts (verified against docs.arbitrum.io on 2026-10-07)]] — 9 nodes, 8 internal edges
+- [[docs/knowledge/communities/C224 - JEV-LIQ-001 — Repository inventory and baseline|JEV-LIQ-001 — Repository inventory and baseline]] — 9 nodes, 8 internal edges
+- [[docs/knowledge/communities/C225 - JEV-LIQ-008- transactional outbox and advisor storage|JEV-LIQ-008: transactional outbox and advisor storage]] — 9 nodes, 8 internal edges
+- [[docs/knowledge/communities/C226 - README.md (C226)|README.md (C226)]] — 9 nodes, 11 internal edges
+- [[docs/knowledge/communities/C227 - nitro-start.sh|nitro-start.sh]] — 9 nodes, 8 internal edges
+- [[docs/knowledge/communities/C228 - fast-feed-vault.sh|fast-feed-vault.sh]] — 9 nodes, 12 internal edges
+- [[docs/knowledge/communities/C229 - project-coverage.py|project-coverage.py]] — 9 nodes, 9 internal edges
+- [[docs/knowledge/communities/C230 - OperatorGuards|OperatorGuards]] — 9 nodes, 14 internal edges
+- [[docs/knowledge/communities/C231 - check|check]] — 8 nodes, 10 internal edges
+- [[docs/knowledge/communities/C232 - LogGuard|LogGuard]] — 8 nodes, 8 internal edges
+- [[docs/knowledge/communities/C233 - trend_with|trend_with]] — 8 nodes, 7 internal edges
+- [[docs/knowledge/communities/C234 - PresimStats|PresimStats]] — 8 nodes, 8 internal edges
+- [[docs/knowledge/communities/C235 - money.rs|money.rs]] — 8 nodes, 11 internal edges
+- [[docs/knowledge/communities/C236 - output.rs|output.rs]] — 8 nodes, 10 internal edges
+- [[docs/knowledge/communities/C237 - Audit of the existing bot against the sequencer-first spec (Phase 1)|Audit of the existing bot against the sequencer-first spec (Phase 1)]] — 8 nodes, 7 internal edges
+- [[docs/knowledge/communities/C238 - One crate per protocol|One crate per protocol]] — 8 nodes, 7 internal edges
+- [[docs/knowledge/communities/C239 - Move the bot to AWS us-east-2 (next to the Arbitrum sequencer)|Move the bot to AWS us-east-2 (next to the Arbitrum sequencer)]] — 8 nodes, 7 internal edges
+- [[docs/knowledge/communities/C240 - Arbitrum bot contract candidates — 2026-10-06|Arbitrum bot contract candidates — 2026-10-06]] — 8 nodes, 7 internal edges
+- [[docs/knowledge/communities/C241 - Atlas - Chainlink SVR solver- optional, off, ready to switch on|Atlas / Chainlink SVR solver: optional, off, ready to switch on]] — 8 nodes, 7 internal edges
+- [[docs/knowledge/communities/C242 - graphify-obsidian.mjs|graphify-obsidian.mjs]] — 8 nodes, 13 internal edges
+- [[docs/knowledge/communities/C243 - run.sh|run.sh]] — 8 nodes, 14 internal edges
+- [[docs/knowledge/communities/C244 - Session state|Session state]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C245 - mev-bot (C245)|mev-bot (C245)]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C246 - RawSecret|RawSecret]] — 7 nodes, 7 internal edges
+- [[docs/knowledge/communities/C247 - lib.rs (C247)|lib.rs (C247)]] — 7 nodes, 10 internal edges
+- [[docs/knowledge/communities/C248 - Args|Args]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C249 - pass_cost.rs|pass_cost.rs]] — 7 nodes, 11 internal edges
+- [[docs/knowledge/communities/C250 - pools (C250)|pools (C250)]] — 7 nodes, 7 internal edges
+- [[docs/knowledge/communities/C251 - pools (C251)|pools (C251)]] — 7 nodes, 7 internal edges
+- [[docs/knowledge/communities/C252 - decode (C252)|decode (C252)]] — 7 nodes, 8 internal edges
+- [[docs/knowledge/communities/C253 - Audit evidence — 11 October 2026|Audit evidence — 11 October 2026]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C254 - JEV-LIQ-006 — Pure baseline replay|JEV-LIQ-006 — Pure baseline replay]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C255 - CLI Coder Handoff — Jev Liquidation Watchlist|CLI Coder Handoff — Jev Liquidation Watchlist]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C256 - Arbitrum ecosystem coverage- what we watch, what we miss, and the order to close|Arbitrum ecosystem coverage: what we watch, what we miss, and the order to close it]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C257 - JEV-LIQ-005 deterministic mandatory scheduler|JEV-LIQ-005 deterministic mandatory scheduler]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C258 - JEV-LIQ-007- feature contract, provenance and leakage guards|JEV-LIQ-007: feature contract, provenance and leakage guards]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C259 - Liquidation snapshot pipeline at full scale|Liquidation snapshot pipeline at full scale]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C260 - Stage 3- own node near the sequencer — trigger- 30-day profit ≥ 3× node cost AND|Stage 3: own node near the sequencer — trigger: 30-day profit ≥ 3× node cost AND shadow logs show latency is losing us trades]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C261 - Arbitrum bot contracts and opportunities — 2026-10-06|Arbitrum bot contracts and opportunities — 2026-10-06]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C262 - seqscope- filter and decode the Arbitrum sequencer feed|seqscope: filter and decode the Arbitrum sequencer feed]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C263 - arbitrum-status|arbitrum-status]] — 7 nodes, 8 internal edges
+- [[docs/knowledge/communities/C264 - Arbitrum One Nitro node|Arbitrum One Nitro node]] — 7 nodes, 6 internal edges
+- [[docs/knowledge/communities/C265 - test-e2e-crash.sh|test-e2e-crash.sh]] — 7 nodes, 9 internal edges
+- [[docs/knowledge/communities/C266 - test-e2e-liquidation.sh|test-e2e-liquidation.sh]] — 7 nodes, 9 internal edges
+- [[docs/knowledge/communities/C267 - Context|Context]] — 6 nodes, 5 internal edges
+- [[docs/knowledge/communities/C268 - script_for|script_for]] — 6 nodes, 10 internal edges
+- [[docs/knowledge/communities/C269 - applying_a_real_modify_liquidity_log_reproduces_the_managers_liquidity|applying_a_real_modify_liquidity_log_reproduces_the_managers_liquidity]] — 6 nodes, 6 internal edges
+- [[docs/knowledge/communities/C270 - crash.rs|crash.rs]] — 6 nodes, 9 internal edges
+- [[docs/knowledge/communities/C271 - JEV-LIQ-004 event dependency indexing|JEV-LIQ-004 event dependency indexing]] — 6 nodes, 5 internal edges
+- [[docs/knowledge/communities/C272 - Efficiency and profitability audit (2026-10-05)|Efficiency and profitability audit (2026-10-05)]] — 6 nodes, 5 internal edges
+- [[docs/knowledge/communities/C273 - Profit analysis, 2026-10-10 (evidence- `events--.jsonl` on mev-ohio, 2026-10-08 |Profit analysis, 2026-10-10 (evidence: `events-*.jsonl` on mev-ohio, 2026-10-08 to 10-10)]] — 6 nodes, 5 internal edges
+- [[docs/knowledge/communities/C274 - Standing invariants- Arbitrum sequencer-first MEV engine|Standing invariants: Arbitrum sequencer-first MEV engine]] — 6 nodes, 5 internal edges
+- [[docs/knowledge/communities/C275 - teardown-arbitrum-node.sh|teardown-arbitrum-node.sh]] — 6 nodes, 8 internal edges
+- [[docs/knowledge/communities/C276 - atlas-solver.sh|atlas-solver.sh]] — 6 nodes, 8 internal edges
+- [[docs/knowledge/communities/C277 - liq-view.sh|liq-view.sh]] — 6 nodes, 7 internal edges
+- [[docs/knowledge/communities/C278 - test-e2e.sh|test-e2e.sh]] — 6 nodes, 6 internal edges
+- [[docs/knowledge/communities/C279 - test-revm-liquidation-fork.sh|test-revm-liquidation-fork.sh]] — 6 nodes, 6 internal edges
+- [[docs/knowledge/communities/C280 - chain_state|chain_state]] — 5 nodes, 5 internal edges
+- [[docs/knowledge/communities/C281 - .submission_guard_for|.submission_guard_for]] — 5 nodes, 7 internal edges
+- [[docs/knowledge/communities/C282 - binary|binary]] — 5 nodes, 6 internal edges
+- [[docs/knowledge/communities/C283 - mev_rpc_provider|mev_rpc_provider]] — 5 nodes, 6 internal edges
+- [[docs/knowledge/communities/C284 - decode (C284)|decode (C284)]] — 5 nodes, 5 internal edges
+- [[docs/knowledge/communities/C285 - decode (C285)|decode (C285)]] — 5 nodes, 5 internal edges
+- [[docs/knowledge/communities/C286 - decode (C286)|decode (C286)]] — 5 nodes, 5 internal edges
+- [[docs/knowledge/communities/C287 - tx|tx]] — 5 nodes, 5 internal edges
+- [[docs/knowledge/communities/C288 - guard|guard]] — 5 nodes, 6 internal edges
+- [[docs/knowledge/communities/C289 - JEV-LIQ-009- TypeSafe REST client and model validation|JEV-LIQ-009: TypeSafe REST client and model validation]] — 5 nodes, 4 internal edges
+- [[docs/knowledge/communities/C290 - Testing|Testing]] — 5 nodes, 4 internal edges
+- [[docs/knowledge/communities/C291 - pull_request_template.md|pull_request_template.md]] — 5 nodes, 4 internal edges
+- [[docs/knowledge/communities/C292 - mev-bot (C292)|mev-bot (C292)]] — 5 nodes, 4 internal edges
+- [[docs/knowledge/communities/C293 - mutation-check-seqscope.sh|mutation-check-seqscope.sh]] — 5 nodes, 8 internal edges
+- [[docs/knowledge/communities/C294 - test-seqscope-ui.sh|test-seqscope-ui.sh]] — 5 nodes, 4 internal edges
+- [[docs/knowledge/communities/C295 - venue-coverage.py|venue-coverage.py]] — 5 nodes, 4 internal edges
+- [[docs/knowledge/communities/C296 - verify-decoder.py|verify-decoder.py]] — 5 nodes, 5 internal edges
+- [[docs/knowledge/communities/C297 - decode (C297)|decode (C297)]] — 4 nodes, 4 internal edges
+- [[docs/knowledge/communities/C298 - Pool_flat|Pool_flat]] — 4 nodes, 4 internal edges
+- [[docs/knowledge/communities/C299 - .add_collector|.add_collector]] — 4 nodes, 3 internal edges
+- [[docs/knowledge/communities/C300 - sqrt_price_after|sqrt_price_after]] — 4 nodes, 4 internal edges
+- [[docs/knowledge/communities/C301 - Cargo Workspace Layout|Cargo Workspace Layout]] — 4 nodes, 3 internal edges
+- [[docs/knowledge/communities/C302 - Decision Log|Decision Log]] — 4 nodes, 3 internal edges
+- [[docs/knowledge/communities/C303 - bootstrap-arbitrum-node.sh|bootstrap-arbitrum-node.sh]] — 4 nodes, 3 internal edges
+- [[docs/knowledge/communities/C304 - cleanup-arbitrum-retained-volume.sh|cleanup-arbitrum-retained-volume.sh]] — 4 nodes, 4 internal edges
+- [[docs/knowledge/communities/C305 - resources.sh|resources.sh]] — 4 nodes, 3 internal edges
+- [[docs/knowledge/communities/C306 - reason|reason]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C307 - mev-analyze.rs|mev-analyze.rs]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C308 - main (C308)|main (C308)]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C309 - main (C309)|main (C309)]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C310 - mev-scan.rs|mev-scan.rs]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C311 - main (C311)|main (C311)]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C312 - forwarders.rs|forwarders.rs]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C313 - generate.py|generate.py]] — 3 nodes, 3 internal edges
+- [[docs/knowledge/communities/C314 - main (C314)|main (C314)]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C315 - .fmt|.fmt]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C316 - get|get]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C317 - manifest.json (C317)|manifest.json (C317)]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C318 - manifest.json (C318)|manifest.json (C318)]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C319 - allow-targets.sh|allow-targets.sh]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C320 - check.sh|check.sh]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C321 - deploy-executor.sh|deploy-executor.sh]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C322 - pre-commit|pre-commit]] — 3 nodes, 2 internal edges
+- [[docs/knowledge/communities/C323 - SUBAGENT_PREAMBLE.md|SUBAGENT_PREAMBLE.md]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C324 - README.md (C324)|README.md (C324)]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C325 - arbitrum-activate.sh|arbitrum-activate.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C326 - migrate-arbitrum-volume-host.sh|migrate-arbitrum-volume-host.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C327 - deploy.sh|deploy.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C328 - dev.sh|dev.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C329 - commit-msg|commit-msg]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C330 - post-commit|post-commit]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C331 - pre-push|pre-push]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C332 - graph.sh|graph.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C333 - install-watchdog.sh|install-watchdog.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C334 - promtool.sh|promtool.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C335 - report.sh|report.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C336 - seqscope.sh|seqscope.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C337 - setup-dev.sh|setup-dev.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C338 - test-integration.sh|test-integration.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C339 - test-seqscope.sh|test-seqscope.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C340 - watchdog.sh|watchdog.sh]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C341 - SECURITY.md|SECURITY.md]] — 2 nodes, 1 internal edges
+- [[docs/knowledge/communities/C342 - auto-memory-hook.mjs|auto-memory-hook.mjs]] — 1 nodes, 0 internal edges
+- [[docs/knowledge/communities/C343 - lib.rs (C343)|lib.rs (C343)]] — 1 nodes, 0 internal edges
