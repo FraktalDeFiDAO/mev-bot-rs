@@ -7,7 +7,7 @@
 //! anything the feed misses. Liquidatable accounts are planned by their adapter and sent out.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -105,7 +105,18 @@ struct Slot {
     /// After an index error, don't retry before this (exponential backoff; rate limits).
     index_retry_at: Option<Instant>,
     index_backoff: Duration,
+    /// Accounts whose last sweep read showed debt below `min_debt_usd` (repaid or dust): left out
+    /// of sweeps except every `DORMANT_FULL_EVERY`-th, which reads everything again.
+    dormant: HashSet<AccountRef>,
+    /// Sweeps attempted, to schedule the full ones.
+    sweeps: u64,
 }
+
+/// Every this-many sweeps reads every account, dormant ones included (12 x 300 s = hourly).
+/// Most indexed borrowers have repaid (70% of Aave's 188k had zero debt, 2026-10-14), and an
+/// account cannot borrow straight into liquidation, so an hourly re-read is enough to wake one;
+/// the full sweep of every account every 300 s was most of the bot's RPC volume.
+const DORMANT_FULL_EVERY: u64 = 12;
 
 const INDEX_BACKOFF_MIN: Duration = Duration::from_secs(15);
 const INDEX_BACKOFF_MAX: Duration = Duration::from_secs(600);
@@ -160,6 +171,8 @@ impl Runner {
                 burst_feeds: Vec::new(),
                 index_retry_at: None,
                 index_backoff: INDEX_BACKOFF_MIN,
+                dormant: HashSet::new(),
+                sweeps: 0,
             });
         }
         info!(
@@ -291,8 +304,8 @@ impl Runner {
         self.invalidate(&picked);
         let jobs = picked.iter().map(|&i| {
             let s = &self.slots[i];
+            let accounts = sweep_set(s);
             async move {
-                let accounts = s.adapter.accounts();
                 let res = s.adapter.health(&accounts, false).await;
                 (i, accounts.len(), res)
             }
@@ -310,7 +323,7 @@ impl Runner {
     #[cfg(test)]
     async fn sweep(&mut self, i: usize) {
         self.invalidate(&[i]);
-        let accounts = self.slots[i].adapter.accounts();
+        let accounts = sweep_set(&self.slots[i]);
         let res = self.slots[i].adapter.health(&accounts, false).await;
         self.apply_sweep(i, accounts.len(), res);
     }
@@ -324,10 +337,21 @@ impl Runner {
             Ok(hs)
         });
         self.slots[i].reconciled = res.is_ok();
+        self.slots[i].sweeps += 1;
         self.restore_confidence();
         let id = self.slots[i].adapter.id();
         match res {
             Ok(hs) => {
+                let min_debt = self.cfg.min_debt_usd;
+                let dormant = &mut self.slots[i].dormant;
+                for h in &hs {
+                    if h.debt_usd < min_debt {
+                        dormant.insert(h.account);
+                    } else {
+                        dormant.remove(&h.account);
+                    }
+                }
+                let dormant = dormant.len();
                 let at_risk: HashMap<AccountRef, Health> = hs
                     .into_iter()
                     .filter(|h| h.health_factor < self.cfg.at_risk_hf && self.worth_watching(h))
@@ -337,6 +361,7 @@ impl Runner {
                 info!(
                     protocol = id,
                     accounts,
+                    dormant,
                     at_risk = at_risk.len(),
                     liquidatable,
                     "sweep"
@@ -587,6 +612,16 @@ impl Runner {
     }
 }
 
+/// The accounts one sweep of `s` reads: all of them on a full sweep, else the non-dormant ones.
+fn sweep_set(s: &Slot) -> Vec<AccountRef> {
+    let all = s.adapter.accounts();
+    if s.sweeps.is_multiple_of(DORMANT_FULL_EVERY) {
+        all
+    } else {
+        all.into_iter().filter(|a| !s.dormant.contains(a)).collect()
+    }
+}
+
 async fn recv_feed(rx: &mut Option<mpsc::Receiver<SequencedTx>>) -> Option<SequencedTx> {
     match rx {
         Some(r) => r.recv().await,
@@ -759,6 +794,102 @@ mod tests {
         fn assets(&self) -> Vec<Address> {
             vec![]
         }
+    }
+
+    /// Ten borrowers with settable debt; records how many accounts each sweep read.
+    struct Population {
+        debt: Arc<Mutex<Vec<f64>>>,
+        reads: Arc<Mutex<Vec<usize>>>,
+    }
+
+    fn borrower(n: u8) -> AccountRef {
+        AccountRef {
+            market: Address::ZERO,
+            account: Address::with_last_byte(n),
+            sub_id: 0,
+        }
+    }
+
+    #[async_trait]
+    impl LiquidationAdapter for Population {
+        fn id(&self) -> ProtocolId {
+            "population"
+        }
+        fn status(&self) -> AdapterStatus {
+            AdapterStatus::Live
+        }
+        async fn index(&mut self) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+        fn accounts(&self) -> Vec<AccountRef> {
+            (0..10).map(borrower).collect()
+        }
+        async fn health(&self, a: &[AccountRef], fast: bool) -> anyhow::Result<Vec<Health>> {
+            if !fast {
+                self.reads.lock().unwrap().push(a.len());
+            }
+            let debt = self.debt.lock().unwrap();
+            Ok(a.iter()
+                .map(|x| Health {
+                    account: *x,
+                    health_factor: 2.0,
+                    debt_usd: debt[usize::from(x.account.as_slice()[19])],
+                    collateral_usd: 1_000.0,
+                })
+                .collect())
+        }
+        async fn plan(&self, _h: &Health, _e: Address) -> anyhow::Result<Option<Plan>> {
+            Ok(None)
+        }
+        fn price_feeds(&self) -> Vec<Address> {
+            vec![]
+        }
+        fn targets(&self) -> Vec<Address> {
+            vec![]
+        }
+        fn assets(&self) -> Vec<Address> {
+            vec![]
+        }
+    }
+
+    #[tokio::test]
+    async fn sweeps_skip_dormant_accounts_except_the_periodic_full_one() {
+        // 0..7 repaid or dust (< $20), 7..10 real debt.
+        let debt = Arc::new(Mutex::new(vec![
+            0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 19.9, 100.0, 500.0, 20.0,
+        ]));
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        let mut r = Runner::new(
+            cfg(),
+            vec![Box::new(Population {
+                debt: debt.clone(),
+                reads: reads.clone(),
+            })],
+        );
+        r.sweep_all(None).await;
+        r.sweep_all(None).await;
+        assert_eq!(
+            *reads.lock().unwrap(),
+            vec![10, 3],
+            "first is full, then only debt"
+        );
+        assert_eq!(r.slots[0].dormant.len(), 7);
+        // A dormant borrower takes a loan: seen again on the next full sweep, not before.
+        debt.lock().unwrap()[0] = 1_000.0;
+        for _ in 2..DORMANT_FULL_EVERY {
+            r.sweep_all(None).await;
+        }
+        r.sweep_all(None).await; // sweep number DORMANT_FULL_EVERY: full
+        r.sweep_all(None).await;
+        let got = reads.lock().unwrap().clone();
+        let n = got.len();
+        assert!(got[2..n - 2].iter().all(|&x| x == 3), "{got:?}");
+        assert_eq!(
+            &got[n - 2..],
+            &[10, 4],
+            "woken by the full sweep, then kept"
+        );
+        assert!(!r.slots[0].dormant.contains(&borrower(0)));
     }
 
     #[tokio::test]

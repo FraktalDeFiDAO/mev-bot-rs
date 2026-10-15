@@ -68,11 +68,10 @@ max_account_age_seconds = 300
 min_debt_usd = 10
 cold_max_age_seconds = 3600
 max_unknown_per_pass = 2000
-# Per trigger step. Unreconciled borrowers count as holders of every asset, so until they are
-# reconciled each oracle move fans out to all of them (2.4M queue upserts, ~6 min per step on
-# Contabo, 2026-10-14). 5000 clears the 188k backlog in ~40 steps (2 x 5000 calls per step,
-# 50 aggregate3 requests).
-reconcile_batch = 5000
+# Per trigger step. The indexer steps every 5 s in its own task (#145), so 500 reconciles ~6k
+# borrowers a minute (the 188k backlog in ~30 min) at ~60 aggregate3 requests a minute on the
+# fast endpoint. 5000 (#143) was for 8-26 min steps on the runner loop and would hammer it now.
+reconcile_batch = 500
 census_seconds = 60
 tick_ms = 5000
 
