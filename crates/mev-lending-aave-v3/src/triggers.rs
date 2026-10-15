@@ -406,9 +406,12 @@ impl AaveTriggerIndexer {
 
     /// Seed the registry from accounts the legacy `Borrow` index already knows (idempotent).
     /// They are marked `Discovered` and have no dependency set yet.
+    /// Import the legacy index's borrowers at startup. Only new ones are registered: a borrower
+    /// reconciliation deactivated stays inactive (re-registering all ~188k on every restart undid
+    /// reconciliation and restored the full price fan-out, 2026-10-15).
     pub fn import_known_borrowers(&self, borrowers: &[Address]) -> Result<usize, RepoError> {
         self.repo
-            .register_borrowers(self.cfg.chain_id, self.aave.pool, borrowers, None, now_ns())
+            .import_borrowers(self.cfg.chain_id, self.aave.pool, borrowers, now_ns())
     }
 
     async fn canonical_point(&self, number: u64) -> Result<ChainPoint> {

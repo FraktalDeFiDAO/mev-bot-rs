@@ -268,3 +268,28 @@ fn migration_5_rolls_back_and_reapplies() {
     let r = SnapshotRepository::open(&path).unwrap();
     assert_eq!(r.schema_version().unwrap(), SCHEMA_VERSION);
 }
+
+#[test]
+fn startup_import_adds_new_borrowers_and_keeps_deactivated_ones_inactive() {
+    let (_d, r) = repo();
+    population(&r); // 8 was reconciled without debt: inactive, no marks
+    let new = who(9);
+    let n = r
+        .import_borrowers(CHAIN, pool(), &[who(1), who(8), new], NOW)
+        .unwrap();
+    assert_eq!(n, 1, "only the unseen borrower is new");
+    let eight = r.borrower(CHAIN, pool(), who(8)).unwrap().unwrap();
+    assert!(!eight.active, "a deactivated borrower stays inactive");
+    assert!(r.borrower(CHAIN, pool(), new).unwrap().unwrap().active);
+    let dirty: Vec<Address> = r
+        .dirty_entries()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.key.borrower)
+        .collect();
+    assert!(dirty.contains(&new) && !dirty.contains(&who(8)));
+    // A live event still brings a returning borrower back.
+    r.register_borrowers(CHAIN, pool(), &[who(8)], None, NOW)
+        .unwrap();
+    assert!(r.borrower(CHAIN, pool(), who(8)).unwrap().unwrap().active);
+}
