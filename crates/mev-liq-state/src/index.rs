@@ -977,6 +977,41 @@ impl SnapshotRepository {
         Ok(n)
     }
 
+    /// Register borrowers this repository has never seen (marked `Discovered`); a borrower it
+    /// already knows is left exactly as it is, including one reconciliation deactivated. For
+    /// bulk imports from another index at startup; a live event uses `register_borrowers`,
+    /// which also reactivates a returning borrower. Returns how many were new.
+    pub fn import_borrowers(
+        &self,
+        chain_id: u64,
+        pool: Address,
+        borrowers: &[Address],
+        now_ns: u64,
+    ) -> Result<usize, RepoError> {
+        let mut c = self.conn();
+        let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut n = 0;
+        for b in borrowers {
+            let k = key(chain_id, pool, *b);
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO borrowers(chain_id,pool,borrower,active,discovered_block,discovered_hash,discovered_ns)
+                 VALUES(?1,?2,?3,1,0,NULL,?4)",
+                params![
+                    i64_of(chain_id, "chain_id")?,
+                    pool.as_slice(),
+                    b.as_slice(),
+                    i64_of(now_ns, "now_ns")?
+                ],
+            )?;
+            if inserted == 1 {
+                mark_at(&tx, &k, DirtyReason::Discovered, now_ns, None)?;
+                n += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
     pub fn borrower(
         &self,
         chain_id: u64,
