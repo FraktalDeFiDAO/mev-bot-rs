@@ -404,7 +404,10 @@ impl Engine {
             "Atlas bidding lacks verified escrow settlement and is unavailable"
         );
         info!(chain = cfg.name, ?mode, "starting");
-        let rpc = Rpc::connect(&secrets.http_urls(), &secrets.ws_urls()).await?;
+        let mut ws_urls = secrets.ws_urls();
+        ws_urls.extend(cfg.ws_fallbacks.iter().cloned());
+        let rpc = Rpc::connect_with_fallbacks(&secrets.http_urls(), &cfg.http_fallbacks, &ws_urls)
+            .await?;
         let usd = cfg.token(&cfg.usd_token)?;
         let native = cfg.token(&cfg.native_token)?;
 

@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "23"
-graphify-node-count: 54
-graphify-internal-edges: 94
+graphify-node-count: 51
+graphify-internal-edges: 96
 tags:
   - graphify/community
 ---
@@ -13,71 +13,69 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
+- `crates/seqscope-store/src/lib.rs` — 28 nodes
 - `graph` — 21 nodes
-- `crates/mev-exec/src/lib.rs` — 18 nodes
-- `crates/mev-types/src/lib.rs` — 10 nodes
-- `crates/mev-bindings/src/lib.rs` — 5 nodes
+- `crates/seqscope-store/examples/load.rs` — 2 nodes
 
-## Nodes (54)
+## Nodes (51)
 
-- **Sender** — `crates/mev-exec/src/lib.rs:L23`
-- **Opportunity** — `crates/mev-types/src/lib.rs:L69`
-- **PoolInfo** — `crates/mev-types/src/lib.rs:L34`
-- **lib.rs** — `crates/mev-exec/src/lib.rs:L1`
-- **Hop** — `crates/mev-types/src/lib.rs:L58`
-- **.send_calldata()** — `crates/mev-exec/src/lib.rs:L102`
-- **.send_liquidation()** — `crates/mev-exec/src/lib.rs:L90`
-- **futures_join_all()** — `crates/mev-exec/src/lib.rs:L223`
-- **liquidate_calldata()** — `crates/mev-exec/src/lib.rs:L211`
+- **lib.rs** — `crates/seqscope-store/src/lib.rs:L1`
+- **Ingest** — `crates/seqscope-store/src/lib.rs:L217`
+- **Writer** — `crates/seqscope-store/src/lib.rs:L246`
+- **.spawn()** — `crates/seqscope-store/src/lib.rs:L252`
 - **Result** — `graph`
-- **.new()** — `crates/mev-exec/src/lib.rs:L43`
-- **.send()** — `crates/mev-exec/src/lib.rs:L73`
-- **lib.rs** — `crates/mev-types/src/lib.rs:L1`
-- **.sign_and_broadcast()** — `crates/mev-exec/src/lib.rs:L125`
-- **.wait()** — `crates/mev-exec/src/lib.rs:L164`
-- **Address** — `graph`
-- **execute_calldata()** — `crates/mev-exec/src/lib.rs:L200`
-- **PoolKind** — `crates/mev-types/src/lib.rs:L8`
-- **TxHash** — `graph`
-- **U256** — `graph`
+- **Stats** — `crates/seqscope-store/src/lib.rs:L160`
+- **.query()** — `crates/seqscope-store/src/lib.rs:L410`
+- **Query** — `crates/seqscope-store/src/lib.rs:L357`
+- **SqlResult** — `crates/seqscope-store/src/lib.rs:L376`
+- **String** — `graph`
+- **open_rw()** — `crates/seqscope-store/src/lib.rs:L81`
+- **Option** — `graph`
+- **prune()** — `crates/seqscope-store/src/lib.rs:L557`
+- **Reader** — `crates/seqscope-store/src/lib.rs:L383`
+- **WriterConfig** — `crates/seqscope-store/src/lib.rs:L196`
+- **hex_blob()** — `crates/seqscope-store/src/lib.rs:L97`
+- **hex_decode()** — `crates/seqscope-store/src/lib.rs:L104`
+- **insert()** — `crates/seqscope-store/src/lib.rs:L118`
+- **StatsSnapshot** — `crates/seqscope-store/src/lib.rs:L173`
+- **.open()** — `crates/seqscope-store/src/lib.rs:L389`
+- **.shutdown()** — `crates/seqscope-store/src/lib.rs:L331`
+- **.sql()** — `crates/seqscope-store/src/lib.rs:L499`
+- **Path** — `graph`
 - **Vec** — `graph`
-- **Landed** — `crates/mev-exec/src/lib.rs:L34`
-- **lib.rs** — `crates/mev-bindings/src/lib.rs:L1`
-- **.eth_balance()** — `crates/mev-exec/src/lib.rs:L68`
-- **hop_and_call_conversions_preserve_fields()** — `crates/mev-bindings/src/lib.rs:L162`
-- **is_nonce_error()** — `crates/mev-exec/src/lib.rs:L191`
-- **liquidate_calldata_decodes_to_the_plan()** — `crates/mev-exec/src/lib.rs:L283`
-- **to_sol_call()** — `crates/mev-bindings/src/lib.rs:L144`
-- **to_sol_hop()** — `crates/mev-bindings/src/lib.rs:L133`
-- **.has()** — `crates/mev-types/src/lib.rs:L51`
-- **.other()** — `crates/mev-types/src/lib.rs:L43`
-- **Address** — `graph`
-- **DynProvider** — `graph`
-- **execute_calldata_decodes_to_the_opportunity()** — `crates/mev-exec/src/lib.rs:L263`
-- **hop()** — `crates/mev-exec/src/lib.rs:L239`
-- **.hop_kind()** — `crates/mev-types/src/lib.rs:L23`
+- **.default()** — `crates/seqscope-store/src/lib.rs:L206`
+- **.drop()** — `crates/seqscope-store/src/lib.rs:L344`
+- **.snapshot()** — `crates/seqscope-store/src/lib.rs:L183`
+- **.stats()** — `crates/seqscope-store/src/lib.rs:L240`
+- **AsRef** — `graph`
+- **Connection** — `graph`
+- **disk_bytes()** — `crates/seqscope-store/src/lib.rs:L565`
+- **StoreError** — `crates/seqscope-store/src/lib.rs:L34`
+- **.ingest()** — `crates/seqscope-store/src/lib.rs:L325`
+- **.send()** — `crates/seqscope-store/src/lib.rs:L226`
+- **Arc** — `graph`
+- **hex_encode()** — `crates/seqscope-store/src/lib.rs:L113`
+- **main()** — `crates/seqscope-store/examples/load.rs:L11`
+- **AtomicBool** — `graph`
 - **AtomicU64** — `graph`
+- **Default** — `graph`
+- **Drop** — `graph`
 - **Duration** — `graph`
 - **Error** — `graph`
-- **EthereumWallet** — `graph`
-- **F** — `graph`
-- **hop_kinds_match_executor_constants()** — `crates/mev-types/src/lib.rs:L86`
-- **IntoIterator** — `graph`
-- **Item** — `graph`
-- **liquidate_calldata_round_trips_through_the_abi()** — `crates/mev-bindings/src/lib.rs:L202`
-- **Option** — `graph`
-- **Output** — `graph`
-- **pool_info_other_and_has()** — `crates/mev-types/src/lib.rs:L96`
-- **recognizes_nonce_errors_from_nodes()** — `crates/mev-exec/src/lib.rs:L251`
+- **Into** — `graph`
+- **JoinHandle** — `graph`
+- **load.rs** — `crates/seqscope-store/examples/load.rs:L1`
+- **Mutex** — `graph`
+- **PathBuf** — `graph`
 - **Self** — `graph`
-- **String** — `graph`
-- **String** — `graph`
-- **U256** — `graph`
-- **Vec** — `graph`
+- **SyncSender** — `graph`
+- **Value** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C033 - lib.rs (C033)|lib.rs (C033)]] — 8 cross-community edges
-- [[docs/knowledge/communities/C034 - Engine|Engine]] — 8 cross-community edges
-- [[docs/knowledge/communities/C025 - lib.rs (C025)|lib.rs (C025)]] — 4 cross-community edges
-- [[docs/knowledge/communities/C030 - lib.rs (C030)|lib.rs (C030)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C001 - lib.rs (C001)|lib.rs (C001)]] — 8 cross-community edges
+- [[docs/knowledge/communities/C024 - RuleSet|RuleSet]] — 5 cross-community edges
+- [[docs/knowledge/communities/C199 - reasons|reasons]] — 2 cross-community edges
+- [[docs/knowledge/communities/C127 - store.rs|store.rs]] — 1 cross-community edges
+- [[docs/knowledge/communities/C005 - api.rs|api.rs]] — 1 cross-community edges
+- [[docs/knowledge/communities/C007 - ScheduleOutput|ScheduleOutput]] — 1 cross-community edges

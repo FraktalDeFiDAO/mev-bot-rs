@@ -621,6 +621,14 @@ pub struct ChainConfig {
     pub auto_discovery: Option<AutoDiscovery>,
     /// Arbitrum sequencer feed (free, unmetered real-time tx stream).
     pub sequencer_feed: Option<String>,
+    /// Free public HTTP endpoints for the main reads, used only while every keyed
+    /// `<PREFIX>_HTTP_URL*` fails or is rate-limited (an exhausted monthly quota stopped the bot
+    /// on 2026-10-15).
+    #[serde(default)]
+    pub http_fallbacks: Vec<String>,
+    /// Free public WS endpoints, tried after the keyed `<PREFIX>_WS_URL*` ones.
+    #[serde(default)]
+    pub ws_fallbacks: Vec<String>,
     pub liquidation: Option<LiquidationConfig>,
     #[serde(default)]
     pub liquidation_shadow: LiquidationShadowConfig,
@@ -846,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn liquidation_shadow_defaults_off_and_arbitrum_runs_it_bounded() {
+    fn liquidation_shadow_defaults_off_and_arbitrum_bounds_it() {
         let d = LiquidationShadowConfig::default();
         assert!(!d.enabled && d.snapshot_db.is_none());
         assert_eq!(
@@ -855,11 +863,12 @@ mod tests {
         );
         let e: LiquidationShadowConfig = toml::from_str("enabled = true").unwrap();
         assert!(e.enabled && e.max_account_age_seconds == 300);
-        // On: every input of a pass is bounded (dust cutoff, unknowns per pass, batched reads).
-        let c = ChainConfig::load(&repo_config())
-            .unwrap()
-            .liquidation_shadow;
-        assert!(c.enabled);
+        // Off while the bot runs on free public RPCs (it duplicates the runner's sweeps); when
+        // turned on, every input of a pass is bounded (dust cutoff, unknowns per pass, batched reads).
+        let chain = ChainConfig::load(&repo_config()).unwrap();
+        let c = chain.liquidation_shadow;
+        assert!(!c.enabled);
+        assert!(!chain.http_fallbacks.is_empty() && !chain.ws_fallbacks.is_empty());
         assert!(c.min_debt_usd > 0 && c.cold_max_age_seconds >= c.max_account_age_seconds);
         assert!(c.max_unknown_per_pass > 0 && c.max_unknown_per_pass <= 10_000);
         assert!(c.recheck_batch > 1 && c.reconcile_batch > 0);

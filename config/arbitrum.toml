@@ -5,6 +5,13 @@ balancer_vault = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
 sequencer_rpc = "https://arb1-sequencer.arbitrum.io/rpc"
 # Real-time stream of sequenced txs (free; ~0.9 s ahead of RPC receipts).
 sequencer_feed = "wss://arb1.arbitrum.io/feed"
+# Free public endpoints for the main reads, used only while every keyed ARBITRUM_HTTP_URL* fails or is
+# rate-limited; a quota-refusing endpoint is skipped for 60 s. Keyed monthly quotas ran out on 2026-10-15 and
+# the bot could not bootstrap. All answered an Aave eth_call on 2026-10-15 (meowrpc, 1rpc, ankr did not).
+http_fallbacks = ["https://arbitrum.gateway.tenderly.co", "https://arbitrum-one.public.blastapi.io", "https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com", "https://arb-pokt.nodies.app", "https://arbitrum.api.onfinality.io/public", "https://arbitrum.drpc.org"]
+# Tried after the keyed ARBITRUM_WS_URL*; both accepted an eth_subscribe for logs on 2026-10-15 (PublicNode and
+# BlastAPI did not answer).
+ws_fallbacks = ["wss://arbitrum.drpc.org", "wss://arbitrum.gateway.tenderly.co"]
 min_pool_liquidity_usd = 2500.0   # was 5000: thin long-tail pools are where few bots look
 max_cycles = 200000               # was 100000, 20000 before: a wider pool set means more triangles; the cap still bounds search memory
 gas_limit_estimate = 1500000
@@ -59,7 +66,7 @@ route_via = ["WETH", "USDC", "USDT"]
 # is refreshed hourly or on events, hot accounts every max_account_age_seconds, all through
 # batched Multicall3 reads pinned at one block. (deploy-20261014-030250 ran the unbounded version
 # out of memory on the 2 GB host.)
-enabled = true
+enabled = false   # off while the bot runs on free public RPCs: it re-reads accounts the liquidation runner already sweeps (1,200-2,200 calls/min with it on, 2026-10-15). Shadow-only; never plans or sends.
 # snapshot_db = "<data-dir>/liq-state.sqlite"   # default
 recheck_concurrency = 2          # batches in flight
 recheck_batch = 200              # accounts per batch = 4 aggregate3 requests
