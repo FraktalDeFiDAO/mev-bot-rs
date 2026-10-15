@@ -4,6 +4,10 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {ArbExecutor} from "../src/ArbExecutor.sol";
 
+interface IERC20Bal {
+    function balanceOf(address) external view returns (uint256);
+}
+
 interface IERC20V4 {
     function balanceOf(address) external view returns (uint256);
     function transfer(address, uint256) external returns (bool);
@@ -43,6 +47,12 @@ contract UniswapV4ForkTest is Test {
 
     function setUp() public {
         vm.createSelectFork(vm.envOr("ARBITRUM_HTTP_URL", string("https://arb1.arbitrum.io/rpc")));
+        // The live Balancer vault holds only a few thousand USDC on Arbitrum (7,940 on 2026-10-15),
+        // under several flash amounts below, so tests failed with BAL#528 as liquidity drifted.
+        // Flash loans only check the vault's token balances: top them up so these tests exercise
+        // the executor, not Balancer's current liquidity.
+        deal(USDC, VAULT, IERC20Bal(USDC).balanceOf(VAULT) + 1_000_000e6);
+        deal(WETH, VAULT, IERC20Bal(WETH).balanceOf(VAULT) + 1_000 ether);
         vm.startPrank(owner);
         h = new V4Harness(VAULT, WETH, receiver);
         h.setPoolManager(POOL_MANAGER);
