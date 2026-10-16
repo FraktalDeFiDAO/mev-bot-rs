@@ -12,6 +12,8 @@
 #   scripts/run.sh stop             stop and remove the container
 #   scripts/run.sh advisor-start    build + start the Jev advisor (shadow; needs secrets/typesafe_api_key, mode 0600)
 #   scripts/run.sh advisor-stop | advisor-status | advisor-logs
+#   scripts/run.sh base-shadow      start the Base bot (shadow only, public RPCs, no .env) next to Arbitrum
+#   scripts/run.sh base-stop | base-status | base-logs
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export UID
@@ -92,7 +94,35 @@ advisor_start() {
   echo "advisor started (shadow) — 'scripts/run.sh advisor-logs' to follow"
 }
 
+BASE_CTR=mev-bot-base
+BOT_IMAGE=localhost/mev-bot:dev
+
+# Base runs shadow only (DECISIONS #175): public endpoints from config/base.toml, no secrets, no
+# signer. Plain `podman run` like the advisor so the Arbitrum bot's compose service is untouched.
+base_start() {
+  mkdir -p data/base
+  podman image exists "$BOT_IMAGE" || compose build bot >/dev/null
+  podman rm -f "$BASE_CTR" >/dev/null 2>&1 || true
+  podman run -d --name "$BASE_CTR" --network host \
+    --userns keep-id --user "$(id -u):$(id -g)" \
+    --read-only --tmpfs /tmp:rw,nosuid,nodev,size=16m \
+    --security-opt no-new-privileges:true --cap-drop ALL --pids-limit 128 --memory 1g \
+    --restart always \
+    --health-cmd 'test $(( $(date +%s) - $(cat /var/lib/mev-bot/base/heartbeat 2>/dev/null || echo 0) )) -lt 180' \
+    --health-interval 60s --health-timeout 5s --health-retries 3 --health-start-period 120s \
+    -e RUST_LOG="${RUST_LOG:-info}" -e NO_COLOR=1 \
+    -v "$PWD/data:/var/lib/mev-bot:Z" -v "$PWD/config:/app/config:ro,Z" \
+    "$BOT_IMAGE" --mode shadow --config /app/config/base.toml >/dev/null
+  echo "Base bot started (shadow) — 'scripts/run.sh base-logs' to follow"
+}
+
 case "${1:-}" in
+  base-shadow)    base_start ;;
+  base-stop)      podman stop -t 20 "$BASE_CTR" && podman rm "$BASE_CTR" ;;
+  base-status)
+    podman ps -a --filter name=$BASE_CTR --format '{{.Names}}  {{.Status}}'
+    podman logs --tail 300 "$BASE_CTR" 2>&1 | grep -E "sweep protocol|summary|ERROR|WARN" | grep -v "WS connection" | tail -6 || true ;;
+  base-logs)      podman logs -f "$BASE_CTR" ;;
   advisor-start)  advisor_start ;;
   advisor-stop)   podman stop -t 20 "$ADVISOR_CTR" && podman rm "$ADVISOR_CTR" ;;
   advisor-status)
@@ -127,5 +157,5 @@ case "${1:-}" in
     fi
     rm -f "$STOP_FILE" && echo "kill switch off" ;;
   stop)   compose down ;;
-  *) sed -n '2,14p' "$0"; exit 2 ;;
+  *) sed -n '2,16p' "$0"; exit 2 ;;
 esac
