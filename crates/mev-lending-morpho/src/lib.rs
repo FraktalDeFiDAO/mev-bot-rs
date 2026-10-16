@@ -91,6 +91,10 @@ pub struct MorphoAdapter {
     feed_signs: HashMap<Address, Vec<(u64, f64)>>,
     /// Backrun prediction state, refreshed by sweeps and moved by each predicted update.
     snapshot: Mutex<Snapshot>,
+    /// Markets (short ids) whose state could not be read on the last sweep (oracle reverts, loan
+    /// decimals unknown): their borrowers are left out of `accounts()`, so one broken market does
+    /// not fail every sweep. Re-probed on each sweep; logged when the set changes.
+    unpriced: Mutex<HashSet<u64>>,
 }
 
 #[derive(Default)]
@@ -134,6 +138,7 @@ impl MorphoAdapter {
             feeds: HashMap::new(),
             feed_signs: HashMap::new(),
             snapshot: Mutex::new(Snapshot::default()),
+            unpriced: Mutex::new(HashSet::new()),
         };
         let ids: Vec<B256> = me.market_ids();
         me.load_params(&ids).await?;
@@ -335,6 +340,7 @@ impl LiquidationAdapter for MorphoAdapter {
 
     fn accounts(&self) -> Vec<AccountRef> {
         let morpho = self.cfg.morpho;
+        let unpriced = self.unpriced.lock().unwrap().clone();
         self.index
             .accounts()
             .map(|(id, u)| AccountRef {
@@ -342,6 +348,7 @@ impl LiquidationAdapter for MorphoAdapter {
                 account: *u,
                 sub_id: short_id(id),
             })
+            .filter(|a| !unpriced.contains(&a.sub_id))
             .collect()
     }
 
@@ -360,13 +367,30 @@ impl LiquidationAdapter for MorphoAdapter {
             .iter()
             .filter_map(|a| by_short.get(&a.sub_id).map(|id| (*a, *id)))
             .collect();
-        let ids: Vec<B256> = pairs
-            .iter()
-            .map(|(_, id)| *id)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
+        let mut ids: HashSet<B256> = pairs.iter().map(|(_, id)| *id).collect();
+        let was_unpriced = self.unpriced.lock().unwrap().clone();
+        if !fast {
+            // Re-probe markets left out last time so they rejoin once readable.
+            ids.extend(was_unpriced.iter().filter_map(|s| by_short.get(s)));
+        }
+        let ids: Vec<B256> = ids.into_iter().collect();
         let states = self.market_states(p, &ids).await?;
+        if !fast {
+            let now: HashSet<u64> = ids
+                .iter()
+                .filter(|id| !states.contains_key(*id))
+                .map(short_id)
+                .collect();
+            if now != was_unpriced {
+                warn!(
+                    protocol = ID,
+                    unpriced = now.len(),
+                    markets = ids.len(),
+                    "markets whose state cannot be read are left out of sweeps"
+                );
+            }
+            *self.unpriced.lock().unwrap() = now;
+        }
         let calls: Vec<_> = pairs
             .iter()
             .map(|(a, id)| {
@@ -386,15 +410,22 @@ impl LiquidationAdapter for MorphoAdapter {
             .zip(res.iter())
             .filter_map(|((a, id), r)| {
                 let pos = decode::<IMorpho::positionCall>(r)?;
+                if pos.borrowShares == 0 {
+                    // Repaid: reported (the runner requires one answer per account and makes
+                    // the account dormant), not dropped.
+                    return Some(Health {
+                        account: *a,
+                        health_factor: f64::INFINITY,
+                        debt_usd: 0.0,
+                        collateral_usd: 0.0,
+                    });
+                }
                 let s = states.get(id)?;
                 let borrowed = math::borrow_assets(
                     pos.borrowShares as f64,
                     s.total_borrow_assets,
                     s.total_borrow_shares,
                 );
-                if pos.borrowShares == 0 {
-                    return None;
-                }
                 let collateral = pos.collateral as f64;
                 let coll_in_loan = collateral * s.price / math::ORACLE_PRICE_SCALE;
                 let health_factor =
