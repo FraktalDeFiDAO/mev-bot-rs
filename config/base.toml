@@ -33,8 +33,10 @@ pairs = [
 
 # Every endpoint answered an eth_call on 2026-10-15; ordered by latency at runtime (mev-rpc rotate).
 http_fallbacks = ["https://mainnet.base.org", "https://base.gateway.tenderly.co", "https://base-mainnet.public.blastapi.io", "https://base.drpc.org", "https://base-pokt.nodies.app", "https://base-rpc.publicnode.com", "https://base.api.pocket.network"]
-# Both accepted an eth_subscribe for logs on 2026-10-15 (PublicNode did not answer).
-ws_fallbacks = ["wss://base.drpc.org", "wss://base.gateway.tenderly.co"]
+# Both held newHeads + logs subscriptions for 40 s on 2026-10-16. No dRPC: from 2026-10-16 its WS
+# closes every connection ~1 s after the handshake (code 1006), and alloy's pubsub then redials it
+# about four times a second instead of failing over.
+ws_fallbacks = ["wss://base.gateway.tenderly.co", "wss://base-rpc.publicnode.com"]
 
 # No [auto_discovery]: it needs wide getLogs, and no free Base endpoint serves more than 10,000 blocks per request.
 
