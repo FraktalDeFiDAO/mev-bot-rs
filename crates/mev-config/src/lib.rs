@@ -631,6 +631,10 @@ pub struct ChainConfig {
     pub auto_discovery: Option<AutoDiscovery>,
     /// Arbitrum sequencer feed (free, unmetered real-time tx stream).
     pub sequencer_feed: Option<String>,
+    /// OP Stack Flashblocks WebSocket (Base): the same role as `sequencer_feed` on chains without
+    /// an Arbitrum-style feed. Ignored when `sequencer_feed` is set.
+    #[serde(default)]
+    pub flashblocks_feed: Option<String>,
     /// Free public HTTP endpoints for the main reads, used only while every keyed
     /// `<PREFIX>_HTTP_URL*` fails or is rate-limited (an exhausted monthly quota stopped the bot
     /// on 2026-10-15).

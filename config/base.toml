@@ -4,7 +4,9 @@ chain_id = 8453
 # Moonwell and the non-SVR Morpho Blue markets are won by ordinary bots; Base Aave is 91% SVR auctions.
 # Shadow only until the evidence says we would win. Runs on free public RPCs: no keyed BASE_* endpoints needed.
 balancer_vault = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
-# No public sequencer feed on Base: the liquidation runner polls (see [liquidation] fallback_poll_secs).
+# No Arbitrum-style sequencer feed on Base; Flashblocks streams each 2 s block in ~200 ms parts (Brotli JSON, free).
+# Transactions to the price feeds the adapters watch trigger an immediate re-check, as on Arbitrum.
+flashblocks_feed = "wss://mainnet.flashblocks.base.org/ws"
 min_pool_liquidity_usd = 5000.0
 max_cycles = 20000
 gas_limit_estimate = 1500000
@@ -36,7 +38,7 @@ sweep_rpc_fallbacks = ["https://base.gateway.tenderly.co", "https://base-mainnet
 at_risk_hf = 1.05
 min_debt_usd = 20.0
 sweep_secs = 300
-fallback_poll_secs = 4          # no feed: at-risk accounts are re-read every 2 Base blocks
+fallback_poll_secs = 4          # every 2 Base blocks; Flashblocks price-feed triggers are the fast path
 route_via = ["WETH", "USDC", "cbBTC"]
 
 [morpho]

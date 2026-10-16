@@ -656,8 +656,14 @@ impl Engine {
             None
         };
         let (dec_tx, dec_rx) = mpsc::channel::<pending::DecodedSwap>(FEED_QUEUE);
-        let (liq_feed, presim_feed) = match cfg.sequencer_feed.clone() {
-            Some(url) => {
+        // Arbitrum's sequencer feed, or OP Stack Flashblocks (Base) where there is none.
+        let feed_source = match (cfg.sequencer_feed.clone(), cfg.flashblocks_feed.clone()) {
+            (Some(u), _) => Some((u, false)),
+            (None, Some(u)) => Some((u, true)),
+            (None, None) => None,
+        };
+        let (liq_feed, presim_feed) = match feed_source {
+            Some((url, flashblocks)) => {
                 let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<mev_sequencer::SequencedTx>();
                 // Optional paid Fast Feed: same txs, earlier (inside the PGA round). Merged into
                 // the same stream; the fan-out below drops whichever copy arrives second.
@@ -669,7 +675,15 @@ impl Engine {
                         stats.clone(),
                     );
                 }
-                tokio::spawn(mev_sequencer::run_tracked(url, raw_tx, feed_stats.clone()));
+                if flashblocks {
+                    tokio::spawn(mev_sequencer::flashblocks::run_tracked(
+                        url,
+                        raw_tx,
+                        feed_stats.clone(),
+                    ));
+                } else {
+                    tokio::spawn(mev_sequencer::run_tracked(url, raw_tx, feed_stats.clone()));
+                }
                 // Bounded: a consumer that stalls (the engine while it re-reconciles, the runner
                 // inside a long index step) sheds its stale backlog instead of growing without
                 // limit (a 5 h stall reached 7.4 GB and an OOM kill, 2026-10-14).
@@ -678,6 +692,14 @@ impl Engine {
                 let drops = feed_stats.clone();
                 let dec_tx = dec_tx.clone();
                 let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
+                // The runner reacts only to transactions to the price feeds it watches (directly or
+                // through a Chainlink forwarder). Filtering here keeps the rest out of its bounded
+                // queue: Base Flashblocks carry ~1,200 tx/min that a busy runner would shed, price
+                // updates among them (2026-10-16).
+                let liq_feeds: std::collections::HashSet<Address> = liq_setup
+                    .as_ref()
+                    .map(|(r, _)| r.watched_feeds().into_iter().collect())
+                    .unwrap_or_default();
                 let log = feed_log.clone();
                 let tip_book = feed_tips.clone();
                 let bot_floor = (cfg.pga.feed_min_bot_tip_gwei.max(0.0) * 1e9) as u128;
@@ -763,7 +785,11 @@ impl Engine {
                         if want_pre {
                             shed(&drops, pre_tx.try_send(st.clone()));
                         }
-                        if want_liq {
+                        let to_feed = [st.to, mev_oracle::effective_target(st.to, &st.input)]
+                            .into_iter()
+                            .flatten()
+                            .any(|a| liq_feeds.contains(&a));
+                        if want_liq && to_feed {
                             shed(&drops, liq_tx.try_send(st));
                         }
                     }
