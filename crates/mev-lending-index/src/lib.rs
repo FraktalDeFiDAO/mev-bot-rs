@@ -42,6 +42,11 @@ const RING_KEEP: usize = 64;
 /// Stop recording new gaps in one step after this many (a dead provider would otherwise turn the
 /// whole history into gaps in a single call).
 const MAX_GAPS_PER_STEP: usize = 3;
+/// After this many consecutive full-size successful requests, a shrunken step doubles back toward
+/// the configured one. Without it one transient error shrank the step for good: a step of a few
+/// blocks then spent every request keeping up with the head and the backfill stalled (Moonwell
+/// on Base, 2026-10-16). A real provider limit costs one refused request per growth attempt.
+const GROW_AFTER: u32 = 8;
 
 #[derive(Debug, Clone)]
 pub struct IndexConfig {
@@ -90,6 +95,10 @@ pub struct EventIndex {
     cfg: IndexConfig,
     state: State,
     retry: RetryPolicy,
+    /// The configured step: the most a shrunken step grows back to.
+    step_cap: u64,
+    /// Consecutive successful requests at the current step.
+    streak: u32,
 }
 
 /// Where an interrupted [`atomic_write`] stops (crash injection for tests).
@@ -156,6 +165,8 @@ impl EventIndex {
             "account index loaded"
         );
         Self {
+            step_cap: cfg.step.max(1),
+            streak: 0,
             cfg,
             state,
             retry: RetryPolicy::default(),
@@ -332,6 +343,15 @@ impl EventIndex {
             budget,
         )
         .await;
+        if step < self.cfg.step || !matches!(r, Fetched::Logs { .. }) {
+            self.streak = 0;
+        } else {
+            self.streak += 1;
+            if self.streak >= GROW_AFTER && step < self.step_cap {
+                step = (step * 2).min(self.step_cap);
+                self.streak = 0;
+            }
+        }
         self.cfg.step = step;
         r
     }
@@ -464,8 +484,11 @@ mod tests {
         mock.push_success(&"0x64");
         // The head block lookup that records the first reorg ancestry point (best effort).
         mock.push_failure_msg("block lookup unavailable");
-        mock.push_failure_msg("block range exceeds provider limit");
-        mock.push_failure_msg("block range exceeds provider limit");
+        // Each range is retried once as is before it shrinks (transient errors), so a real
+        // limit costs two refusals per shrink.
+        for _ in 0..4 {
+            mock.push_failure_msg("block range exceeds provider limit");
+        }
         mock.push_success(&Vec::<Log>::new());
         let provider = ProviderBuilder::new()
             .connect_mocked_client(mock.clone())
@@ -474,12 +497,67 @@ mod tests {
         let mut config = cfg(dir.path().join("index.json"));
         config.from_block = 0;
         config.step = 100;
-        config.max_requests = 3;
+        config.max_requests = 5;
         let mut index = EventIndex::open(config);
         assert!(!index.step(&provider, |_| vec![]).await.unwrap());
         assert!(index.cfg.step < 10);
         assert!(index.state.back_block < 100);
         assert!(mock.read_q().is_empty());
+    }
+
+    #[tokio::test]
+    async fn one_transient_error_is_retried_without_shrinking_the_step() {
+        use alloy::{
+            providers::{Provider, ProviderBuilder},
+            transports::mock::Asserter,
+        };
+        let mock = Asserter::new();
+        mock.push_failure_msg("HTTP error 400 with empty body");
+        mock.push_success(&Vec::<Log>::new());
+        let provider = ProviderBuilder::new()
+            .connect_mocked_client(mock.clone())
+            .erased();
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = EventIndex::open(cfg(dir.path().join("index.json")));
+        let mut budget = 5;
+        let got = index.fetch(&provider, 100, 109, false, &mut budget).await;
+        assert!(matches!(
+            got,
+            Fetched::Logs {
+                from: 100,
+                to: 109,
+                ..
+            }
+        ));
+        assert_eq!(index.cfg.step, 10);
+        assert_eq!(budget, 3);
+    }
+
+    #[tokio::test]
+    async fn a_shrunken_step_grows_back_after_a_run_of_successes() {
+        use alloy::{
+            providers::{Provider, ProviderBuilder},
+            transports::mock::Asserter,
+        };
+        let mock = Asserter::new();
+        for _ in 0..40 {
+            mock.push_success(&Vec::<Log>::new());
+        }
+        let provider = ProviderBuilder::new()
+            .connect_mocked_client(mock.clone())
+            .erased();
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = EventIndex::open(cfg(dir.path().join("index.json")));
+        index.step_cap = 1_000;
+        index.cfg.step = 10; // as if a transient error had shrunk it
+        let mut budget = 40;
+        for k in 0..(2 * GROW_AFTER) {
+            index.fetch(&provider, 0, 9, false, &mut budget).await;
+            if k + 1 == GROW_AFTER {
+                assert_eq!(index.cfg.step, 20, "doubles after {GROW_AFTER} successes");
+            }
+        }
+        assert_eq!(index.cfg.step, 40);
     }
 
     fn cfg(path: PathBuf) -> IndexConfig {

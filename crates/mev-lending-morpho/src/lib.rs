@@ -95,7 +95,21 @@ pub struct MorphoAdapter {
     /// decimals unknown): their borrowers are left out of `accounts()`, so one broken market does
     /// not fail every sweep. Re-probed on each sweep; logged when the set changes.
     unpriced: Mutex<HashSet<u64>>,
+    /// Markets the price feeds were last resolved for, and when: indexing keeps finding markets
+    /// (a fresh start knows none), so feeds are re-resolved as it does (at most every
+    /// `FEED_REFRESH`).
+    feeds_markets: usize,
+    feeds_at: Option<std::time::Instant>,
 }
+
+/// Re-resolve price feeds at most this often while indexing finds new markets.
+const FEED_REFRESH: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Feed index (aggregator -> market short ids) and prediction signs.
+type Feeds = (
+    HashMap<Address, HashSet<u64>>,
+    HashMap<Address, Vec<(u64, f64)>>,
+);
 
 #[derive(Default)]
 struct Snapshot {
@@ -139,26 +153,11 @@ impl MorphoAdapter {
             feed_signs: HashMap::new(),
             snapshot: Mutex::new(Snapshot::default()),
             unpriced: Mutex::new(HashSet::new()),
+            feeds_markets: 0,
+            feeds_at: None,
         };
         let ids: Vec<B256> = me.market_ids();
-        me.load_params(&ids).await?;
-        let market_oracles: Vec<(u64, Address)> = me
-            .params
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(id, p)| (short_id(id), p.oracle))
-            .collect();
-        let oracles: Vec<Address> = market_oracles.iter().map(|(_, o)| *o).collect();
-        let aggregators = mev_oracle::resolve_aggregators(&me.rpc.fast, &oracles).await?;
-        let feeds = mev_lending::feed_index(&aggregators, |oracle| {
-            market_oracles
-                .iter()
-                .filter(|(_, o)| *o == oracle)
-                .map(|(id, _)| *id)
-                .collect()
-        });
-        let feed_signs = feed_signs(&me.rpc.fast, &market_oracles).await;
+        let (feeds, feed_signs) = me.resolve_feeds(&ids).await?;
         info!(
             protocol = ID,
             markets = ids.len(),
@@ -169,8 +168,41 @@ impl MorphoAdapter {
         Ok(Self {
             feeds,
             feed_signs,
+            feeds_markets: ids.len(),
+            feeds_at: Some(std::time::Instant::now()),
             ..me
         })
+    }
+
+    /// Price feeds of the markets `ids`: the aggregators behind each market's oracle, and the
+    /// prediction signs of the Chainlink-oracle markets. Feeds that hold public updates back
+    /// (Chainlink SVR) stay watched for re-polls but are never predicted: a backrun of their
+    /// public report would see the old price.
+    async fn resolve_feeds(&self, ids: &[B256]) -> Result<Feeds> {
+        self.load_params(ids).await?;
+        let market_oracles: Vec<(u64, Address)> = self
+            .params
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, p)| (short_id(id), p.oracle))
+            .collect();
+        let oracles: Vec<Address> = market_oracles.iter().map(|(_, o)| *o).collect();
+        let aggregators = mev_oracle::resolve_aggregators(&self.rpc.fast, &oracles).await?;
+        let feeds = mev_lending::feed_index(&aggregators, |oracle| {
+            market_oracles
+                .iter()
+                .filter(|(_, o)| *o == oracle)
+                .map(|(id, _)| *id)
+                .collect()
+        });
+        let mut feed_signs = feed_signs(&self.rpc.fast, &market_oracles).await;
+        let signed: Vec<Address> = feed_signs.keys().copied().collect();
+        match mev_oracle::held_aggregators(&self.rpc.fast, &signed).await {
+            Ok(held) => feed_signs.retain(|a, _| !held.contains(a)),
+            Err(e) => warn!(protocol = ID, error = %format!("{e:#}"), "SVR feed check failed"),
+        }
+        Ok((feeds, feed_signs))
     }
 
     /// Track a (market, borrower) learned elsewhere (another indexer, a liquidation feed, tests).
@@ -328,14 +360,38 @@ impl LiquidationAdapter for MorphoAdapter {
 
     async fn index(&mut self) -> Result<bool> {
         // Borrow(id indexed, caller, onBehalf indexed, receiver indexed, ...): debt is onBehalf's.
-        self.index
+        let done = self
+            .index
             .step(&self.rpc.scan, |l| {
                 match (l.topics().get(1), topic_address(l, 2)) {
                     (Some(id), Some(user)) => vec![(*id, user)],
                     _ => vec![],
                 }
             })
-            .await
+            .await?;
+        let ids = self.market_ids();
+        let due = self.feeds_at.is_none_or(|t| t.elapsed() >= FEED_REFRESH);
+        if ids.len() > self.feeds_markets && due {
+            self.feeds_at = Some(std::time::Instant::now());
+            match self.resolve_feeds(&ids).await {
+                Ok((feeds, signs)) => {
+                    info!(
+                        protocol = ID,
+                        markets = ids.len(),
+                        feeds = feeds.len(),
+                        predictable_feeds = signs.len(),
+                        "price feeds refreshed"
+                    );
+                    self.feeds = feeds;
+                    self.feed_signs = signs;
+                    self.feeds_markets = ids.len();
+                }
+                Err(e) => {
+                    warn!(protocol = ID, error = %format!("{e:#}"), "price feed refresh failed")
+                }
+            }
+        }
+        Ok(done)
     }
 
     fn accounts(&self) -> Vec<AccountRef> {

@@ -23,6 +23,40 @@ const MAX_DEPTH: usize = 4;
 /// Getter calls per contract per resolution round.
 const GETTERS: usize = 8;
 
+mod version {
+    alloy::sol! {
+        function typeAndVersion() external view returns (string);
+    }
+}
+
+/// A Chainlink SVR aggregator: a public report it receives is held back (the bonus of the price
+/// move is auctioned first), so a transaction sent straight behind it still sees the old price.
+pub fn is_held_type(type_and_version: &str) -> bool {
+    type_and_version.starts_with("DualAggregator")
+}
+
+/// The `aggregators` that hold public updates back (`typeAndVersion()` is a `DualAggregator`).
+/// Measured 2026-10-15: SVR auctions took 99% of Arbitrum Aave's liquidation bonus and plain
+/// backruns of the public update reverted. Contracts that do not answer are not held.
+pub async fn held_aggregators(
+    p: &DynProvider,
+    aggregators: &[Address],
+) -> Result<HashSet<Address>> {
+    let calls: Vec<_> = aggregators
+        .iter()
+        .map(|a| call(*a, version::typeAndVersionCall {}))
+        .collect();
+    let res = multicall(p, &calls, 200).await?;
+    Ok(aggregators
+        .iter()
+        .zip(&res)
+        .filter(|(_, r)| {
+            decode::<version::typeAndVersionCall>(r).is_some_and(|tv| is_held_type(&tv))
+        })
+        .map(|(a, _)| *a)
+        .collect())
+}
+
 /// Map each underlying aggregator to the original sources (e.g. Aave oracle sources) it feeds.
 pub async fn resolve_aggregators(
     p: &DynProvider,
@@ -252,6 +286,15 @@ impl<T: Clone> FeedWatcher<T> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn only_dual_aggregators_hold_updates() {
+        assert!(is_held_type("DualAggregator 1.0.0"));
+        assert!(!is_held_type("AccessControlledOCR2Aggregator 1.0.0"));
+        assert!(!is_held_type("OffchainAggregator 4.0.0"));
+        assert!(!is_held_type(""));
+    }
+
     use super::*;
 
     #[test]

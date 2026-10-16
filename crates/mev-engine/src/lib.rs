@@ -406,8 +406,23 @@ impl Engine {
         info!(chain = cfg.name, ?mode, "starting");
         let mut ws_urls = secrets.ws_urls();
         ws_urls.extend(cfg.ws_fallbacks.iter().cloned());
-        let rpc = Rpc::connect_with_fallbacks(&secrets.http_urls(), &cfg.http_fallbacks, &ws_urls)
-            .await?;
+        let rpc = Rpc::connect_with_fallbacks(
+            &secrets.http_urls(),
+            &cfg.http_fallbacks,
+            &ws_urls,
+            cfg.pending_reads,
+        )
+        .await?;
+        // A wrong endpoint (another chain's key in `.env`) must stop the bot, not feed it foreign state.
+        let chain_id =
+            mev_rpc::retry_forever("chain id", || async { Ok(rpc.http.get_chain_id().await?) })
+                .await;
+        anyhow::ensure!(
+            chain_id == cfg.chain_id,
+            "RPC serves chain {chain_id}, config {} is chain {}",
+            cfg.name,
+            cfg.chain_id
+        );
         let usd = cfg.token(&cfg.usd_token)?;
         let native = cfg.token(&cfg.native_token)?;
 
@@ -584,6 +599,7 @@ impl Engine {
                 "aave_v3": cfg.aave.as_ref().filter(|a| a.enabled).map(|a| format!("{:#x}", a.pool)),
                 "compound_v3": cfg.compound_v3.as_ref().filter(|c| c.enabled).map(|c| c.comets.iter().map(|m| format!("{:#x}", m.address)).collect::<Vec<_>>()),
                 "morpho_blue": cfg.morpho.as_ref().filter(|m| m.enabled).map(|m| format!("{:#x}", m.morpho)),
+                "moonwell": cfg.moonwell.as_ref().filter(|m| m.enabled).map(|m| format!("{:#x}", m.comptroller)),
                 "fluid_vaults": cfg.fluid.as_ref().filter(|f| f.enabled).map(|f| f.vaults.iter().map(|v| format!("{v:#x}")).collect::<Vec<_>>()),
             });
             let dexes: Vec<(String, String, Address)> = cfg
@@ -645,8 +661,14 @@ impl Engine {
             None
         };
         let (dec_tx, dec_rx) = mpsc::channel::<pending::DecodedSwap>(FEED_QUEUE);
-        let (liq_feed, presim_feed) = match cfg.sequencer_feed.clone() {
-            Some(url) => {
+        // Arbitrum's sequencer feed, or OP Stack Flashblocks (Base) where there is none.
+        let feed_source = match (cfg.sequencer_feed.clone(), cfg.flashblocks_feed.clone()) {
+            (Some(u), _) => Some((u, false)),
+            (None, Some(u)) => Some((u, true)),
+            (None, None) => None,
+        };
+        let (liq_feed, presim_feed) = match feed_source {
+            Some((url, flashblocks)) => {
                 let (raw_tx, mut raw_rx) = mpsc::unbounded_channel::<mev_sequencer::SequencedTx>();
                 // Optional paid Fast Feed: same txs, earlier (inside the PGA round). Merged into
                 // the same stream; the fan-out below drops whichever copy arrives second.
@@ -658,7 +680,15 @@ impl Engine {
                         stats.clone(),
                     );
                 }
-                tokio::spawn(mev_sequencer::run_tracked(url, raw_tx, feed_stats.clone()));
+                if flashblocks {
+                    tokio::spawn(mev_sequencer::flashblocks::run_tracked(
+                        url,
+                        raw_tx,
+                        feed_stats.clone(),
+                    ));
+                } else {
+                    tokio::spawn(mev_sequencer::run_tracked(url, raw_tx, feed_stats.clone()));
+                }
                 // Bounded: a consumer that stalls (the engine while it re-reconciles, the runner
                 // inside a long index step) sheds its stale backlog instead of growing without
                 // limit (a 5 h stall reached 7.4 GB and an OOM kill, 2026-10-14).
@@ -667,6 +697,11 @@ impl Engine {
                 let drops = feed_stats.clone();
                 let dec_tx = dec_tx.clone();
                 let (want_liq, want_pre) = (liq_setup.is_some(), presim_cfg.is_some());
+                // The runner reacts only to transactions to the price feeds it watches (directly or
+                // through a Chainlink forwarder). Filtering here keeps the rest out of its bounded
+                // queue: Base Flashblocks carry ~1,200 tx/min that a busy runner would shed, price
+                // updates among them (2026-10-16).
+                let liq_feeds = liq_setup.as_ref().map(|(r, _)| r.watched_feed_set());
                 let log = feed_log.clone();
                 let tip_book = feed_tips.clone();
                 let bot_floor = (cfg.pga.feed_min_bot_tip_gwei.max(0.0) * 1e9) as u128;
@@ -752,7 +787,15 @@ impl Engine {
                         if want_pre {
                             shed(&drops, pre_tx.try_send(st.clone()));
                         }
-                        if want_liq {
+                        let to_feed = [st.to, mev_oracle::effective_target(st.to, &st.input)]
+                            .into_iter()
+                            .flatten()
+                            .any(|a| {
+                                liq_feeds
+                                    .as_ref()
+                                    .is_some_and(|f| f.read().unwrap().contains(&a))
+                            });
+                        if want_liq && to_feed {
                             shed(&drops, liq_tx.try_send(st));
                         }
                     }
@@ -875,6 +918,19 @@ impl Engine {
                     check_allowlist(&rpc, exec, &runner.targets()).await;
                 }
                 watched_feeds = runner.watched_feeds();
+                let held = match mev_oracle::held_aggregators(&rpc.http, &watched_feeds).await {
+                    Ok(h) => h,
+                    Err(e) => {
+                        warn!(error = %format!("{e:#}"), "SVR feed check failed; every feed treated as immediate");
+                        Default::default()
+                    }
+                };
+                info!(
+                    watched = watched_feeds.len(),
+                    held = held.len(),
+                    "price feeds held back by SVR (no instant backruns on them)"
+                );
+                let runner = runner.with_held_feeds(held);
                 let runner = match hint_rx.take() {
                     Some(rx) => runner.with_hints(rx),
                     None => runner,
@@ -1883,7 +1939,13 @@ impl Engine {
     fn aave_flash_pool(&self) -> Option<Address> {
         self.cfg
             .executor_aave_flash
-            .then(|| self.cfg.aave.as_ref().map(|a| a.pool))
+            .then(|| {
+                self.cfg
+                    .aave
+                    .as_ref()
+                    .map(|a| a.pool)
+                    .or(self.cfg.aave_flash_pool)
+            })
             .flatten()
     }
 
@@ -3307,6 +3369,12 @@ async fn build_liquidation(
         let cache = data_dir.join("morpho_borrowers.json");
         adapters.push(Box::new(
             mev_lending_morpho::MorphoAdapter::new(m, arpc.clone(), cache).await?,
+        ));
+    }
+    if let Some(m) = cfg.moonwell.clone().filter(|m| m.enabled) {
+        let cache = data_dir.join("moonwell_borrowers.json");
+        adapters.push(Box::new(
+            mev_lending_moonwell::MoonwellAdapter::new(m, arpc.clone(), cache).await?,
         ));
     }
     if let Some(f) = cfg.fluid.clone().filter(|f| f.enabled) {

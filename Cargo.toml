@@ -27,6 +27,7 @@ proptest = "1.11"
 tower = "0.5"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 base64 = "0.23"
+brotli-decompressor = "5"
 axum = { version = "0.8", features = ["ws"] }
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
 tokio-util = { version = "=0.7.19", default-features = false }
@@ -55,6 +56,7 @@ mev-lending-radiant = { path = "crates/mev-lending-radiant" }
 mev-lending-gearbox = { path = "crates/mev-lending-gearbox" }
 mev-lending-dolomite = { path = "crates/mev-lending-dolomite" }
 mev-lending-morpho = { path = "crates/mev-lending-morpho" }
+mev-lending-moonwell = { path = "crates/mev-lending-moonwell" }
 mev-lending-fluid = { path = "crates/mev-lending-fluid" }
 mev-lending-compound-v3 = { path = "crates/mev-lending-compound-v3" }
 mev-lending-silo = { path = "crates/mev-lending-silo" }

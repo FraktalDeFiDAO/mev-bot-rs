@@ -62,6 +62,9 @@ pub async fn fetch_range(
 ) -> Fetched {
     let mut backoff = Backoff::default();
     let mut tries = 0u32;
+    // A range that failed once is retried as is before it is shrunk: some public endpoints
+    // (Pocket on Base, 2026-10-16) answer a valid query with a transient HTTP 400.
+    let mut retried = false;
     loop {
         if *budget == 0 {
             return Fetched::Deferred;
@@ -78,7 +81,12 @@ pub async fn fetch_range(
             Err(e) => anyhow::Error::from(e),
         };
         let limited = mev_rpc::is_rate_limit(&err);
+        if to > from && !limited && !retried {
+            retried = true;
+            continue;
+        }
         if to > from && !limited {
+            retried = false;
             // Too many results / range too wide: shrink and retry immediately.
             if backward {
                 from = to - (to - from) / 4;

@@ -131,6 +131,11 @@ pub struct Runner {
     last_plan: HashMap<AccountRef, (Instant, Duration)>,
     /// When each account was last backrun (one attempt per account per `BACKRUN_COOLDOWN`).
     last_backrun: HashMap<AccountRef, Instant>,
+    /// Feeds whose public updates are held back (SVR): re-polled, never backrun instantly.
+    held: HashSet<Address>,
+    /// The watched feed contracts, shared with the feed fan-out that pre-filters transactions;
+    /// updated when adapters' feeds change (indexing finds new markets).
+    feed_set: std::sync::Arc<std::sync::RwLock<HashSet<Address>>>,
     /// Auction hints (SVR); taken by `run`.
     hints: Option<mpsc::UnboundedReceiver<OracleHint>>,
     /// Optional shadow-only mandatory scheduler pass (JEV-LIQ-005); never alters dispatch.
@@ -180,6 +185,9 @@ impl Runner {
             watched_feeds = feeds.len(),
             "liquidation runner ready"
         );
+        let feed_set = std::sync::Arc::new(std::sync::RwLock::new(
+            feeds.contracts().into_iter().collect::<HashSet<_>>(),
+        ));
         Self {
             revision: Default::default(),
             confidence: Default::default(),
@@ -188,6 +196,8 @@ impl Runner {
             feeds,
             last_plan: HashMap::new(),
             last_backrun: HashMap::new(),
+            held: HashSet::new(),
+            feed_set,
             hints: None,
             shadow: None,
             hint_plans: HashMap::new(),
@@ -221,6 +231,14 @@ impl Runner {
     }
 
     /// Take oracle updates announced by SVR auctions as another source of backruns.
+    /// Price feeds whose public updates are held back (Chainlink SVR `DualAggregator`s): their
+    /// reports still trigger a re-poll, but no instant backrun, which would see the old price and
+    /// revert (all 11 Arbitrum Aave backruns, 2026-10-08..10).
+    pub fn with_held_feeds(mut self, held: HashSet<Address>) -> Self {
+        self.held = held;
+        self
+    }
+
     pub fn with_hints(mut self, rx: mpsc::UnboundedReceiver<OracleHint>) -> Self {
         self.hints = Some(rx);
         self
@@ -236,6 +254,34 @@ impl Runner {
     /// Feed contracts the live adapters watch.
     pub fn watched_feeds(&self) -> Vec<Address> {
         self.feeds.contracts()
+    }
+
+    /// The watched feed contracts as a live set (kept current by `refresh_feeds`).
+    pub fn watched_feed_set(&self) -> std::sync::Arc<std::sync::RwLock<HashSet<Address>>> {
+        self.feed_set.clone()
+    }
+
+    /// Rebuild the feed watcher from the adapters' current feeds (they grow as indexing finds
+    /// markets). Returns whether the watched set changed.
+    fn refresh_feeds(&mut self) -> bool {
+        let mut feeds = FeedWatcher::default();
+        for (i, s) in self.slots.iter().enumerate() {
+            for f in s.adapter.price_feeds() {
+                feeds.watch(f, i);
+            }
+        }
+        let now: HashSet<Address> = feeds.contracts().into_iter().collect();
+        if *self.feed_set.read().unwrap() == now {
+            return false;
+        }
+        info!(
+            before = self.feeds.len(),
+            watched_feeds = now.len(),
+            "watched price feeds changed"
+        );
+        self.feeds = feeds;
+        *self.feed_set.write().unwrap() = now;
+        true
     }
 
     /// Tokens across all live adapters (for swap-route discovery).
@@ -449,7 +495,8 @@ impl Runner {
         };
         self.revision
             .fetch_add(1, std::sync::atomic::Ordering::Release);
-        let report = mev_oracle::report_answer(st.to, &st.input).filter(|(agg, _)| *agg == feed);
+        let report = mev_oracle::report_answer(st.to, &st.input)
+            .filter(|(agg, _)| *agg == feed && !self.held.contains(agg));
         let mut predicted: Vec<Plan> = Vec::new();
         for i in hits.iter().copied() {
             let Some((_, answer)) = report else { break };
@@ -571,7 +618,9 @@ impl Runner {
                     if let Some(s) = &self.shadow { s.spawn_pass(); }
                 }
                 _ = index_tick.tick() => {
-                    if self.index_all().await && !backfilled {
+                    let done = self.index_all().await;
+                    self.refresh_feeds();
+                    if done && !backfilled {
                         backfilled = true;
                         info!("liquidation history back-filled; indexing once per sweep");
                         index_tick = tokio::time::interval(sweep_every);
@@ -759,6 +808,62 @@ mod tests {
                 feed: Address::with_last_byte(0xfe),
             }),
         )
+    }
+
+    /// Adapter that learns a price feed when it indexes (a market found by indexing).
+    struct Growing {
+        feeds: Vec<Address>,
+    }
+
+    #[async_trait]
+    impl LiquidationAdapter for Growing {
+        fn id(&self) -> ProtocolId {
+            "growing"
+        }
+        fn status(&self) -> AdapterStatus {
+            AdapterStatus::Live
+        }
+        async fn index(&mut self) -> anyhow::Result<bool> {
+            self.feeds.push(Address::with_last_byte(0xab));
+            Ok(true)
+        }
+        fn accounts(&self) -> Vec<AccountRef> {
+            vec![]
+        }
+        async fn health(&self, _a: &[AccountRef], _f: bool) -> anyhow::Result<Vec<Health>> {
+            Ok(vec![])
+        }
+        async fn plan(&self, _h: &Health, _e: Address) -> anyhow::Result<Option<Plan>> {
+            Ok(None)
+        }
+        fn price_feeds(&self) -> Vec<Address> {
+            self.feeds.clone()
+        }
+        fn targets(&self) -> Vec<Address> {
+            vec![]
+        }
+        fn assets(&self) -> Vec<Address> {
+            vec![]
+        }
+    }
+
+    #[tokio::test]
+    async fn feeds_found_by_indexing_are_watched_without_a_restart() {
+        let mut r = Runner::new(cfg(), vec![Box::new(Growing { feeds: vec![] })]);
+        let shared = r.watched_feed_set();
+        assert!(shared.read().unwrap().is_empty());
+        assert!(!r.refresh_feeds(), "nothing changed yet");
+        r.index_all().await;
+        assert!(r.refresh_feeds());
+        assert!(
+            shared
+                .read()
+                .unwrap()
+                .contains(&Address::with_last_byte(0xab))
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        r.on_feed_tx(&sequenced(Some(Address::with_last_byte(0xab))), &tx);
+        assert!(matches!(rx.try_recv(), Ok(RunnerEvent::FeedTrigger { .. })));
     }
 
     /// Adapter whose index always fails (e.g. rate-limited RPC); counts calls.
@@ -1082,6 +1187,31 @@ mod tests {
             matches!(rx.try_recv(), Ok(RunnerEvent::FeedTrigger { .. })),
             "same account within the cooldown: no second backrun"
         );
+    }
+
+    #[tokio::test]
+    async fn a_held_svr_feed_is_re_polled_but_never_backrun() {
+        let hex = include_str!("../../mev-oracle/tests/fixtures/eth_usd_forward_transmit.hex");
+        let input: alloy::primitives::Bytes = alloy::hex::decode(hex.trim()).unwrap().into();
+        let agg: Address = "0xa5E1a36938769cbd5a26f5e19D8FCB379f597c83"
+            .parse()
+            .unwrap();
+        let fake = Fake {
+            hf: Arc::new(Mutex::new(1.02)),
+            status: AdapterStatus::Live,
+            feed: agg,
+        };
+        let mut r = Runner::new(cfg(), vec![Box::new(fake)]).with_held_feeds(HashSet::from([agg]));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut st = sequenced(Some(Address::with_last_byte(0xf0)));
+        st.input = input;
+        r.on_feed_tx(&st, &tx);
+        assert!(
+            matches!(rx.try_recv(), Ok(RunnerEvent::FeedTrigger { .. })),
+            "a trigger, not a backrun"
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(r.slots[0].burst.is_some(), "the re-poll burst still runs");
     }
 
     #[tokio::test]

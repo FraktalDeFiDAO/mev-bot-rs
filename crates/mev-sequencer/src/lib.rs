@@ -9,6 +9,8 @@
 //! `l2Msg` bytes. Their first byte is the L2 kind: `3` = batch (sequence of u64-BE length-prefixed
 //! nested messages), `4` = one signed EIP-2718 transaction.
 
+pub mod flashblocks;
+
 use std::time::{Duration, Instant};
 
 use alloy::{
