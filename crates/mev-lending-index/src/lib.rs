@@ -484,8 +484,11 @@ mod tests {
         mock.push_success(&"0x64");
         // The head block lookup that records the first reorg ancestry point (best effort).
         mock.push_failure_msg("block lookup unavailable");
-        mock.push_failure_msg("block range exceeds provider limit");
-        mock.push_failure_msg("block range exceeds provider limit");
+        // Each range is retried once as is before it shrinks (transient errors), so a real
+        // limit costs two refusals per shrink.
+        for _ in 0..4 {
+            mock.push_failure_msg("block range exceeds provider limit");
+        }
         mock.push_success(&Vec::<Log>::new());
         let provider = ProviderBuilder::new()
             .connect_mocked_client(mock.clone())
@@ -494,12 +497,40 @@ mod tests {
         let mut config = cfg(dir.path().join("index.json"));
         config.from_block = 0;
         config.step = 100;
-        config.max_requests = 3;
+        config.max_requests = 5;
         let mut index = EventIndex::open(config);
         assert!(!index.step(&provider, |_| vec![]).await.unwrap());
         assert!(index.cfg.step < 10);
         assert!(index.state.back_block < 100);
         assert!(mock.read_q().is_empty());
+    }
+
+    #[tokio::test]
+    async fn one_transient_error_is_retried_without_shrinking_the_step() {
+        use alloy::{
+            providers::{Provider, ProviderBuilder},
+            transports::mock::Asserter,
+        };
+        let mock = Asserter::new();
+        mock.push_failure_msg("HTTP error 400 with empty body");
+        mock.push_success(&Vec::<Log>::new());
+        let provider = ProviderBuilder::new()
+            .connect_mocked_client(mock.clone())
+            .erased();
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = EventIndex::open(cfg(dir.path().join("index.json")));
+        let mut budget = 5;
+        let got = index.fetch(&provider, 100, 109, false, &mut budget).await;
+        assert!(matches!(
+            got,
+            Fetched::Logs {
+                from: 100,
+                to: 109,
+                ..
+            }
+        ));
+        assert_eq!(index.cfg.step, 10);
+        assert_eq!(budget, 3);
     }
 
     #[tokio::test]
