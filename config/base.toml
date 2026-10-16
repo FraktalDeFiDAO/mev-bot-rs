@@ -10,6 +10,10 @@ flashblocks_feed = "wss://mainnet.flashblocks.base.org/ws"
 min_pool_liquidity_usd = 5000.0
 max_cycles = 20000
 gas_limit_estimate = 1500000
+# Flash loans: Balancer's Base vault is thin (cbBTC ~$900, no wstETH), so loans it cannot fund come from Aave V3's
+# Base pool (5 bps; pool and premium checked on-chain 2026-10-16). Aave liquidations themselves stay off (SVR).
+executor_aave_flash = true
+aave_flash_pool = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"
 loan_tokens = ["WETH", "USDC", "cbBTC"]
 usd_token = "USDC"
 native_token = "WETH"

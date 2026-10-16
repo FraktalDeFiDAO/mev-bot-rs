@@ -618,6 +618,10 @@ pub struct ChainConfig {
     /// cap borrow from the Aave pool (`[aave] pool`) instead (5 bps premium, deep liquidity).
     #[serde(default)]
     pub executor_aave_flash: bool,
+    /// Aave V3 Pool used only as a flash lender (`executor_aave_flash`) on chains where the `[aave]`
+    /// liquidation adapter is off; `[aave] pool` takes precedence when set.
+    #[serde(default)]
+    pub aave_flash_pool: Option<Address>,
     pub tokens: HashMap<String, Address>,
     /// Tokens we may flash-borrow (must be held by the Balancer vault).
     pub loan_tokens: Vec<String>,
@@ -920,6 +924,8 @@ mod tests {
         // The scan endpoint (Pocket) refuses getLogs over 50,000 blocks.
         assert!(m.enabled && m.scan_step <= 50_000);
         assert!(c.aave.is_none(), "Base Aave is won by SVR auctions");
+        // ...but its pool still lends what Balancer does not hold (wstETH, cbETH, ...).
+        assert!(c.executor_aave_flash && c.aave_flash_pool.is_some());
         assert_eq!(c.symbol(c.token("cbBTC").unwrap()), "cbBTC");
     }
 

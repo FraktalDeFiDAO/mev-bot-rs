@@ -1920,7 +1920,13 @@ impl Engine {
     fn aave_flash_pool(&self) -> Option<Address> {
         self.cfg
             .executor_aave_flash
-            .then(|| self.cfg.aave.as_ref().map(|a| a.pool))
+            .then(|| {
+                self.cfg
+                    .aave
+                    .as_ref()
+                    .map(|a| a.pool)
+                    .or(self.cfg.aave_flash_pool)
+            })
             .flatten()
     }
 
