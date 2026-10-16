@@ -3304,6 +3304,7 @@ dependencies = [
  "mev-lending-dolomite",
  "mev-lending-fluid",
  "mev-lending-gearbox",
+ "mev-lending-moonwell",
  "mev-lending-morpho",
  "mev-lending-radiant",
  "mev-lending-silo",
@@ -3461,6 +3462,21 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "mev-lending-moonwell"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "mev-config",
+ "mev-lending",
+ "mev-lending-index",
+ "mev-rpc",
  "tokio",
  "tracing",
 ]

@@ -30,6 +30,7 @@ mev-liquidate = { workspace = true }
 mev-lending-aave-v3 = { workspace = true }
 mev-lending-compound-v3 = { workspace = true }
 mev-lending-morpho = { workspace = true }
+mev-lending-moonwell = { workspace = true }
 mev-lending-fluid = { workspace = true }
 mev-lending-silo = { workspace = true }
 mev-lending-radiant = { workspace = true }

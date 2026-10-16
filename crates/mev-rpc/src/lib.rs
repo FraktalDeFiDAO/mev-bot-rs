@@ -44,7 +44,7 @@ impl Rpc {
         ws_urls: &[String],
     ) -> Result<Self> {
         anyhow::ensure!(
-            !http_urls.is_empty() && !ws_urls.is_empty(),
+            !(http_urls.is_empty() && http_fallbacks.is_empty()) && !ws_urls.is_empty(),
             "need at least one HTTP and one WS URL"
         );
         let meter = RpcMeter::new();

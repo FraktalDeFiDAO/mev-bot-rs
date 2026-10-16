@@ -200,6 +200,16 @@ pub struct CometConfig {
     pub usd_feed: Option<Address>,
 }
 
+/// Moonwell (a Compound v2 fork) adapter: one comptroller, its markets are read on-chain.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MoonwellConfig {
+    pub enabled: bool,
+    pub comptroller: Address,
+    /// Never scan `Borrow` events below this block (comptroller deployment).
+    pub from_block: u64,
+    pub scan_step: u64,
+}
+
 /// Compound III adapter.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CompoundV3Config {
@@ -635,6 +645,8 @@ pub struct ChainConfig {
     pub aave: Option<AaveConfig>,
     pub compound_v3: Option<CompoundV3Config>,
     pub morpho: Option<MorphoConfig>,
+    #[serde(default)]
+    pub moonwell: Option<MoonwellConfig>,
     pub fluid: Option<FluidConfig>,
     #[serde(default)]
     pub presim: Option<PresimConfig>,
@@ -752,6 +764,7 @@ impl Secrets {
     pub fn http_urls(&self) -> Vec<String> {
         std::iter::once(self.http_url.clone())
             .chain(self.extra_http_urls.iter().cloned())
+            .filter(|u| !u.is_empty())
             .collect()
     }
 
@@ -759,6 +772,7 @@ impl Secrets {
     pub fn ws_urls(&self) -> Vec<String> {
         std::iter::once(self.ws_url.clone())
             .chain(self.extra_ws_urls.iter().cloned())
+            .filter(|u| !u.is_empty())
             .collect()
     }
 }
@@ -787,20 +801,22 @@ impl Secrets {
     }
 
     fn load_env(prefix: &str, signing: bool) -> Result<Self> {
-        let var = |k: &str| std::env::var(format!("{prefix}_{k}")).or_else(|_| std::env::var(k));
+        let get = |k: &str| std::env::var(k).ok();
+        let var = |k: &str| chain_var(prefix, k, &get);
         let addr = |k: &str| -> Result<Option<Address>> {
-            match std::env::var(k) {
-                Ok(v) if !v.trim().is_empty() => Ok(Some(
-                    v.trim()
-                        .parse()
-                        .with_context(|| format!("{k} is not an address"))?,
-                )),
-                _ => Ok(None),
+            match var(k) {
+                Some(v) => {
+                    Ok(Some(v.parse().with_context(|| {
+                        format!("{prefix}_{k} / {k} is not an address")
+                    })?))
+                }
+                None => Ok(None),
             }
         };
         Ok(Self {
-            http_url: var("HTTP_URL").with_context(|| format!("{prefix}_HTTP_URL not set"))?,
-            ws_url: var("WS_URL").with_context(|| format!("{prefix}_WS_URL not set"))?,
+            // Optional: a chain may run on the public `http_fallbacks` / `ws_fallbacks` alone.
+            http_url: var("HTTP_URL").unwrap_or_default(),
+            ws_url: var("WS_URL").unwrap_or_default(),
             private_key: signing
                 .then(|| std::env::var("PRIVATE_KEY").ok())
                 .flatten()
@@ -815,10 +831,7 @@ impl Secrets {
                 .collect(),
             sweep_urls: numbered_from(prefix, "SWEEP_URL", 1),
             presim_urls: numbered_from(prefix, "PRESIM_URL", 1),
-            fast_feed_key: var("FAST_FEED_KEY")
-                .ok()
-                .map(|k| k.trim().to_string())
-                .filter(|k| !k.is_empty()),
+            fast_feed_key: var("FAST_FEED_KEY"),
         })
     }
 }
@@ -829,6 +842,23 @@ fn default_max_concurrent_sends() -> u32 {
 
 fn default_max_bonus_usd() -> f64 {
     50_000.0
+}
+
+/// The chain the unprefixed variables (`HTTP_URL`, `EXECUTOR_ADDRESS`, ...) belong to: they predate
+/// multi-chain support. Another chain reading them would connect to Arbitrum's endpoints or treat
+/// the Arbitrum executor as its own.
+const LEGACY_PREFIX: &str = "ARBITRUM";
+/// Same on every chain (an EOA), so every chain may fall back to the unprefixed variable.
+const CHAIN_INDEPENDENT: &[&str] = &["PROFIT_RECEIVER"];
+
+/// `<PREFIX>_<KEY>`, else the unprefixed `<KEY>` where that is safe; trimmed, empty = unset.
+fn chain_var(prefix: &str, key: &str, get: &impl Fn(&str) -> Option<String>) -> Option<String> {
+    let clean = |v: Option<String>| v.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    clean(get(&format!("{prefix}_{key}"))).or_else(|| {
+        (prefix == LEGACY_PREFIX || CHAIN_INDEPENDENT.contains(&key))
+            .then(|| clean(get(key)))
+            .flatten()
+    })
 }
 
 /// `<PREFIX>_<KEY>_2` .. `_9`, in order, skipping unset/empty ones.
@@ -872,6 +902,21 @@ mod tests {
         assert!(c.min_debt_usd > 0 && c.cold_max_age_seconds >= c.max_account_age_seconds);
         assert!(c.max_unknown_per_pass > 0 && c.max_unknown_per_pass <= 10_000);
         assert!(c.recheck_batch > 1 && c.reconcile_batch > 0);
+    }
+
+    #[test]
+    fn shipped_base_config_runs_morpho_on_public_endpoints_only() {
+        let c = ChainConfig::load(&repo_config().with_file_name("base.toml")).unwrap();
+        assert_eq!(c.chain_id, 8453);
+        assert!(c.sequencer_feed.is_none() && !c.atlas.enabled);
+        assert!(!c.http_fallbacks.is_empty() && !c.ws_fallbacks.is_empty());
+        let l = c.liquidation.as_ref().unwrap();
+        assert!(l.enabled);
+        let m = c.morpho.as_ref().unwrap();
+        // The scan endpoint (Pocket) refuses getLogs over 50,000 blocks.
+        assert!(m.enabled && m.scan_step <= 50_000);
+        assert!(c.aave.is_none(), "Base Aave is won by SVR auctions");
+        assert_eq!(c.symbol(c.token("cbBTC").unwrap()), "cbBTC");
     }
 
     #[test]
@@ -977,6 +1022,33 @@ mod tests {
         let c = ChainConfig::load(&repo_config()).unwrap();
         let a = Address::with_last_byte(0x42);
         assert_eq!(c.symbol(a), a.to_string());
+    }
+
+    #[test]
+    fn other_chains_never_read_arbitrums_unprefixed_endpoints_or_executor() {
+        let env = |k: &str| {
+            match k {
+                "HTTP_URL" => Some("https://arb.example/key"),
+                "EXECUTOR_ADDRESS" => Some("0x17357E3300000000000000000000000000000000"),
+                "PROFIT_RECEIVER" => Some("0x1111111111111111111111111111111111111111"),
+                "BASE_WS_URL" => Some(" wss://base.example "),
+                "BASE_HTTP_URL" => Some("  "),
+                _ => None,
+            }
+            .map(str::to_string)
+        };
+        assert_eq!(
+            chain_var("ARBITRUM", "HTTP_URL", &env).as_deref(),
+            Some("https://arb.example/key")
+        );
+        assert_eq!(chain_var("BASE", "HTTP_URL", &env), None);
+        assert_eq!(chain_var("BASE", "EXECUTOR_ADDRESS", &env), None);
+        assert!(chain_var("ARBITRUM", "EXECUTOR_ADDRESS", &env).is_some());
+        assert!(chain_var("BASE", "PROFIT_RECEIVER", &env).is_some());
+        assert_eq!(
+            chain_var("BASE", "WS_URL", &env).as_deref(),
+            Some("wss://base.example")
+        );
     }
 
     #[test]
