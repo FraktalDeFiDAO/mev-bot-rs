@@ -71,10 +71,36 @@ one crash day.
 - Avalanche winners backrun the oracle update in the same block half the time, the hardest race in the sample.
 - Arbitrum Aave matches DECISIONS #51: about half within 2 s, a few minutes-late leftovers.
 
+## Who wins: Chainlink SVR auctions vs plain liquidators (added later on 2026-10-15)
+
+The same 100 sampled liquidations per venue, classified by their receipt: an **SVR auction** win has
+`SecondaryRoundIdUpdated` (Chainlink `DualAggregator`) and Atlas `SolverTxResult` in the same transaction; the
+solver unlocks the new price and liquidates atomically. Everything else is **plain**.
+
+| Chain, venue | SVR auction wins | Their bonus | Plain wins | Their bonus |
+|---|---|---|---|---|
+| Arbitrum, Aave V3 | 69 | $50,951 (99%) | 31 | $543 |
+| Base, Aave V3 | 67 | $35,907 (91%) | 33 | $3,622 |
+| Base, Morpho Blue | 56 | $350,330 (67%) | 44 | $174,102 |
+| Base, Moonwell | 0 | | 100 | $343,550 |
+| Avalanche, Aave V3 | 0 | | 100 | $51,651 |
+
+- **Why the bot's 11 Aave backruns all reverted:** Aave's Arbitrum feeds are `DualAggregator`s. The public price
+  update is held back for a delay (winners that are not auction solvers land 8-10 blocks later), so a transaction
+  sent straight behind the public update still sees the old price. Backrunning the public update cannot work on
+  SVR feeds; the bonus goes to the auction.
+- **Arbitrum Aave is an auction market**, not a latency race: earning there means bidding as an Atlas solver
+  (bond, escrow settlement and bid sizing; the bot has these observe-only).
+- **Plain venues:** Base Moonwell, Avalanche Aave, and the non-SVR third of Base Morpho. The plain Base Morpho wins
+  are spread over many senders (no sender won more than 2 of 44), and half of them follow no Chainlink update
+  (other oracle types, or interest accrual), so they are a coverage race more than a speed race.
+
+Method: `eth_getTransactionReceipt` of each sampled liquidation (500 public calls).
+
 ## What this means for the bot
 
-1. **Arbitrum stays the base.** It is where the bot, executor, and data already are. Its prize is small in calm
-   months and large on crash days.
+1. **Arbitrum Aave needs SVR auction bids, not backruns** (see the section above). Plain backruns there earned $543
+   of $51k in the sample.
 2. **Base Morpho is the only venue whose size and spread justify a second chain.** Needs: a Base config and
    executor deployment, the Morpho adapter (exists) pointed at Base, a Chainlink-update trigger with sub-2-second
    reaction, and RPC capacity for Base (estimate calls per day before enabling; see the RPC quota incident of
