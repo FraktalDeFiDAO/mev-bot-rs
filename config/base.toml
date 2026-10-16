@@ -74,6 +74,20 @@ max_concurrent_sends = 1
 arb_presimulate = true
 fast_send = false
 
+[pga]
+# Base orders each 200 ms flashblock by priority fee among the transactions that have arrived, so arrival time
+# beats fee: in 58 of 101 recent plain Morpho wins a rival that paid more landed later (scripts/liq-winners.py,
+# 2026-10-16). Winners' priority fee per gas: plain Morpho p10/p50/p90 0.008/0.15/3.3 gwei (92nd percentile of
+# their block), Moonwell ~0.001 gwei. Arbitrum's defaults (0.05 gwei floor for bot tips, $0.25 cap) would pay
+# Moonwell 10x the winners and stop below half of the Morpho ones.
+default_tip_gwei = 0.15
+min_tip_gwei = 0.001
+feed_min_bot_tip_gwei = 0.005
+max_tip_usd_per_tx = 1.00
+max_tip_usd_per_minute = 3.00
+max_tip_usd_per_day = 10.00
+round_ms = 200             # one flashblock
+
 [gate]
 # Arbitrage is not the goal on Base; stop it after the first 30 sends with no win (shadow sends nothing).
 enabled = true
