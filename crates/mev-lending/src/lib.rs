@@ -74,6 +74,9 @@ pub trait LiquidationAdapter: Send + Sync {
     fn accounts(&self) -> Vec<AccountRef>;
 
     /// Health of `accounts`. `fast` selects the low-latency RPC (at-risk polling) vs the sweep RPC.
+    /// One answer per account whose state was read, including accounts that owe nothing (zero
+    /// debt, infinite health factor): the runner treats a sweep with missing answers as failed.
+    /// Leave an account out only when its read failed.
     async fn health(&self, accounts: &[AccountRef], fast: bool) -> anyhow::Result<Vec<Health>>;
 
     /// Build a liquidation for an unhealthy account using current protocol state and prices.
