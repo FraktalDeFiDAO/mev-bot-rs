@@ -912,6 +912,19 @@ impl Engine {
                     check_allowlist(&rpc, exec, &runner.targets()).await;
                 }
                 watched_feeds = runner.watched_feeds();
+                let held = match mev_oracle::held_aggregators(&rpc.http, &watched_feeds).await {
+                    Ok(h) => h,
+                    Err(e) => {
+                        warn!(error = %format!("{e:#}"), "SVR feed check failed; every feed treated as immediate");
+                        Default::default()
+                    }
+                };
+                info!(
+                    watched = watched_feeds.len(),
+                    held = held.len(),
+                    "price feeds held back by SVR (no instant backruns on them)"
+                );
+                let runner = runner.with_held_feeds(held);
                 let runner = match hint_rx.take() {
                     Some(rx) => runner.with_hints(rx),
                     None => runner,

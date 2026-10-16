@@ -131,6 +131,8 @@ pub struct Runner {
     last_plan: HashMap<AccountRef, (Instant, Duration)>,
     /// When each account was last backrun (one attempt per account per `BACKRUN_COOLDOWN`).
     last_backrun: HashMap<AccountRef, Instant>,
+    /// Feeds whose public updates are held back (SVR): re-polled, never backrun instantly.
+    held: HashSet<Address>,
     /// Auction hints (SVR); taken by `run`.
     hints: Option<mpsc::UnboundedReceiver<OracleHint>>,
     /// Optional shadow-only mandatory scheduler pass (JEV-LIQ-005); never alters dispatch.
@@ -188,6 +190,7 @@ impl Runner {
             feeds,
             last_plan: HashMap::new(),
             last_backrun: HashMap::new(),
+            held: HashSet::new(),
             hints: None,
             shadow: None,
             hint_plans: HashMap::new(),
@@ -221,6 +224,14 @@ impl Runner {
     }
 
     /// Take oracle updates announced by SVR auctions as another source of backruns.
+    /// Price feeds whose public updates are held back (Chainlink SVR `DualAggregator`s): their
+    /// reports still trigger a re-poll, but no instant backrun, which would see the old price and
+    /// revert (all 11 Arbitrum Aave backruns, 2026-10-08..10).
+    pub fn with_held_feeds(mut self, held: HashSet<Address>) -> Self {
+        self.held = held;
+        self
+    }
+
     pub fn with_hints(mut self, rx: mpsc::UnboundedReceiver<OracleHint>) -> Self {
         self.hints = Some(rx);
         self
@@ -449,7 +460,8 @@ impl Runner {
         };
         self.revision
             .fetch_add(1, std::sync::atomic::Ordering::Release);
-        let report = mev_oracle::report_answer(st.to, &st.input).filter(|(agg, _)| *agg == feed);
+        let report = mev_oracle::report_answer(st.to, &st.input)
+            .filter(|(agg, _)| *agg == feed && !self.held.contains(agg));
         let mut predicted: Vec<Plan> = Vec::new();
         for i in hits.iter().copied() {
             let Some((_, answer)) = report else { break };
@@ -1082,6 +1094,31 @@ mod tests {
             matches!(rx.try_recv(), Ok(RunnerEvent::FeedTrigger { .. })),
             "same account within the cooldown: no second backrun"
         );
+    }
+
+    #[tokio::test]
+    async fn a_held_svr_feed_is_re_polled_but_never_backrun() {
+        let hex = include_str!("../../mev-oracle/tests/fixtures/eth_usd_forward_transmit.hex");
+        let input: alloy::primitives::Bytes = alloy::hex::decode(hex.trim()).unwrap().into();
+        let agg: Address = "0xa5E1a36938769cbd5a26f5e19D8FCB379f597c83"
+            .parse()
+            .unwrap();
+        let fake = Fake {
+            hf: Arc::new(Mutex::new(1.02)),
+            status: AdapterStatus::Live,
+            feed: agg,
+        };
+        let mut r = Runner::new(cfg(), vec![Box::new(fake)]).with_held_feeds(HashSet::from([agg]));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut st = sequenced(Some(Address::with_last_byte(0xf0)));
+        st.input = input;
+        r.on_feed_tx(&st, &tx);
+        assert!(
+            matches!(rx.try_recv(), Ok(RunnerEvent::FeedTrigger { .. })),
+            "a trigger, not a backrun"
+        );
+        assert!(rx.try_recv().is_err());
+        assert!(r.slots[0].burst.is_some(), "the re-poll burst still runs");
     }
 
     #[tokio::test]

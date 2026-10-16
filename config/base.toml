@@ -7,6 +7,9 @@ balancer_vault = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
 # No Arbitrum-style sequencer feed on Base; Flashblocks streams each 2 s block in ~200 ms parts (Brotli JSON, free).
 # Transactions to the price feeds the adapters watch trigger an immediate re-check, as on Arbitrum.
 flashblocks_feed = "wss://mainnet.flashblocks.base.org/ws"
+# Raw transactions also go straight to Base's sequencer (send-only: every other method is "not allowed",
+# checked 2026-10-16), skipping the public RPC hop, as Arbitrum's `sequencer_rpc` does.
+sequencer_rpc = "https://mainnet-sequencer.base.org"
 min_pool_liquidity_usd = 5000.0
 max_cycles = 20000
 gas_limit_estimate = 1500000
