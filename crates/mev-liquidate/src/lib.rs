@@ -133,6 +133,9 @@ pub struct Runner {
     last_backrun: HashMap<AccountRef, Instant>,
     /// Feeds whose public updates are held back (SVR): re-polled, never backrun instantly.
     held: HashSet<Address>,
+    /// The watched feed contracts, shared with the feed fan-out that pre-filters transactions;
+    /// updated when adapters' feeds change (indexing finds new markets).
+    feed_set: std::sync::Arc<std::sync::RwLock<HashSet<Address>>>,
     /// Auction hints (SVR); taken by `run`.
     hints: Option<mpsc::UnboundedReceiver<OracleHint>>,
     /// Optional shadow-only mandatory scheduler pass (JEV-LIQ-005); never alters dispatch.
@@ -182,6 +185,9 @@ impl Runner {
             watched_feeds = feeds.len(),
             "liquidation runner ready"
         );
+        let feed_set = std::sync::Arc::new(std::sync::RwLock::new(
+            feeds.contracts().into_iter().collect::<HashSet<_>>(),
+        ));
         Self {
             revision: Default::default(),
             confidence: Default::default(),
@@ -191,6 +197,7 @@ impl Runner {
             last_plan: HashMap::new(),
             last_backrun: HashMap::new(),
             held: HashSet::new(),
+            feed_set,
             hints: None,
             shadow: None,
             hint_plans: HashMap::new(),
@@ -247,6 +254,34 @@ impl Runner {
     /// Feed contracts the live adapters watch.
     pub fn watched_feeds(&self) -> Vec<Address> {
         self.feeds.contracts()
+    }
+
+    /// The watched feed contracts as a live set (kept current by `refresh_feeds`).
+    pub fn watched_feed_set(&self) -> std::sync::Arc<std::sync::RwLock<HashSet<Address>>> {
+        self.feed_set.clone()
+    }
+
+    /// Rebuild the feed watcher from the adapters' current feeds (they grow as indexing finds
+    /// markets). Returns whether the watched set changed.
+    fn refresh_feeds(&mut self) -> bool {
+        let mut feeds = FeedWatcher::default();
+        for (i, s) in self.slots.iter().enumerate() {
+            for f in s.adapter.price_feeds() {
+                feeds.watch(f, i);
+            }
+        }
+        let now: HashSet<Address> = feeds.contracts().into_iter().collect();
+        if *self.feed_set.read().unwrap() == now {
+            return false;
+        }
+        info!(
+            before = self.feeds.len(),
+            watched_feeds = now.len(),
+            "watched price feeds changed"
+        );
+        self.feeds = feeds;
+        *self.feed_set.write().unwrap() = now;
+        true
     }
 
     /// Tokens across all live adapters (for swap-route discovery).
@@ -583,7 +618,9 @@ impl Runner {
                     if let Some(s) = &self.shadow { s.spawn_pass(); }
                 }
                 _ = index_tick.tick() => {
-                    if self.index_all().await && !backfilled {
+                    let done = self.index_all().await;
+                    self.refresh_feeds();
+                    if done && !backfilled {
                         backfilled = true;
                         info!("liquidation history back-filled; indexing once per sweep");
                         index_tick = tokio::time::interval(sweep_every);
@@ -771,6 +808,62 @@ mod tests {
                 feed: Address::with_last_byte(0xfe),
             }),
         )
+    }
+
+    /// Adapter that learns a price feed when it indexes (a market found by indexing).
+    struct Growing {
+        feeds: Vec<Address>,
+    }
+
+    #[async_trait]
+    impl LiquidationAdapter for Growing {
+        fn id(&self) -> ProtocolId {
+            "growing"
+        }
+        fn status(&self) -> AdapterStatus {
+            AdapterStatus::Live
+        }
+        async fn index(&mut self) -> anyhow::Result<bool> {
+            self.feeds.push(Address::with_last_byte(0xab));
+            Ok(true)
+        }
+        fn accounts(&self) -> Vec<AccountRef> {
+            vec![]
+        }
+        async fn health(&self, _a: &[AccountRef], _f: bool) -> anyhow::Result<Vec<Health>> {
+            Ok(vec![])
+        }
+        async fn plan(&self, _h: &Health, _e: Address) -> anyhow::Result<Option<Plan>> {
+            Ok(None)
+        }
+        fn price_feeds(&self) -> Vec<Address> {
+            self.feeds.clone()
+        }
+        fn targets(&self) -> Vec<Address> {
+            vec![]
+        }
+        fn assets(&self) -> Vec<Address> {
+            vec![]
+        }
+    }
+
+    #[tokio::test]
+    async fn feeds_found_by_indexing_are_watched_without_a_restart() {
+        let mut r = Runner::new(cfg(), vec![Box::new(Growing { feeds: vec![] })]);
+        let shared = r.watched_feed_set();
+        assert!(shared.read().unwrap().is_empty());
+        assert!(!r.refresh_feeds(), "nothing changed yet");
+        r.index_all().await;
+        assert!(r.refresh_feeds());
+        assert!(
+            shared
+                .read()
+                .unwrap()
+                .contains(&Address::with_last_byte(0xab))
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        r.on_feed_tx(&sequenced(Some(Address::with_last_byte(0xab))), &tx);
+        assert!(matches!(rx.try_recv(), Ok(RunnerEvent::FeedTrigger { .. })));
     }
 
     /// Adapter whose index always fails (e.g. rate-limited RPC); counts calls.

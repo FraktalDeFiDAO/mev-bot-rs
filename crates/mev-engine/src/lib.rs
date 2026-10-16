@@ -696,10 +696,7 @@ impl Engine {
                 // through a Chainlink forwarder). Filtering here keeps the rest out of its bounded
                 // queue: Base Flashblocks carry ~1,200 tx/min that a busy runner would shed, price
                 // updates among them (2026-10-16).
-                let liq_feeds: std::collections::HashSet<Address> = liq_setup
-                    .as_ref()
-                    .map(|(r, _)| r.watched_feeds().into_iter().collect())
-                    .unwrap_or_default();
+                let liq_feeds = liq_setup.as_ref().map(|(r, _)| r.watched_feed_set());
                 let log = feed_log.clone();
                 let tip_book = feed_tips.clone();
                 let bot_floor = (cfg.pga.feed_min_bot_tip_gwei.max(0.0) * 1e9) as u128;
@@ -788,7 +785,11 @@ impl Engine {
                         let to_feed = [st.to, mev_oracle::effective_target(st.to, &st.input)]
                             .into_iter()
                             .flatten()
-                            .any(|a| liq_feeds.contains(&a));
+                            .any(|a| {
+                                liq_feeds
+                                    .as_ref()
+                                    .is_some_and(|f| f.read().unwrap().contains(&a))
+                            });
                         if want_liq && to_feed {
                             shed(&drops, liq_tx.try_send(st));
                         }
