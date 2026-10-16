@@ -39,5 +39,16 @@ the most recent 250 Morpho Blue and all 211 Moonwell analysed (1,407 public RPC 
 | Liquidations on Base's 1,200 tx/min feed queue dropped while indexing | n/a | Only transactions to watched feeds reach the runner |
 | Balancer only lender for some tokens (no wstETH on Base) | n/a | Aave V3 Base pool as flash lender |
 
+## Other L2s
+
+- **Unichain** (Flashbots rollup-boost with a TEE builder): priority-fee ordering is verifiable, and private
+  submission goes through `eth_sendBundle` (single-transaction bundles, valid up to 10 blocks). Our bot has no
+  bundle submission. Not worth adding yet: Unichain lending paid under $450 of liquidation bonus a month
+  (`docs/research/liq-competition-2026-10-15.md`).
+- **OP Mainnet** (Flashbots partnership for OP Stack sequencing): same order-by-fee model as Base; under $450 a
+  month of bonus.
+- **Arbitrum** is not a Flashbots chain (Timeboost and FCFS sequencing); its winners are the Chainlink SVR
+  auction (99% of Aave bonus), see the 2026-10-15 research.
+
 Not measured: our own latency from a flashblock to a landed transaction on Base (needs a server run and,
 for landing, an executor on Base).
