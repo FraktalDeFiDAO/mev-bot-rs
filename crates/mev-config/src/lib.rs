@@ -647,6 +647,11 @@ pub struct ChainConfig {
     /// Free public WS endpoints, tried after the keyed `<PREFIX>_WS_URL*` ones.
     #[serde(default)]
     pub ws_fallbacks: Vec<String>,
+    /// Read preconfirmed state: `eth_call`s at `latest` go out at `pending` (OP Stack chains with
+    /// Flashblocks, where `pending` is the block being built, ~200 ms fresh, and `latest` the last
+    /// sealed one, up to 2 s old).
+    #[serde(default)]
+    pub pending_reads: bool,
     pub liquidation: Option<LiquidationConfig>,
     #[serde(default)]
     pub liquidation_shadow: LiquidationShadowConfig,
@@ -926,6 +931,7 @@ mod tests {
         assert!(c.aave.is_none(), "Base Aave is won by SVR auctions");
         // ...but its pool still lends what Balancer does not hold (wstETH, cbETH, ...).
         assert!(c.executor_aave_flash && c.aave_flash_pool.is_some());
+        assert!(c.pending_reads && c.flashblocks_feed.is_some());
         assert_eq!(c.symbol(c.token("cbBTC").unwrap()), "cbBTC");
     }
 

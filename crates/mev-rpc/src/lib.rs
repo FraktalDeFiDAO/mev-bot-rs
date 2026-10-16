@@ -6,6 +6,7 @@ use alloy::{
     sol_types::SolCall,
 };
 pub mod meter;
+pub mod pending;
 pub mod rotate;
 
 use std::{future::Future, sync::Arc, time::Duration};
@@ -32,23 +33,34 @@ impl Rpc {
     /// Paid reads rotate across all `http_urls` (falling through on rate limits / provider errors);
     /// the WS connects to the first `ws_urls` entry that answers.
     pub async fn connect(http_urls: &[String], ws_urls: &[String]) -> Result<Self> {
-        Self::connect_with_fallbacks(http_urls, &[], ws_urls).await
+        Self::connect_with_fallbacks(http_urls, &[], ws_urls, false).await
     }
 
     /// Like [`Rpc::connect`], plus `http_fallbacks` (free public endpoints) that serve reads only
     /// while every keyed endpoint fails or is rate-limited (e.g. its monthly quota is used up).
     /// WS fallbacks go at the end of `ws_urls`: the WS fails over in order on its own.
+    /// `pending_reads`: `eth_call`s at `latest` read `pending` (Flashblocks preconfirmed state).
     pub async fn connect_with_fallbacks(
         http_urls: &[String],
         http_fallbacks: &[String],
         ws_urls: &[String],
+        pending_reads: bool,
     ) -> Result<Self> {
         anyhow::ensure!(
             !(http_urls.is_empty() && http_fallbacks.is_empty()) && !ws_urls.is_empty(),
             "need at least one HTTP and one WS URL"
         );
         let meter = RpcMeter::new();
-        let http = if http_urls.len() == 1 && http_fallbacks.is_empty() {
+        let http = if pending_reads {
+            let client = ClientBuilder::default()
+                .layer(MeterLayer(meter.clone()))
+                .layer(pending::PendingLayer)
+                .transport(
+                    RotatingTransport::http_with_fallbacks(http_urls, http_fallbacks)?,
+                    false,
+                );
+            ProviderBuilder::new().connect_client(client).erased()
+        } else if http_urls.len() == 1 && http_fallbacks.is_empty() {
             metered_http_provider(&http_urls[0], meter.clone())?
         } else {
             let client = ClientBuilder::default()

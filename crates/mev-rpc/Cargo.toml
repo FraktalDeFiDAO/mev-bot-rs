@@ -13,3 +13,4 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 mev-bindings = { workspace = true }
 tokio = { workspace = true }
+serde_json = { workspace = true }

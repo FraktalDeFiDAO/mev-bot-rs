@@ -10,6 +10,10 @@ flashblocks_feed = "wss://mainnet.flashblocks.base.org/ws"
 # Raw transactions also go straight to Base's sequencer (send-only: every other method is "not allowed",
 # checked 2026-10-16), skipping the public RPC hop, as Arbitrum's `sequencer_rpc` does.
 sequencer_rpc = "https://mainnet-sequencer.base.org"
+# Health re-checks read the block being built (`pending`, ~200 ms fresh) instead of the last sealed block
+# (`latest`, up to 2 s old): over half of Moonwell's wins follow no Chainlink update, so polling is the
+# only detection there (scripts/liq-winners.py, 2026-10-16).
+pending_reads = true
 min_pool_liquidity_usd = 5000.0
 max_cycles = 20000
 gas_limit_estimate = 1500000

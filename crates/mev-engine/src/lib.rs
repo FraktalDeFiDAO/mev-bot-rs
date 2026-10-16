@@ -406,8 +406,13 @@ impl Engine {
         info!(chain = cfg.name, ?mode, "starting");
         let mut ws_urls = secrets.ws_urls();
         ws_urls.extend(cfg.ws_fallbacks.iter().cloned());
-        let rpc = Rpc::connect_with_fallbacks(&secrets.http_urls(), &cfg.http_fallbacks, &ws_urls)
-            .await?;
+        let rpc = Rpc::connect_with_fallbacks(
+            &secrets.http_urls(),
+            &cfg.http_fallbacks,
+            &ws_urls,
+            cfg.pending_reads,
+        )
+        .await?;
         // A wrong endpoint (another chain's key in `.env`) must stop the bot, not feed it foreign state.
         let chain_id =
             mev_rpc::retry_forever("chain id", || async { Ok(rpc.http.get_chain_id().await?) })
