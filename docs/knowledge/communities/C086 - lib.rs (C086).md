@@ -22,12 +22,12 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.load()** — `crates/mev-config/src/lib.rs:L655`
 - **DexConfig** — `crates/mev-config/src/lib.rs:L20`
 - **repo_config()** — `crates/mev-config/src/lib.rs:L852`
-- **liquidation_shadow_defaults_off_and_arbitrum_runs_it_bounded()** — `crates/mev-config/src/lib.rs:L857`
-- **nonfinite_and_negative_money_configuration_is_rejected()** — `crates/mev-config/src/lib.rs:L963`
-- **shipped_arbitrum_config_is_valid()** — `crates/mev-config/src/lib.rs:L877`
-- **unknown_symbol_falls_back_to_address()** — `crates/mev-config/src/lib.rs:L975`
-- **unknown_token_in_pairs_is_rejected()** — `crates/mev-config/src/lib.rs:L949`
-- **atlas_bid_configuration_is_rejected_until_settlement_is_verified()** — `crates/mev-config/src/lib.rs:L933`
+- **liquidation_shadow_defaults_off_and_arbitrum_bounds_it()** — `crates/mev-config/src/lib.rs:L857`
+- **nonfinite_and_negative_money_configuration_is_rejected()** — `crates/mev-config/src/lib.rs:L964`
+- **shipped_arbitrum_config_is_valid()** — `crates/mev-config/src/lib.rs:L878`
+- **unknown_symbol_falls_back_to_address()** — `crates/mev-config/src/lib.rs:L976`
+- **unknown_token_in_pairs_is_rejected()** — `crates/mev-config/src/lib.rs:L950`
+- **atlas_bid_configuration_is_rejected_until_settlement_is_verified()** — `crates/mev-config/src/lib.rs:L934`
 - **DexType** — `crates/mev-config/src/lib.rs:L11`
 - **PathBuf** — `graph`
 - **default_max_bonus_usd()** — `crates/mev-config/src/lib.rs:L830`
@@ -43,7 +43,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **default_v4_presimulate()** — `crates/mev-config/src/lib.rs:L357`
 - **default_v4_step()** — `crates/mev-config/src/lib.rs:L367`
 - **Path** — `graph`
-- **secrets_debug_never_prints_the_private_key()** — `crates/mev-config/src/lib.rs:L982`
+- **secrets_debug_never_prints_the_private_key()** — `crates/mev-config/src/lib.rs:L983`
 
 ## Related communities
 

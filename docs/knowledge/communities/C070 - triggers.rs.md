@@ -55,6 +55,6 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - [[docs/knowledge/communities/C170 - AaveConfig|AaveConfig]] — 10 cross-community edges
 - [[docs/knowledge/communities/C112 - fake_node.rs|fake_node.rs]] — 5 cross-community edges
 - [[docs/knowledge/communities/C119 - chain|chain]] — 4 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 1 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C039 - AaveTriggerIndexer|AaveTriggerIndexer]] — 1 cross-community edges
 - [[docs/knowledge/communities/C009 - audit.rs|audit.rs]] — 1 cross-community edges

@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "133"
-graphify-node-count: 19
-graphify-internal-edges: 27
+graphify-node-count: 20
+graphify-internal-edges: 30
 tags:
   - graphify/community
 ---
@@ -13,13 +13,14 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-lending-radiant/src/lib.rs` — 12 nodes
+- `crates/mev-lending-radiant/src/lib.rs` — 13 nodes
 - `graph` — 7 nodes
 
-## Nodes (19)
+## Nodes (20)
 
 - **Adapter** — `crates/mev-lending-radiant/src/lib.rs:L18`
 - **.plan()** — `crates/mev-lending-radiant/src/lib.rs:L50`
+- **.health()** — `crates/mev-lending-radiant/src/lib.rs:L46`
 - **Address** — `graph`
 - **Vec** — `graph`
 - **.accounts()** — `crates/mev-lending-radiant/src/lib.rs:L42`
@@ -40,5 +41,5 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 6 cross-community edges
-- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 1 cross-community edges
+- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 4 cross-community edges
+- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 2 cross-community edges

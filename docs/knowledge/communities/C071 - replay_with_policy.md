@@ -56,7 +56,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - [[docs/knowledge/communities/C178 - advisory_policy|advisory_policy]] — 4 cross-community edges
 - [[docs/knowledge/communities/C046 - event.rs|event.rs]] — 4 cross-community edges
 - [[docs/knowledge/communities/C012 - ChainPoint|ChainPoint]] — 3 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 2 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 2 cross-community edges
 - [[docs/knowledge/communities/C034 - advisory.rs (C034)|advisory.rs (C034)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C060 - mod.rs (C060)|mod.rs (C060)]] — 1 cross-community edges

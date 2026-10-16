@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "35"
-graphify-node-count: 47
-graphify-internal-edges: 130
+graphify-node-count: 49
+graphify-internal-edges: 135
 tags:
   - graphify/community
 ---
@@ -13,11 +13,11 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-risk/src/ledger.rs` — 38 nodes
-- `graph` — 8 nodes
+- `crates/mev-risk/src/ledger.rs` — 39 nodes
+- `graph` — 9 nodes
 - `crates/mev-risk/src/lib.rs` — 1 node
 
-## Nodes (47)
+## Nodes (49)
 
 - **Block** — `crates/mev-risk/src/lib.rs:L26`
 - **Ledger** — `crates/mev-risk/src/ledger.rs:L96`
@@ -30,6 +30,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.roll()** — `crates/mev-risk/src/ledger.rs:L118`
 - **.settle()** — `crates/mev-risk/src/ledger.rs:L597`
 - **signed_tip_liabilities_and_charges_survive_restart()** — `crates/mev-risk/src/ledger.rs:L770`
+- **State** — `crates/mev-risk/src/ledger.rs:L88`
 - **.persistent_existing()** — `crates/mev-risk/src/ledger.rs:L268`
 - **.set_native_price()** — `crates/mev-risk/src/ledger.rs:L528`
 - **native_cost()** — `crates/mev-risk/src/ledger.rs:L626`
@@ -62,6 +63,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.arb_spent()** — `crates/mev-risk/src/ledger.rs:L473`
 - **.spent()** — `crates/mev-risk/src/ledger.rs:L469`
 - **Arc** — `graph`
+- **BTreeSet** — `graph`
 - **Default** — `graph`
 - **Display** — `graph`
 - **Error** — `graph`
@@ -69,7 +71,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C193 - Seed|Seed]] — 14 cross-community edges
+- [[docs/knowledge/communities/C193 - Seed|Seed]] — 12 cross-community edges
 - [[docs/knowledge/communities/C204 - cost_microusd|cost_microusd]] — 11 cross-community edges
 - [[docs/knowledge/communities/C043 - RiskGuard|RiskGuard]] — 8 cross-community edges
 - [[docs/knowledge/communities/C147 - prepare|prepare]] — 3 cross-community edges
@@ -77,7 +79,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - [[docs/knowledge/communities/C235 - money.rs|money.rs]] — 3 cross-community edges
 - [[docs/knowledge/communities/C162 - assemble|assemble]] — 2 cross-community edges
 - [[docs/knowledge/communities/C069 - Item|Item]] — 2 cross-community edges
+- [[docs/knowledge/communities/C011 - gate.rs|gate.rs]] — 1 cross-community edges
 - [[docs/knowledge/communities/C014 - Engine|Engine]] — 1 cross-community edges
 - [[docs/knowledge/communities/C149 - Sender|Sender]] — 1 cross-community edges
 - [[docs/knowledge/communities/C169 - .new|.new]] — 1 cross-community edges
-- [[docs/knowledge/communities/C088 - bid.rs|bid.rs]] — 1 cross-community edges

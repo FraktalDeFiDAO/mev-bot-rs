@@ -1,8 +1,8 @@
 ---
 graphify-generated: true
 graphify-community: "28"
-graphify-node-count: 49
-graphify-internal-edges: 116
+graphify-node-count: 44
+graphify-internal-edges: 108
 tags:
   - graphify/community
 ---
@@ -13,31 +13,29 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Source files
 
-- `crates/mev-liquidate/src/lib.rs` — 33 nodes
-- `graph` — 12 nodes
-- `crates/mev-lending/src/lib.rs` — 2 nodes
-- `crates/mev-lending-radiant/src/lib.rs` — 1 node
+- `crates/mev-liquidate/src/lib.rs` — 34 nodes
+- `graph` — 8 nodes
+- `crates/mev-lending/src/lib.rs` — 1 node
 - `crates/mev-types/src/lib.rs` — 1 node
 
-## Nodes (49)
+## Nodes (44)
 
 - **AccountRef** — `crates/mev-types/src/lib.rs:L262`
 - **Health** — `crates/mev-lending/src/lib.rs:L29`
 - **Vec** — `graph`
 - **Address** — `graph`
 - **Fake** — `crates/mev-liquidate/src/lib.rs:L647`
-- **LiquidationAdapter** — `crates/mev-lending/src/lib.rs:L65`
 - **Population** — `crates/mev-liquidate/src/lib.rs:L800`
-- **Slot** — `crates/mev-liquidate/src/lib.rs:L96`
 - **Failing** — `crates/mev-liquidate/src/lib.rs:L765`
 - **Result** — `graph`
 - **.health()** — `crates/mev-liquidate/src/lib.rs:L827`
+- **.plan()** — `crates/mev-liquidate/src/lib.rs:L841`
+- **Plan** — `graph`
 - **.predict()** — `crates/mev-liquidate/src/lib.rs:L712`
 - **sweep_set()** — `crates/mev-liquidate/src/lib.rs:L616`
 - **.plan()** — `crates/mev-liquidate/src/lib.rs:L687`
 - **.plan()** — `crates/mev-liquidate/src/lib.rs:L785`
 - **.accounts()** — `crates/mev-liquidate/src/lib.rs:L824`
-- **.health()** — `crates/mev-lending-radiant/src/lib.rs:L46`
 - **.health()** — `crates/mev-liquidate/src/lib.rs:L671`
 - **.health()** — `crates/mev-liquidate/src/lib.rs:L782`
 - **Arc** — `graph`
@@ -58,30 +56,26 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - **.targets()** — `crates/mev-liquidate/src/lib.rs:L734`
 - **.targets()** — `crates/mev-liquidate/src/lib.rs:L791`
 - **.watched_feeds()** — `crates/mev-liquidate/src/lib.rs:L237`
-- **Box** — `graph`
 - **ProtocolId** — `graph`
 - **.id()** — `crates/mev-liquidate/src/lib.rs:L655`
 - **.id()** — `crates/mev-liquidate/src/lib.rs:L769`
 - **.id()** — `crates/mev-liquidate/src/lib.rs:L815`
 - **.index()** — `crates/mev-liquidate/src/lib.rs:L661`
 - **.index()** — `crates/mev-liquidate/src/lib.rs:L775`
-- **HashMap** — `graph`
+- **borrower()** — `crates/mev-liquidate/src/lib.rs:L805`
 - **Display** — `graph`
-- **HashSet** — `graph`
-- **Send** — `graph`
-- **Sync** — `graph`
 
 ## Related communities
 
-- [[docs/knowledge/communities/C013 - Runner|Runner]] — 55 cross-community edges
-- [[docs/knowledge/communities/C017 - AaveV3Adapter|AaveV3Adapter]] — 10 cross-community edges
-- [[docs/knowledge/communities/C003 - CompoundV3Adapter|CompoundV3Adapter]] — 7 cross-community edges
-- [[docs/knowledge/communities/C053 - MorphoAdapter|MorphoAdapter]] — 7 cross-community edges
-- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 6 cross-community edges
-- [[docs/knowledge/communities/C133 - Adapter (C133)|Adapter (C133)]] — 6 cross-community edges
-- [[docs/knowledge/communities/C121 - Adapter (C121)|Adapter (C121)]] — 5 cross-community edges
-- [[docs/knowledge/communities/C122 - Adapter (C122)|Adapter (C122)]] — 5 cross-community edges
-- [[docs/knowledge/communities/C131 - Adapter (C131)|Adapter (C131)]] — 5 cross-community edges
-- [[docs/knowledge/communities/C132 - Adapter (C132)|Adapter (C132)]] — 5 cross-community edges
-- [[docs/knowledge/communities/C061 - FluidAdapter|FluidAdapter]] — 5 cross-community edges
+- [[docs/knowledge/communities/C013 - Runner|Runner]] — 53 cross-community edges
+- [[docs/knowledge/communities/C017 - AaveV3Adapter|AaveV3Adapter]] — 9 cross-community edges
+- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 8 cross-community edges
+- [[docs/knowledge/communities/C003 - CompoundV3Adapter|CompoundV3Adapter]] — 6 cross-community edges
+- [[docs/knowledge/communities/C053 - MorphoAdapter|MorphoAdapter]] — 6 cross-community edges
+- [[docs/knowledge/communities/C121 - Adapter (C121)|Adapter (C121)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C122 - Adapter (C122)|Adapter (C122)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C131 - Adapter (C131)|Adapter (C131)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C132 - Adapter (C132)|Adapter (C132)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C133 - Adapter (C133)|Adapter (C133)]] — 4 cross-community edges
+- [[docs/knowledge/communities/C061 - FluidAdapter|FluidAdapter]] — 4 cross-community edges
 - [[docs/knowledge/communities/C045 - PoolInfo|PoolInfo]] — 3 cross-community edges

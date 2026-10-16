@@ -74,12 +74,12 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 10 cross-community edges
+- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 9 cross-community edges
 - [[docs/knowledge/communities/C079 - math.rs (C079)|math.rs (C079)]] — 5 cross-community edges
 - [[docs/knowledge/communities/C170 - AaveConfig|AaveConfig]] — 4 cross-community edges
 - [[docs/knowledge/communities/C039 - AaveTriggerIndexer|AaveTriggerIndexer]] — 3 cross-community edges
+- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 2 cross-community edges
 - [[docs/knowledge/communities/C003 - CompoundV3Adapter|CompoundV3Adapter]] — 2 cross-community edges
-- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 1 cross-community edges
 - [[docs/knowledge/communities/C177 - topic_address|topic_address]] — 1 cross-community edges
 - [[docs/knowledge/communities/C081 - Address|Address]] — 1 cross-community edges
 - [[docs/knowledge/communities/C089 - EventIndex|EventIndex]] — 1 cross-community edges

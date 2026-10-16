@@ -85,4 +85,4 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Related communities
 
 - [[docs/knowledge/communities/C014 - Engine|Engine]] — 2 cross-community edges
-- [[docs/knowledge/communities/C193 - Seed|Seed]] — 1 cross-community edges
+- [[docs/knowledge/communities/C035 - Block|Block]] — 1 cross-community edges

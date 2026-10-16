@@ -71,5 +71,5 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - [[docs/knowledge/communities/C024 - RuleSet|RuleSet]] — 3 cross-community edges
 - [[docs/knowledge/communities/C001 - lib.rs (C001)|lib.rs (C001)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C137 - SequencedTx|SequencedTx]] — 1 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 1 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C005 - api.rs|api.rs]] — 1 cross-community edges

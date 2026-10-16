@@ -43,14 +43,14 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Related communities
 
 - [[docs/knowledge/communities/C114 - Contract|Contract]] — 5 cross-community edges
-- [[docs/knowledge/communities/C072 - lib.rs (C072)|lib.rs (C072)]] — 4 cross-community edges
 - [[docs/knowledge/communities/C102 - EventKind|EventKind]] — 3 cross-community edges
+- [[docs/knowledge/communities/C113 - Protocol|Protocol]] — 3 cross-community edges
 - [[docs/knowledge/communities/C115 - lib.rs (C115)|lib.rs (C115)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C140 - lib.rs (C140)|lib.rs (C140)]] — 3 cross-community edges
+- [[docs/knowledge/communities/C072 - lib.rs (C072)|lib.rs (C072)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C077 - calls.rs|calls.rs]] — 3 cross-community edges
 - [[docs/knowledge/communities/C083 - lib.rs (C083)|lib.rs (C083)]] — 3 cross-community edges
 - [[docs/knowledge/communities/C105 - bad|bad]] — 2 cross-community edges
 - [[docs/knowledge/communities/C157 - UniswapV4|UniswapV4]] — 2 cross-community edges
 - [[docs/knowledge/communities/C159 - Lit|Lit]] — 2 cross-community edges
 - [[docs/knowledge/communities/C180 - Cow|Cow]] — 2 cross-community edges
-- [[docs/knowledge/communities/C103 - SwapIntent|SwapIntent]] — 1 cross-community edges

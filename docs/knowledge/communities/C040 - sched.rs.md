@@ -76,7 +76,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - [[docs/knowledge/communities/C012 - ChainPoint|ChainPoint]] — 6 cross-community edges
 - [[docs/knowledge/communities/C179 - World|World]] — 6 cross-community edges
 - [[docs/knowledge/communities/C142 - advisory_store.rs|advisory_store.rs]] — 5 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 3 cross-community edges
 - [[docs/knowledge/communities/C019 - RepoError|RepoError]] — 3 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C034 - advisory.rs (C034)|advisory.rs (C034)]] — 2 cross-community edges
+- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 1 cross-community edges
 - [[docs/knowledge/communities/C079 - math.rs (C079)|math.rs (C079)]] — 1 cross-community edges

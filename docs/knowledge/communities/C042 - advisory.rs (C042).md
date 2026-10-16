@@ -68,7 +68,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - [[docs/knowledge/communities/C007 - ScheduleOutput|ScheduleOutput]] — 15 cross-community edges
 - [[docs/knowledge/communities/C034 - advisory.rs (C034)|advisory.rs (C034)]] — 5 cross-community edges
 - [[docs/knowledge/communities/C060 - mod.rs (C060)|mod.rs (C060)]] — 3 cross-community edges
-- [[docs/knowledge/communities/C018 - BorrowerSnapshot|BorrowerSnapshot]] — 1 cross-community edges
+- [[docs/knowledge/communities/C150 - lib.rs (C150)|lib.rs (C150)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C188 - main.rs (C188)|main.rs (C188)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C067 - features.rs (C067)|features.rs (C067)]] — 1 cross-community edges
 - [[docs/knowledge/communities/C093 - Strategy|Strategy]] — 1 cross-community edges

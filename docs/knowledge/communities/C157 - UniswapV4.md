@@ -37,8 +37,8 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C072 - lib.rs (C072)|lib.rs (C072)]] — 5 cross-community edges
-- [[docs/knowledge/communities/C102 - EventKind|EventKind]] — 2 cross-community edges
+- [[docs/knowledge/communities/C102 - EventKind|EventKind]] — 3 cross-community edges
+- [[docs/knowledge/communities/C113 - Protocol|Protocol]] — 3 cross-community edges
 - [[docs/knowledge/communities/C136 - Decoded|Decoded]] — 2 cross-community edges
-- [[docs/knowledge/communities/C113 - Protocol|Protocol]] — 1 cross-community edges
+- [[docs/knowledge/communities/C072 - lib.rs (C072)|lib.rs (C072)]] — 2 cross-community edges
 - [[docs/knowledge/communities/C114 - Contract|Contract]] — 1 cross-community edges

@@ -76,10 +76,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C052 - lib.rs (C052)|lib.rs (C052)]] — 47 cross-community edges
+- [[docs/knowledge/communities/C052 - lib.rs (C052)|lib.rs (C052)]] — 53 cross-community edges
 - [[docs/knowledge/communities/C164 - Maint|Maint]] — 19 cross-community edges
 - [[docs/knowledge/communities/C190 - now_secs|now_secs]] — 17 cross-community edges
-- [[docs/knowledge/communities/C281 - .submission_guard_for|.submission_guard_for]] — 6 cross-community edges
 - [[docs/knowledge/communities/C163 - Opportunity|Opportunity]] — 5 cross-community edges
 - [[docs/knowledge/communities/C171 - Fees|Fees]] — 4 cross-community edges
 - [[docs/knowledge/communities/C069 - Item|Item]] — 4 cross-community edges
@@ -88,3 +87,4 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 - [[docs/knowledge/communities/C000 - liquidation.rs|liquidation.rs]] — 2 cross-community edges
 - [[docs/knowledge/communities/C011 - gate.rs|gate.rs]] — 2 cross-community edges
 - [[docs/knowledge/communities/C013 - Runner|Runner]] — 2 cross-community edges
+- [[docs/knowledge/communities/C025 - PoolStore|PoolStore]] — 2 cross-community edges

@@ -43,8 +43,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 ## Related communities
 
 - [[docs/knowledge/communities/C136 - Decoded|Decoded]] — 3 cross-community edges
-- [[docs/knowledge/communities/C102 - EventKind|EventKind]] — 1 cross-community edges
+- [[docs/knowledge/communities/C113 - Protocol|Protocol]] — 2 cross-community edges
 - [[docs/knowledge/communities/C103 - SwapIntent|SwapIntent]] — 1 cross-community edges
-- [[docs/knowledge/communities/C113 - Protocol|Protocol]] — 1 cross-community edges
 - [[docs/knowledge/communities/C114 - Contract|Contract]] — 1 cross-community edges
 - [[docs/knowledge/communities/C091 - events.rs|events.rs]] — 1 cross-community edges

@@ -122,9 +122,9 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 7 cross-community edges
+- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 6 cross-community edges
 - [[docs/knowledge/communities/C108 - ChainConfig|ChainConfig]] — 4 cross-community edges
-- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 2 cross-community edges
+- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 3 cross-community edges
 - [[docs/knowledge/communities/C017 - AaveV3Adapter|AaveV3Adapter]] — 2 cross-community edges
 - [[docs/knowledge/communities/C053 - MorphoAdapter|MorphoAdapter]] — 2 cross-community edges
 - [[docs/knowledge/communities/C061 - FluidAdapter|FluidAdapter]] — 2 cross-community edges

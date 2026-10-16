@@ -55,7 +55,7 @@ Back to [[docs/knowledge/Knowledge Map|Knowledge Map]].
 
 ## Related communities
 
-- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 5 cross-community edges
+- [[docs/knowledge/communities/C028 - AccountRef|AccountRef]] — 4 cross-community edges
 - [[docs/knowledge/communities/C108 - ChainConfig|ChainConfig]] — 3 cross-community edges
+- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 2 cross-community edges
 - [[docs/knowledge/communities/C003 - CompoundV3Adapter|CompoundV3Adapter]] — 2 cross-community edges
-- [[docs/knowledge/communities/C130 - AdapterStatus|AdapterStatus]] — 1 cross-community edges
