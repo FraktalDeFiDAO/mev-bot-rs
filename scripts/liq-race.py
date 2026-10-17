@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 
 MORPHO_LIQUIDATE = "0xa4946ede45d0c6f06a0f5ce92c9ad3b4751452d2fe0e25010783bcab57a67e41"
@@ -35,14 +36,20 @@ class Rpc:
     def __init__(self, url):
         self.url = url
 
-    def call(self, method, params):
+    def call(self, method, params, tries=5):
         body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
-        req = urllib.request.Request(self.url, body, {"content-type": "application/json", "user-agent": "liq-race/1"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            d = json.load(r)
-        if "error" in d:
-            raise RuntimeError(f"{method}: {d['error']}")
-        return d["result"]
+        for k in range(tries):
+            try:
+                req = urllib.request.Request(self.url, body, {"content-type": "application/json", "user-agent": "liq-race/1"})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    d = json.load(r)
+                if "error" in d:
+                    raise RuntimeError(f"{method}: {d['error']}")
+                return d["result"]
+            except Exception:  # noqa: BLE001 - Pocket answers HTTP 400 now and then (2026-10-17)
+                if k == tries - 1:
+                    raise
+                time.sleep(1 + 2 * k)
 
     def block_ts(self, n):
         return int(self.call("eth_getBlockByNumber", [hex(n), False])["timestamp"], 16)

@@ -58,6 +58,7 @@ sol! {
         function protocolSeizeShareMantissa() external view returns (uint256);
         function borrowBalanceStored(address account) external view returns (uint256);
         function getAccountSnapshot(address account) external view returns (uint256 err, uint256 balance, uint256 borrowed, uint256 exchangeRate);
+        function getCash() external view returns (uint256);
         function liquidateBorrow(address borrower, uint256 repayAmount, address mTokenCollateral) external returns (uint256);
         function redeem(uint256 redeemTokens) external returns (uint256);
         event Borrow(address borrower, uint256 borrowAmount, uint256 accountBorrows, uint256 totalBorrows);
@@ -80,6 +81,8 @@ const REPAY_HAIRCUT_BPS: u64 = 9_950;
 /// executor rather than reverting the redeem.
 const REDEEM_HAIRCUT_BPS: u64 = 9_990;
 const BPS: u64 = 10_000;
+/// Share of a market's cash a redeem may take: interest and other users move it before we land.
+const CASH_USE_BPS: f64 = 9_900.0;
 /// Health reads per multicall request.
 const CHUNK: usize = 200;
 
@@ -217,6 +220,11 @@ fn repay_amount(
     by_close.min(by_collateral) * U256::from(REPAY_HAIRCUT_BPS) / U256::from(BPS)
 }
 
+/// Collateral value a liquidation can turn into the underlying: at most a share of the market's cash.
+fn redeemable_usd(collateral_usd: f64, cash_usd: f64) -> f64 {
+    collateral_usd.min(cash_usd * CASH_USE_BPS / BPS as f64)
+}
+
 /// mTokens the liquidator keeps of `seize` (the protocol takes its seize share) and redeems.
 fn redeem_tokens(seize: U256, protocol_share: U256) -> U256 {
     let one = U256::from(10u64).pow(U256::from(18u8));
@@ -331,15 +339,19 @@ impl LiquidationAdapter for MoonwellAdapter {
         ms.dedup();
         ms.retain(|m| self.market(*m).is_some());
         let prices = self.prices(p, &ms).await?;
-        let reads: Vec<(Address, Bytes)> = ms
+        let mut reads: Vec<(Address, Bytes)> = ms
             .iter()
             .map(|m| call(*m, IMToken::getAccountSnapshotCall { account: who }))
             .collect();
-        let snaps = multicall(p, &reads, CHUNK).await?;
-        // Largest debt and largest collateral, in USD.
+        reads.extend(ms.iter().map(|m| call(*m, IMToken::getCashCall {})));
+        let res = multicall(p, &reads, CHUNK).await?;
+        let (snaps, cash) = res.split_at(ms.len());
+        // Largest debt, and the collateral with the most value we can actually redeem: the seized
+        // mTokens are redeemed for the underlying, which fails when the market's cash is lent out
+        // (Base cbETH 2026-10-17: $20k collateral, zero cash, liquidatable for hours, untouched).
         let mut debt: Option<(Address, U256, f64)> = None;
         let mut coll: Option<(Address, f64)> = None;
-        for (m, r) in ms.iter().zip(&snaps) {
+        for (k, (m, r)) in ms.iter().zip(snaps).enumerate() {
             let (Some(s), Some(px)) = (decode::<IMToken::getAccountSnapshotCall>(r), prices.get(m))
             else {
                 continue;
@@ -352,7 +364,8 @@ impl LiquidationAdapter for MoonwellAdapter {
                 debt = Some((*m, s.borrowed, d));
             }
             let underlying = s.balance * s.exchangeRate / U256::from(10u64).pow(U256::from(18u8));
-            let cu = usd(underlying, *px);
+            let cash_usd = decode::<IMToken::getCashCall>(&cash[k]).map_or(0.0, |c| usd(c, *px));
+            let cu = redeemable_usd(usd(underlying, *px), cash_usd);
             if cu > coll.map_or(0.0, |x| x.1) {
                 coll = Some((*m, cu));
             }
@@ -485,6 +498,25 @@ mod tests {
         // $110 collateral at a 10% incentive covers only 100 USDC of repayment.
         let r = repay_amount(U256::from(1_000_000_000u64), half, usdc_px, 110.0, inc);
         assert!(r <= U256::from(99_500_000u64) && r > U256::from(99_400_000u64));
+    }
+
+    #[test]
+    fn collateral_is_capped_by_the_markets_cash() {
+        assert_eq!(redeemable_usd(20_000.0, 0.0), 0.0);
+        assert_eq!(redeemable_usd(500.0, 1_000_000.0), 500.0);
+        assert!((redeemable_usd(20_000.0, 1_000.0) - 990.0).abs() < 1e-9);
+        // A cash-capped collateral also caps the repayment (seize = repay x incentive).
+        let half = U256::from(5u64) * U256::from(10u64).pow(U256::from(17u8));
+        let usdc_px = U256::from(10u64).pow(U256::from(30u8));
+        let inc = U256::from(11u64) * U256::from(10u64).pow(U256::from(17u8));
+        let r = repay_amount(
+            U256::from(10_000_000_000u64),
+            half,
+            usdc_px,
+            redeemable_usd(20_000.0, 1_100.0),
+            inc,
+        );
+        assert!(r < U256::from(990_000_000u64));
     }
 
     #[test]
