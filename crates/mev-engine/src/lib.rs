@@ -1454,7 +1454,11 @@ impl Engine {
         if self.mode != Mode::Shadow {
             return;
         }
-        let (Some(rl), Some(sim)) = (&self.revm_liq, &self.sim) else {
+        // A virtual executor has no on-chain code for revm to load: nothing to compare.
+        let (Some(rl), Some(sim)) = (
+            &self.revm_liq,
+            self.sim.as_ref().filter(|s| !s.is_virtual()),
+        ) else {
             return;
         };
         let (rl, metrics) = (rl.clone(), self.metrics.clone());
@@ -1543,7 +1547,8 @@ impl Engine {
         opps.sort_by(|a, b| b.est_profit_usd.total_cmp(&a.est_profit_usd));
         let mut out = Vec::new();
         for opp in opps.into_iter().take(max_sims) {
-            let sim = match &self.sim {
+            // A virtual executor (shadow without a deployment) only simulates liquidations.
+            let sim = match self.sim.as_ref().filter(|s| !s.is_virtual()) {
                 Some(sim) => Some(
                     sim.simulate(&opp, U256::ZERO)
                         .await
@@ -2395,7 +2400,9 @@ impl Engine {
             self.metrics.event("v4_candidate", base);
             return;
         }
-        let Some(sim) = &self.sim else {
+        // A virtual executor only simulates liquidations: arbitrage is not a goal where none is deployed,
+        // and simulating every candidate would load the free RPCs the liquidation sweeps depend on.
+        let Some(sim) = self.sim.as_ref().filter(|s| !s.is_virtual()) else {
             self.metrics.event("candidate", base);
             return;
         };
@@ -3187,6 +3194,16 @@ async fn wire_executor(
     let Some(exec) = secrets.executor else {
         if mode == Mode::Live {
             bail!("live mode needs EXECUTOR_ADDRESS");
+        }
+        if cfg.shadow_virtual_executor {
+            // No sender: a virtual executor only simulates (shadow measures profit, sends nothing).
+            let weth = cfg.token(&cfg.native_token)?;
+            let mut sim = Simulator::virtual_executor(rpc.http.clone(), cfg.balancer_vault, weth)
+                .await
+                .context("shadow_virtual_executor")?;
+            sim.flash_swaps = cfg.executor_flash_swaps;
+            warn!(executor = %sim.executor(), "EXECUTOR_ADDRESS not set: shadow simulates liquidations against a virtual executor built from source");
+            return Ok((Some(sim), None));
         }
         warn!("EXECUTOR_ADDRESS not set: shadow mode will log candidates without simulating");
         return Ok((None, None));
