@@ -20,10 +20,15 @@ gas_limit_estimate = 1500000
 # Flash loans: Balancer's Base vault is thin (cbBTC ~$900, no wstETH), so loans it cannot fund come from Aave V3's
 # Base pool (5 bps; pool and premium checked on-chain 2026-10-16). Aave liquidations themselves stay off (SVR).
 executor_aave_flash = true
-# No executor is deployed on Base: shadow simulates each liquidation against the executor built from
-# contracts/src, injected with an eth_call state override, so the logs say what it would have earned
-# (liq_sim_ok / liq_sim_revert) instead of only `liq_candidate`. Sends nothing.
+# No executor is deployed on Base: shadow simulates each liquidation and arbitrage against the executor
+# built from contracts/src, injected with an eth_call state override, so the logs say what it would have
+# earned (liq_sim_ok / sim_ok, or the revert) instead of only `liq_candidate` / `candidate`. Sends nothing.
 shadow_virtual_executor = true
+# The virtual executor is this repo's source, which has `executeFlashSwap`: arbitrage simulations borrow
+# from the route's first pool instead of Base's thin Balancer vault. Base arbitrage is measured, not sent:
+# 2,458 candidates on 2026-10-17/18 had a model-estimated $2,853 (p50 $0.24, 102 above $5), and a 2026 study
+# of Base under Flashblocks finds ~80% of arbitrage opportunities have a single searcher.
+executor_flash_swaps = true
 aave_flash_pool = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"
 loan_tokens = ["WETH", "USDC", "cbBTC"]
 usd_token = "USDC"
