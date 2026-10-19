@@ -12,7 +12,8 @@
 #   scripts/run.sh stop             stop and remove the container
 #   scripts/run.sh advisor-start    build + start the Jev advisor (shadow; needs secrets/typesafe_api_key, mode 0600)
 #   scripts/run.sh advisor-stop | advisor-status | advisor-logs
-#   scripts/run.sh base-shadow      start the Base bot (shadow only, public RPCs, no .env) next to Arbitrum
+#   scripts/run.sh base-shadow      start the Base bot (shadow only, no .env) next to Arbitrum; public RPCs,
+#                                   plus keyed BASE_* RPC URLs from secrets/base-rpc.env when present (mode 0600)
 #   scripts/run.sh base-stop | base-status | base-logs
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -96,24 +97,39 @@ advisor_start() {
 
 BASE_CTR=mev-bot-base
 BOT_IMAGE=localhost/mev-bot:dev
+BASE_RPC_ENV=secrets/base-rpc.env
 
-# Base runs shadow only (DECISIONS #175): public endpoints from config/base.toml, no secrets, no
-# signer. Plain `podman run` like the advisor so the Arbitrum bot's compose service is untouched.
+# Base runs shadow only (DECISIONS #175): public endpoints from config/base.toml, no signer. Keyed
+# RPC URLs are optional and come from their own file, never .env (which holds the signing key): only
+# BASE_{HTTP,WS,SWEEP,PRESIM}_URL* lines are allowed, so nothing else can reach the container.
+base_rpc_env() {
+  env_args=()
+  [[ -f $BASE_RPC_ENV ]] || return 0
+  [[ $(stat -c %a "$BASE_RPC_ENV") == 600 ]] || { echo "$BASE_RPC_ENV must be mode 0600" >&2; exit 1; }
+  if grep -vE '^\s*(#.*)?$' "$BASE_RPC_ENV" | grep -qvE '^BASE_(HTTP_URL|WS_URL|WS_FALLBACK|SWEEP_URL|PRESIM_URL)(_[1-9])?='; then
+    echo "$BASE_RPC_ENV: only BASE_HTTP_URL / BASE_WS_URL / BASE_WS_FALLBACK / BASE_SWEEP_URL / BASE_PRESIM_URL[_N] lines allowed" >&2
+    exit 1
+  fi
+  env_args=(--env-file "$BASE_RPC_ENV")
+}
+
 base_start() {
   mkdir -p data/base
+  local env_args
+  base_rpc_env
   podman image exists "$BOT_IMAGE" || compose build bot >/dev/null
   podman rm -f "$BASE_CTR" >/dev/null 2>&1 || true
-  podman run -d --name "$BASE_CTR" --network host \
+  podman run -d --name "$BASE_CTR" --network host "${env_args[@]}" \
     --userns keep-id --user "$(id -u):$(id -g)" \
     --read-only --tmpfs /tmp:rw,nosuid,nodev,size=16m \
-    --security-opt no-new-privileges:true --cap-drop ALL --pids-limit 128 --memory 1g \
+    --security-opt no-new-privileges:true --cap-drop ALL --pids-limit 128 --memory 2g \
     --restart always \
     --health-cmd 'test $(( $(date +%s) - $(cat /var/lib/mev-bot/base/heartbeat 2>/dev/null || echo 0) )) -lt 180' \
     --health-interval 60s --health-timeout 5s --health-retries 3 --health-start-period 120s \
     -e RUST_LOG="${RUST_LOG:-info}" -e NO_COLOR=1 \
     -v "$PWD/data:/var/lib/mev-bot:Z" -v "$PWD/config:/app/config:ro,Z" \
     "$BOT_IMAGE" --mode shadow --config /app/config/base.toml >/dev/null
-  echo "Base bot started (shadow) — 'scripts/run.sh base-logs' to follow"
+  echo "Base bot started (shadow${env_args[*]:+, keyed RPCs from $BASE_RPC_ENV}) — 'scripts/run.sh base-logs' to follow"
 }
 
 case "${1:-}" in
