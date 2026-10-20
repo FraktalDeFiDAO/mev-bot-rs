@@ -1454,7 +1454,11 @@ impl Engine {
         if self.mode != Mode::Shadow {
             return;
         }
-        let (Some(rl), Some(sim)) = (&self.revm_liq, &self.sim) else {
+        // A virtual executor has no on-chain code for revm to load: nothing to compare.
+        let (Some(rl), Some(sim)) = (
+            &self.revm_liq,
+            self.sim.as_ref().filter(|s| !s.is_virtual()),
+        ) else {
             return;
         };
         let (rl, metrics) = (rl.clone(), self.metrics.clone());
@@ -2480,8 +2484,9 @@ impl Engine {
             // A trade triggered by a pending feed transaction only exists once that transaction has
             // landed, so verify the two together in one simulated block; a plain eth_call at the
             // latest block would reject exactly the trades the feed path finds a block early.
+            // `eth_simulateV1` carries no state override, so a virtual executor takes the plain eth_call path.
             let after = match (trigger.source, trigger.tx, &self.sim_v1) {
-                ("presim", Some(tx), Some(p)) => self
+                ("presim", Some(tx), Some(p)) if !sim.is_virtual() => self
                     .trigger_calls
                     .get(&tx)
                     .map(|(_, call, blk)| (p.clone(), call.clone(), *blk)),
@@ -3187,6 +3192,16 @@ async fn wire_executor(
     let Some(exec) = secrets.executor else {
         if mode == Mode::Live {
             bail!("live mode needs EXECUTOR_ADDRESS");
+        }
+        if cfg.shadow_virtual_executor {
+            // No sender: a virtual executor only simulates (shadow measures profit, sends nothing).
+            let weth = cfg.token(&cfg.native_token)?;
+            let mut sim = Simulator::virtual_executor(rpc.http.clone(), cfg.balancer_vault, weth)
+                .await
+                .context("shadow_virtual_executor")?;
+            sim.flash_swaps = cfg.executor_flash_swaps;
+            warn!(executor = %sim.executor(), "EXECUTOR_ADDRESS not set: shadow simulates against a virtual executor built from source");
+            return Ok((Some(sim), None));
         }
         warn!("EXECUTOR_ADDRESS not set: shadow mode will log candidates without simulating");
         return Ok((None, None));

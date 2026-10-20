@@ -622,6 +622,11 @@ pub struct ChainConfig {
     /// liquidation adapter is off; `[aave] pool` takes precedence when set.
     #[serde(default)]
     pub aave_flash_pool: Option<Address>,
+    /// Shadow mode with no deployed executor (`EXECUTOR_ADDRESS` unset): simulate against the
+    /// executor built from this repo's source, injected with an `eth_call` state override, so
+    /// shadow measures profit instead of only logging candidates. Never used to send.
+    #[serde(default)]
+    pub shadow_virtual_executor: bool,
     pub tokens: HashMap<String, Address>,
     /// Tokens we may flash-borrow (must be held by the Balancer vault).
     pub loan_tokens: Vec<String>,

@@ -12,6 +12,14 @@ if grep -rnE 'todo!\(|unimplemented!\(|panic!\("TODO' crates --include='*.rs' | 
 fi
 cargo clippy -q --workspace --all-targets -- -D warnings
 cargo test -q --workspace
+if command -v forge >/dev/null; then
+  # The shadow virtual executor (mev-sim) must be the contract in contracts/src.
+  if [[ "$(cd contracts && forge inspect ArbExecutor bytecode | tail -1)" != "$(tr -d '[:space:]' < crates/mev-sim/src/arb_executor.creation.hex)" ]]; then
+    echo "check: crates/mev-sim/src/arb_executor.creation.hex is stale; regenerate it with" >&2
+    echo "  (cd contracts && forge inspect ArbExecutor bytecode | tail -1) > crates/mev-sim/src/arb_executor.creation.hex" >&2
+    exit 1
+  fi
+fi
 if [[ ${1:-} == --all ]]; then
   (cd contracts && forge fmt --check && ARBITRUM_HTTP_URL="${ARBITRUM_FORK_URL:-https://arb1.arbitrum.io/rpc}" forge test -q)
 fi

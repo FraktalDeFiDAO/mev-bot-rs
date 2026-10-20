@@ -20,6 +20,15 @@ gas_limit_estimate = 1500000
 # Flash loans: Balancer's Base vault is thin (cbBTC ~$900, no wstETH), so loans it cannot fund come from Aave V3's
 # Base pool (5 bps; pool and premium checked on-chain 2026-10-16). Aave liquidations themselves stay off (SVR).
 executor_aave_flash = true
+# No executor is deployed on Base: shadow simulates each liquidation and arbitrage against the executor
+# built from contracts/src, injected with an eth_call state override, so the logs say what it would have
+# earned (liq_sim_ok / sim_ok, or the revert) instead of only `liq_candidate` / `candidate`. Sends nothing.
+shadow_virtual_executor = true
+# The virtual executor is this repo's source, which has `executeFlashSwap`: arbitrage simulations borrow
+# from the route's first pool instead of Base's thin Balancer vault. Base arbitrage is measured, not sent:
+# 2,458 candidates on 2026-10-17/18 had a model-estimated $2,853 (p50 $0.24, 102 above $5), and a 2026 study
+# of Base under Flashblocks finds ~80% of arbitrage opportunities have a single searcher.
+executor_flash_swaps = true
 aave_flash_pool = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"
 loan_tokens = ["WETH", "USDC", "cbBTC"]
 usd_token = "USDC"
@@ -32,7 +41,9 @@ pairs = [
 ]
 
 # Every endpoint answered an eth_call on 2026-10-15; ordered by latency at runtime (mev-rpc rotate).
-http_fallbacks = ["https://mainnet.base.org", "https://base.gateway.tenderly.co", "https://base-mainnet.public.blastapi.io", "https://base.drpc.org", "https://base-pokt.nodies.app", "https://base-rpc.publicnode.com", "https://base.api.pocket.network"]
+# 1rpc added 2026-10-19 (pending 200-call multicall and state overrides answered); widens the pool the
+# health polls rotate over: in the 2026-10-17 21:32 crash every endpoint rate-limited at once.
+http_fallbacks = ["https://mainnet.base.org", "https://base.gateway.tenderly.co", "https://base-mainnet.public.blastapi.io", "https://base.drpc.org", "https://base-pokt.nodies.app", "https://base-rpc.publicnode.com", "https://base.api.pocket.network", "https://1rpc.io/base"]
 # Both held newHeads + logs subscriptions for 40 s on 2026-10-16. No dRPC: from 2026-10-16 its WS
 # closes every connection ~1 s after the handshake (code 1006), and alloy's pubsub then redials it
 # about four times a second instead of failing over.
@@ -47,7 +58,10 @@ enabled = true
 # dRPC < 500, PublicNode no archive, mainnet.base.org "request limit reached".
 scan_rpc = "https://base.api.pocket.network"
 sweep_rpc = "https://mainnet.base.org"
-sweep_rpc_fallbacks = ["https://base.gateway.tenderly.co", "https://base-mainnet.public.blastapi.io", "https://base.drpc.org", "https://base-pokt.nodies.app"]
+# The 21:35 and 21:36 sweeps of the 2026-10-17 crash failed with every endpoint answering 429/403;
+# PublicNode and 1rpc added 2026-10-19 (both answer 200-call `pending` multicalls). A dedicated
+# endpoint (even a free keyed tier) is the real fix: public limits are per IP and tighten in a crash.
+sweep_rpc_fallbacks = ["https://base.gateway.tenderly.co", "https://base-mainnet.public.blastapi.io", "https://base.drpc.org", "https://base-pokt.nodies.app", "https://base-rpc.publicnode.com", "https://1rpc.io/base"]
 at_risk_hf = 1.05
 min_debt_usd = 20.0
 sweep_secs = 300

@@ -1,14 +1,23 @@
 //! Exact simulation of an opportunity by calling the deployed executor against live state.
+//!
+//! Shadow mode on a chain with no deployed executor can simulate against a *virtual* one: the
+//! executor built from this repo's source, created by an `eth_call` (which returns the runtime
+//! code with the immutables set) and injected at a fixed address with a state override on every
+//! call. It is never used to send.
 
 pub mod pga;
 
 use alloy::{
-    primitives::{Address, U256},
+    network::TransactionBuilder,
+    primitives::{Address, Bytes, U256, address},
     providers::{DynProvider, Provider},
-    rpc::types::TransactionRequest,
-    sol_types::SolCall,
+    rpc::types::{
+        TransactionRequest,
+        state::{AccountOverride, StateOverride},
+    },
+    sol_types::{SolCall, SolValue},
 };
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use mev_bindings::ArbExecutor;
 use mev_lending::Plan;
 use mev_types::{Hop, Opportunity};
@@ -19,12 +28,22 @@ pub enum SimOutcome {
     Reverted(String),
 }
 
+/// `ArbExecutor` creation code (`forge inspect ArbExecutor bytecode`); `scripts/check.sh` keeps it
+/// equal to `contracts/src`.
+pub const ARB_EXECUTOR_CREATION: &str = include_str!("arb_executor.creation.hex");
+/// Where the virtual executor's code is injected, and the owner it is created by (no keys exist for
+/// either; they only appear in `eth_call`s).
+pub const VIRTUAL_EXECUTOR: Address = address!("0x00000000000000000000000000000000005ad0e0");
+pub const VIRTUAL_OWNER: Address = address!("0x00000000000000000000000000000000005ad0e5");
+
 pub struct Simulator {
     provider: DynProvider,
     executor: Address,
     owner: Address,
     /// The deployed executor has `executeFlashSwap` (must match the sender's setting).
     pub flash_swaps: bool,
+    /// Virtual executor: the runtime code every call injects at `executor`.
+    code: Option<StateOverride>,
 }
 
 impl Simulator {
@@ -34,6 +53,60 @@ impl Simulator {
             executor,
             owner,
             flash_swaps: false,
+            code: None,
+        }
+    }
+
+    /// A simulator for an executor that is not deployed (see the module docs). `vault` and `weth`
+    /// are its constructor arguments; the profit receiver is the virtual owner.
+    pub async fn virtual_executor(
+        provider: DynProvider,
+        vault: Address,
+        weth: Address,
+    ) -> Result<Self> {
+        let mut code: Vec<u8> = alloy::primitives::hex::decode(ARB_EXECUTOR_CREATION.trim())
+            .context("ARB_EXECUTOR_CREATION is not hex")?;
+        code.extend((vault, weth, VIRTUAL_OWNER).abi_encode_params());
+        let create = TransactionRequest::default()
+            .from(VIRTUAL_OWNER)
+            .with_deploy_code(Bytes::from(code));
+        let runtime = provider
+            .call(create)
+            .await
+            .context("creating the virtual executor with eth_call")?;
+        ensure!(
+            !runtime.is_empty(),
+            "virtual executor creation returned no code"
+        );
+        let mut overrides = StateOverride::default();
+        overrides.insert(
+            VIRTUAL_EXECUTOR,
+            AccountOverride {
+                code: Some(runtime),
+                ..Default::default()
+            },
+        );
+        let mut sim = Self::new(provider, VIRTUAL_EXECUTOR, VIRTUAL_OWNER);
+        sim.code = Some(overrides);
+        Ok(sim)
+    }
+
+    /// Whether calls run against injected code rather than a deployed executor.
+    pub fn is_virtual(&self) -> bool {
+        self.code.is_some()
+    }
+
+    async fn eth_call(&self, req: TransactionRequest) -> alloy::transports::TransportResult<Bytes> {
+        match &self.code {
+            Some(o) => self.provider.call(req).overrides(o.clone()).await,
+            None => self.provider.call(req).await,
+        }
+    }
+
+    async fn estimate(&self, req: TransactionRequest) -> alloy::transports::TransportResult<u64> {
+        match &self.code {
+            Some(o) => self.provider.estimate_gas(req).overrides(o.clone()).await,
+            None => self.provider.estimate_gas(req).await,
         }
     }
 
@@ -65,8 +138,7 @@ impl Simulator {
     /// `eth_call` the arbitrage; the executor returns its profit.
     async fn call_arb(&self, req: &TransactionRequest) -> std::result::Result<U256, String> {
         let raw = self
-            .provider
-            .call(req.clone())
+            .eth_call(req.clone())
             .await
             .map_err(|e| short(&e.to_string()))?;
         ArbExecutor::executeCall::abi_decode_returns(&raw).map_err(|e| short(&e.to_string()))
@@ -77,7 +149,7 @@ impl Simulator {
     pub async fn simulate(&self, opp: &Opportunity, min_profit: U256) -> Result<SimOutcome> {
         let req = self.arb_request(opp, min_profit);
         match self.call_arb(&req).await {
-            Ok(profit) => match self.provider.estimate_gas(req).await {
+            Ok(profit) => match self.estimate(req).await {
                 Ok(gas) => Ok(SimOutcome::Profitable { profit, gas }),
                 Err(e) => Ok(SimOutcome::Reverted(format!("estimate_gas: {e}"))),
             },
@@ -119,7 +191,12 @@ impl Simulator {
         block: alloy::eips::BlockId,
     ) -> Result<SimOutcome> {
         let req = self.arb_request(opp, min_profit);
-        let raw = match self.provider.call(req).block(block).await {
+        let call = self.provider.call(req).block(block);
+        let call = match &self.code {
+            Some(o) => call.overrides(o.clone()),
+            None => call,
+        };
+        let raw = match call.await {
             Ok(raw) => raw,
             Err(e) => return Ok(SimOutcome::Reverted(short(&e.to_string()))),
         };
@@ -147,7 +224,7 @@ impl Simulator {
             .to(self.executor)
             .input(mev_bindings::liquidation_calldata(plan, hops, min_profit, aave_pool).into());
         match self.call_arb(&req).await {
-            Ok(profit) => match self.provider.estimate_gas(req).await {
+            Ok(profit) => match self.estimate(req).await {
                 Ok(gas) => Ok(SimOutcome::Profitable { profit, gas }),
                 Err(e) => Ok(SimOutcome::Reverted(format!("estimate_gas: {e}"))),
             },
@@ -163,6 +240,20 @@ fn short(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn virtual_executor_creation_code_decodes_and_takes_three_words() {
+        let code = alloy::primitives::hex::decode(ARB_EXECUTOR_CREATION.trim()).unwrap();
+        // Creation code (runtime 21,376 B on 2026-10-19) plus constructor(vault, weth, receiver).
+        assert!(code.len() > 20_000, "{}", code.len());
+        assert_eq!(
+            (Address::ZERO, Address::ZERO, VIRTUAL_OWNER)
+                .abi_encode_params()
+                .len(),
+            96
+        );
+        assert_ne!(VIRTUAL_EXECUTOR, VIRTUAL_OWNER);
+    }
 
     #[test]
     fn arb_gas_estimate_covers_live_two_hop_trades() {

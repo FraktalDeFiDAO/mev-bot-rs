@@ -525,9 +525,15 @@ impl LiquidationAdapter for MorphoAdapter {
         let Some(pm) = self.params.lock().unwrap().get(&id).copied() else {
             return Ok(None);
         };
+        // Each early return names its reason: an unplanned liquidatable account (`liq_no_plan`) is
+        // otherwise indistinguishable from a race lost before the re-read.
+        let no_plan = |reason: &str| {
+            info!(protocol = ID, account = %h.account.account, market = %id, hf = h.health_factor, reason, "no plan");
+            Ok(None)
+        };
         let states = self.market_states(&self.rpc.fast, &[id]).await?;
         let Some(s) = states.get(&id) else {
-            return Ok(None);
+            return no_plan("market state unreadable");
         };
         let res = multicall(
             &self.rpc.fast,
@@ -542,7 +548,7 @@ impl LiquidationAdapter for MorphoAdapter {
         )
         .await?;
         let Some(pos) = decode::<IMorpho::positionCall>(&res[0]) else {
-            return Ok(None);
+            return no_plan("position unreadable");
         };
         // Health and sizing from the exact integer reads (the floats above only nominated this account).
         let collateral = U256::from(pos.collateral);
@@ -551,13 +557,18 @@ impl LiquidationAdapter for MorphoAdapter {
             s.total_borrow_assets_raw,
             s.total_borrow_shares_raw,
         ) else {
-            return Ok(None);
+            return no_plan("borrow assets overflow");
         };
-        if math::exact::is_healthy(collateral, borrowed, s.price_raw, pm.lltv) != Some(false) {
-            return Ok(None);
+        match math::exact::is_healthy(collateral, borrowed, s.price_raw, pm.lltv) {
+            Some(false) => {}
+            Some(true) if pos.borrowShares == 0 => {
+                return no_plan("repaid or liquidated before the re-read");
+            }
+            Some(true) => return no_plan("healthy at the exact re-read"),
+            None => return no_plan("exact health overflow"),
         }
         let Some(size) = math::exact::size(collateral, borrowed, s.price_raw, pm.lltv) else {
-            return Ok(None);
+            return no_plan("exact size failed");
         };
         let borrowed_f = f64::from(borrowed);
         Ok(self.build_plan(
