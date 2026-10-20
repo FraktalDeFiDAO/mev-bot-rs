@@ -8,3 +8,6 @@ publish.workspace = true
 [dependencies]
 alloy = { workspace = true }
 serde = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

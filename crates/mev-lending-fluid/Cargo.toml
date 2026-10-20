@@ -21,3 +21,6 @@ tempfile = "3"
 mev-config = { workspace = true }
 mev-rpc = { workspace = true }
 tokio = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

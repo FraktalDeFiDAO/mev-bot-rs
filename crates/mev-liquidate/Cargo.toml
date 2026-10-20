@@ -23,3 +23,6 @@ serde_json = { workspace = true }
 async-trait = { workspace = true }
 tempfile = "3"
 tracing-subscriber = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

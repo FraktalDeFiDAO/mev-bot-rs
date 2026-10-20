@@ -9,3 +9,6 @@ description = "Uniswap routers on Arbitrum (SwapRouter02, SwapRouter v1, Univers
 [dependencies]
 alloy = { workspace = true }
 mev-protocol = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

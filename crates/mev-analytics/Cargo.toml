@@ -27,3 +27,46 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 mev-types = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner
+
+[[bin]]
+name = "mev-accounting"
+path = "src/bin/mev-accounting.rs"
+test = false  # no tests in the binary
+
+[[bin]]
+name = "mev-analyze"
+path = "src/bin/mev-analyze.rs"
+test = false  # no tests in the binary
+
+[[bin]]
+name = "mev-feedlead"
+path = "src/bin/mev-feedlead.rs"
+test = false  # no tests in the binary
+
+[[bin]]
+name = "mev-ledger-seed"
+path = "src/bin/mev-ledger-seed.rs"
+test = false  # no tests in the binary
+
+[[bin]]
+name = "mev-liq-audit"
+path = "src/bin/mev-liq-audit.rs"
+test = false  # no tests in the binary
+
+[[bin]]
+name = "mev-pnl"
+path = "src/bin/mev-pnl.rs"
+test = false  # no tests in the binary
+
+[[bin]]
+name = "mev-redact"
+path = "src/bin/mev-redact.rs"
+test = false  # no tests in the binary
+
+[[bin]]
+name = "mev-scan"
+path = "src/bin/mev-scan.rs"
+test = false  # no tests in the binary

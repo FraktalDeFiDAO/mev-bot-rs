@@ -17,3 +17,7 @@ thiserror = { workspace = true }
 redb = { workspace = true }
 alloy = { workspace = true }
 serde_json = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner
+test = false  # no unit tests in src/; the tests/ suites still run

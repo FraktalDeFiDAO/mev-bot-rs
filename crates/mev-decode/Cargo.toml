@@ -13,6 +13,7 @@ cli = ["dep:mev-sequencer", "dep:tokio", "dep:serde_json"]
 
 [[bin]]
 name = "mev-decode"
+test = false  # no tests in the binary
 required-features = ["cli"]
 
 [dependencies]
@@ -43,3 +44,6 @@ tokio = { workspace = true, optional = true }
 [dev-dependencies]
 mev-bindings = { workspace = true }
 serde_json = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

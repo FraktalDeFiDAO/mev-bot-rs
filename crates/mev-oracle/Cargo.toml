@@ -12,3 +12,6 @@ futures = { workspace = true }
 tracing = { workspace = true }
 mev-bindings = { workspace = true }
 mev-rpc = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

@@ -9,3 +9,6 @@ description = "1inch AggregationRouter v6: swap intent (tokens and amount; the r
 [dependencies]
 alloy = { workspace = true }
 mev-protocol = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

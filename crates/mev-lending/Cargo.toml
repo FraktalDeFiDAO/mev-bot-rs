@@ -11,3 +11,6 @@ alloy = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

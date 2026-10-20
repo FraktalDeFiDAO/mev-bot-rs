@@ -9,3 +9,6 @@ description = "Camelot V3 (Algebra) SwapRouter: exactInputSingle swap intent"
 [dependencies]
 alloy = { workspace = true }
 mev-protocol = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

@@ -17,3 +17,11 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner
+
+[[bin]]
+name = "mev-atlas-check"
+path = "src/bin/mev-atlas-check.rs"
+test = false  # no tests in the binary

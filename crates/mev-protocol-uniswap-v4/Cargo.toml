@@ -9,3 +9,6 @@ description = "Uniswap V4 PoolManager: swap and modify-liquidity events"
 [dependencies]
 alloy = { workspace = true }
 mev-protocol = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

@@ -17,3 +17,6 @@ mev-rpc = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

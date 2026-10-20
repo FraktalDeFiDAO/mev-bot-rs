@@ -9,3 +9,6 @@ description = "Paraswap Augustus v5: simpleSwap and directUniV3Swap token-pair s
 [dependencies]
 alloy = { workspace = true }
 mev-protocol = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

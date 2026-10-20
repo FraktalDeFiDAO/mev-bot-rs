@@ -15,3 +15,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 mev-decode = { workspace = true }
 mev-presim = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner
