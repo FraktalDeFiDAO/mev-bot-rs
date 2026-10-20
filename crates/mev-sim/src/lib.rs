@@ -3,13 +3,14 @@
 //! Shadow mode on a chain with no deployed executor can simulate against a *virtual* one: the
 //! executor built from this repo's source, created by an `eth_call` (which returns the runtime
 //! code with the immutables set) and injected at a fixed address with a state override on every
-//! call. It is never used to send.
+//! call, together with the storage its owner would have set (the liquidation target allowlist and
+//! the Uniswap V4 PoolManager). It is never used to send.
 
 pub mod pga;
 
 use alloy::{
     network::TransactionBuilder,
-    primitives::{Address, Bytes, U256, address},
+    primitives::{Address, B256, Bytes, U256, address, keccak256, map::B256HashMap},
     providers::{DynProvider, Provider},
     rpc::types::{
         TransactionRequest,
@@ -35,6 +36,29 @@ pub const ARB_EXECUTOR_CREATION: &str = include_str!("arb_executor.creation.hex"
 /// either; they only appear in `eth_call`s).
 pub const VIRTUAL_EXECUTOR: Address = address!("0x00000000000000000000000000000000005ad0e0");
 pub const VIRTUAL_OWNER: Address = address!("0x00000000000000000000000000000000005ad0e5");
+/// `ArbExecutor` storage (`forge inspect ArbExecutor storageLayout`; `scripts/check.sh` keeps it so):
+/// slot 0 `mapping(address => bool) allowedTarget`, slot 1 `address poolManager`.
+const SLOT_ALLOWED_TARGET: u64 = 0;
+const SLOT_POOL_MANAGER: u64 = 1;
+
+/// Storage slot of `allowedTarget[target]`: keccak256(abi.encode(target, slot)).
+fn allowed_target_slot(target: Address) -> B256 {
+    keccak256((target, U256::from(SLOT_ALLOWED_TARGET)).abi_encode_params())
+}
+
+/// The storage an owner would set on a deployed executor: every `targets` allowlisted
+/// (`setAllowedTarget`) and `pool_manager` set (`setPoolManager`).
+fn owner_storage(targets: &[Address], pool_manager: Option<Address>) -> B256HashMap<B256> {
+    let one = B256::from(U256::from(1));
+    let mut m: B256HashMap<B256> = targets
+        .iter()
+        .map(|t| (allowed_target_slot(*t), one))
+        .collect();
+    if let Some(pm) = pool_manager {
+        m.insert(B256::from(U256::from(SLOT_POOL_MANAGER)), pm.into_word());
+    }
+    m
+}
 
 pub struct Simulator {
     provider: DynProvider,
@@ -58,11 +82,15 @@ impl Simulator {
     }
 
     /// A simulator for an executor that is not deployed (see the module docs). `vault` and `weth`
-    /// are its constructor arguments; the profit receiver is the virtual owner.
+    /// are its constructor arguments; the profit receiver is the virtual owner. `targets` are the
+    /// liquidation targets to allowlist and `pool_manager` the Uniswap V4 PoolManager, as an owner
+    /// would set them after deploying.
     pub async fn virtual_executor(
         provider: DynProvider,
         vault: Address,
         weth: Address,
+        targets: &[Address],
+        pool_manager: Option<Address>,
     ) -> Result<Self> {
         let mut code: Vec<u8> = alloy::primitives::hex::decode(ARB_EXECUTOR_CREATION.trim())
             .context("ARB_EXECUTOR_CREATION is not hex")?;
@@ -83,6 +111,7 @@ impl Simulator {
             VIRTUAL_EXECUTOR,
             AccountOverride {
                 code: Some(runtime),
+                state_diff: Some(owner_storage(targets, pool_manager)),
                 ..Default::default()
             },
         );
@@ -253,6 +282,22 @@ mod tests {
             96
         );
         assert_ne!(VIRTUAL_EXECUTOR, VIRTUAL_OWNER);
+    }
+
+    #[test]
+    fn owner_storage_allowlists_targets_and_sets_the_pool_manager() {
+        let morpho = address!("0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb");
+        let pm = address!("0x498581fF718922c3f8e6A244956aF099B2652b2b");
+        let m = owner_storage(&[morpho], Some(pm));
+        assert_eq!(m.len(), 2);
+        // Solidity mapping slot: keccak256(pad32(key) ++ pad32(slot)).
+        let mut pre = [0u8; 64];
+        pre[12..32].copy_from_slice(morpho.as_slice());
+        assert_eq!(m[&keccak256(pre)], B256::from(U256::from(1)));
+        let mut slot1 = [0u8; 32];
+        slot1[31] = 1;
+        assert_eq!(m[&B256::from(slot1)].as_slice()[12..], pm.as_slice()[..]);
+        assert!(owner_storage(&[], None).is_empty());
     }
 
     #[test]

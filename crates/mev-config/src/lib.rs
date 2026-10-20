@@ -347,6 +347,10 @@ pub struct UniswapV4Config {
     /// First block to scan for pool creation (the PoolManager's deployment is after this).
     #[serde(default = "default_v4_first_block")]
     pub first_block: u64,
+    /// V4 PositionManager: keys of recently active pools missing from the registry are read from its
+    /// `poolKeys` table, so a chain whose free RPCs can't scan `Initialize` history still finds them.
+    #[serde(default)]
+    pub position_manager: Option<Address>,
     /// Recent blocks scanned for swap activity, and blocks per `getLogs` request.
     #[serde(default = "default_v4_blocks")]
     pub blocks: u64,
