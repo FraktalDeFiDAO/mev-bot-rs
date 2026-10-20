@@ -146,12 +146,23 @@ async fn real_window_yields_the_expected_dirty_set_and_reverse_index() {
             _ => None,
         })
         .collect();
+    // The same step reconciles at the current head: a window borrower who has since repaid is
+    // deactivated and leaves the dirty set, so only still-active ones must carry the marks.
+    let active: std::collections::BTreeSet<Address> = repo
+        .active_borrowers(CHAIN, cfg.pool)
+        .unwrap()
+        .into_iter()
+        .collect();
     for b in &borrowers {
         assert!(
             repo.borrower(CHAIN, cfg.pool, *b).unwrap().is_some(),
             "{b} registered"
         );
         let r = reasons(&repo, *b);
+        if !active.contains(b) {
+            assert!(r.is_empty(), "deactivated {b} left the dirty set: {r:?}");
+            continue;
+        }
         assert!(
             r.contains(&DirtyReason::Discovered) && r.contains(&DirtyReason::BorrowerEvent),
             "{b}: {r:?}"
@@ -166,7 +177,7 @@ async fn real_window_yields_the_expected_dirty_set_and_reverse_index() {
             _ => None,
         };
         if let Some(u) = user
-            && repo.borrower(CHAIN, cfg.pool, u).unwrap().is_some()
+            && active.contains(&u)
         {
             known_touched += 1;
             assert!(reasons(&repo, u).contains(&DirtyReason::BorrowerEvent));
@@ -177,6 +188,7 @@ async fn real_window_yields_the_expected_dirty_set_and_reverse_index() {
     assert!(
         borrowers
             .iter()
+            .filter(|b| active.contains(*b))
             .any(|b| reasons(&repo, *b).contains(&DirtyReason::ReserveConfig))
     );
 
