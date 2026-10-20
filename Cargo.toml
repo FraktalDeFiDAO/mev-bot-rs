@@ -27,7 +27,7 @@ proptest = "1.11"
 tower = "0.5"
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 base64 = "0.23"
-brotli-decompressor = "5"
+brotli-decompressor = "6"
 axum = { version = "0.8", features = ["ws"] }
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
 tokio-util = { version = "=0.7.19", default-features = false }
