@@ -138,6 +138,13 @@ sol! {
         event ModifyLiquidity(bytes32 indexed id, address indexed sender, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt);
     }
 
+    /// Uniswap V4 PositionManager: `poolKeys` maps the first 25 bytes of a pool id to its key (set
+    /// when a position is first minted through it), so active pools' keys need no event history.
+    #[sol(rpc)]
+    interface IV4PositionManager {
+        function poolKeys(bytes25 poolId) external view returns (address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks);
+    }
+
     #[sol(rpc)]
     interface IMulticall3 {
         struct Call3 { address target; bool allowFailure; bytes callData; }
@@ -161,6 +168,7 @@ sol! {
         error TargetNotAllowed(address target);
         function owner() external view returns (address);
         function profitReceiver() external view returns (address);
+        function poolManager() external view returns (address);
         error NotOwner();
         error Unauthorized();
         error NotProfitable(uint256 balance, uint256 required);

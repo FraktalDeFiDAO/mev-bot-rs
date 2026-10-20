@@ -6,18 +6,24 @@
 //! 2. the pools that swapped recently (`Swap` events over the activity window), most active first;
 //! 3. `PoolInfo`s for them, with the native ETH side mapped to WETH (the executor wraps/unwraps).
 //!
+//! Where the free RPCs can't scan `Initialize` history (Base, 2026-10-20), active pools missing from
+//! the registry get their keys from the PositionManager's `poolKeys` table instead (`position_manager`).
+//!
 //! Hooked pools are skipped: a hook can change a swap's price or fee, which our model can't see.
 
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use alloy::{
-    primitives::{Address, B256},
+    primitives::{Address, B256, FixedBytes, keccak256},
     providers::{DynProvider, Provider, ProviderBuilder},
     rpc::types::Filter,
-    sol_types::SolEvent,
+    sol_types::{SolCall, SolEvent},
 };
 use anyhow::{Context, Result};
-use mev_bindings::IPoolManager;
+use mev_bindings::{IMulticall3, IPoolManager, IV4PositionManager, MULTICALL3};
 use mev_config::{ChainConfig, UniswapV4Config};
 use mev_types::{PoolInfo, PoolKind, v4_pool_address};
 use serde::{Deserialize, Serialize};
@@ -199,7 +205,8 @@ async fn scan_initialize(
                 registry.last_block = end;
                 start = end + 1;
             }
-            Err(e) if span > 100_000 && is_range_error(&e) => {
+            // Down to ~4k blocks: free endpoints cap ranges at 10k (dRPC, Base) or less.
+            Err(e) if span > 5_000 && is_range_error(&e) => {
                 // Too wide for this endpoint: narrow the range and retry.
                 warn!(error = %e, span, "v4 initialize scan chunk failed; narrowing");
                 span /= 4;
@@ -208,6 +215,69 @@ async fn scan_initialize(
         }
     }
     Ok(())
+}
+
+/// The pool id of a key: keccak256(abi.encode(currency0, currency1, fee, tickSpacing, hooks)).
+fn pool_id(c0: Address, c1: Address, fee: u32, spacing: i32, hooks: Address) -> B256 {
+    let mut b = [0u8; 160];
+    b[12..32].copy_from_slice(c0.as_slice());
+    b[44..64].copy_from_slice(c1.as_slice());
+    b[92..96].copy_from_slice(&fee.to_be_bytes());
+    // int24, sign-extended to 32 bytes.
+    let fill = if spacing < 0 { 0xff } else { 0 };
+    b[96..124].fill(fill);
+    b[124..128].copy_from_slice(&spacing.to_be_bytes());
+    b[140..160].copy_from_slice(hooks.as_slice());
+    keccak256(b)
+}
+
+/// Hookless pools among `ids`, keyed from the PositionManager's `poolKeys` (Multicall3 batches).
+/// A key is kept only if it hashes back to the id; pools it has never seen return an empty key.
+async fn keys_from_position_manager(p: &DynProvider, posm: Address, ids: &[B256]) -> Vec<V4Pool> {
+    let mc = IMulticall3::new(MULTICALL3, p);
+    let mut out = Vec::new();
+    for chunk in ids.chunks(150) {
+        let calls: Vec<IMulticall3::Call3> = chunk
+            .iter()
+            .map(|id| IMulticall3::Call3 {
+                target: posm,
+                allowFailure: true,
+                callData: IV4PositionManager::poolKeysCall {
+                    poolId: FixedBytes::<25>::from_slice(&id[..25]),
+                }
+                .abi_encode()
+                .into(),
+            })
+            .collect();
+        let results = match mc.aggregate3(calls).call().await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(error = %e, "v4 poolKeys batch failed; skipping");
+                continue;
+            }
+        };
+        for (id, r) in chunk.iter().zip(results) {
+            if !r.success {
+                continue;
+            }
+            let Ok(k) = IV4PositionManager::poolKeysCall::abi_decode_returns(&r.returnData) else {
+                continue;
+            };
+            let (fee, spacing) = (k.fee.to::<u32>(), k.tickSpacing.as_i32());
+            if usable(k.hooks, fee, spacing)
+                && pool_id(k.currency0, k.currency1, fee, spacing, k.hooks) == *id
+            {
+                out.push(V4Pool {
+                    id: *id,
+                    currency0: k.currency0,
+                    currency1: k.currency1,
+                    fee,
+                    tick_spacing: spacing as u32,
+                });
+            }
+        }
+    }
+    out
 }
 
 /// Swaps per pool id over the last `v4.blocks` blocks.
@@ -261,13 +331,36 @@ async fn try_discover(
     let head = provider.get_block_number().await?;
     let mut registry = Registry::load(registry_path);
     let before = registry.pools.len();
-    scan_initialize(&provider, v4, &mut registry, head).await?;
+    if let Err(e) = scan_initialize(&provider, v4, &mut registry, head).await {
+        if v4.position_manager.is_none() {
+            return Err(e);
+        }
+        warn!(error = %format!("{e:#}"), "v4 initialize scan failed; active pools' keys come from the PositionManager");
+    }
+    let activity = swap_activity(&provider, v4, head).await;
+    if let Some(posm) = v4.position_manager {
+        let known: HashSet<B256> = registry.pools.iter().map(|p| p.id).collect();
+        let mut missing: Vec<(B256, u64)> = activity
+            .iter()
+            .filter(|(id, n)| **n >= v4.min_swaps && !known.contains(*id))
+            .map(|(id, n)| (*id, *n))
+            .collect();
+        missing.sort_by_key(|(id, n)| (std::cmp::Reverse(*n), *id));
+        missing.truncate(v4.max_pools.saturating_mul(2));
+        let ids: Vec<B256> = missing.into_iter().map(|(id, _)| id).collect();
+        let found = keys_from_position_manager(&provider, posm, &ids).await;
+        info!(
+            looked_up = ids.len(),
+            hookless = found.len(),
+            "v4 pool keys from the PositionManager"
+        );
+        registry.pools.extend(found);
+    }
     if (registry.pools.len() != before || !registry_path.exists())
         && let Err(e) = registry.save(registry_path)
     {
         warn!(error = %e, "could not save the v4 pool registry");
     }
-    let activity = swap_activity(&provider, v4, head).await;
     let chosen = select(&registry, &activity, v4.min_swaps, v4.max_pools);
     let infos: Vec<PoolInfo> = chosen
         .iter()
@@ -285,6 +378,25 @@ async fn try_discover(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pool_id_matches_a_live_base_pool() {
+        // Base USDC/USDT, fee 5, spacing 1, no hooks: its Swap events carry id 0x7681c00520...
+        // (PositionManager.poolKeys, 2026-10-20).
+        let usdc: Address = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+            .parse()
+            .unwrap();
+        let usdt: Address = "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2"
+            .parse()
+            .unwrap();
+        let id = pool_id(usdc, usdt, 5, 1, Address::ZERO);
+        assert!(format!("{id:#x}").starts_with("0x7681c00520"), "{id:#x}");
+        // A negative spacing is sign-extended, so it hashes differently from its absolute value.
+        assert_ne!(
+            pool_id(usdc, usdt, 5, -1, Address::ZERO),
+            pool_id(usdc, usdt, 5, 1, Address::ZERO)
+        );
+    }
 
     const WETH: Address = Address::with_last_byte(0x82);
     const USDC: Address = Address::with_last_byte(0xaf);

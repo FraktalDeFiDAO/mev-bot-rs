@@ -19,6 +19,13 @@ if command -v forge >/dev/null; then
     echo "  (cd contracts && forge inspect ArbExecutor bytecode | tail -1) > crates/mev-sim/src/arb_executor.creation.hex" >&2
     exit 1
   fi
+  # mev-sim's virtual executor writes these slots (SLOT_ALLOWED_TARGET, SLOT_POOL_MANAGER).
+  layout="$(cd contracts && forge inspect ArbExecutor storageLayout --json \
+    | python3 -c 'import sys, json; print(" ".join(f"{s["slot"]}:{s["label"]}" for s in json.load(sys.stdin)["storage"]))')"
+  if [[ $layout != "0:allowedTarget 1:poolManager" ]]; then
+    echo "check: ArbExecutor storage layout changed ($layout); update the slots in crates/mev-sim/src/lib.rs" >&2
+    exit 1
+  fi
 fi
 if [[ ${1:-} == --all ]]; then
   (cd contracts && forge fmt --check && ARBITRUM_HTTP_URL="${ARBITRUM_FORK_URL:-https://arb1.arbitrum.io/rpc}" forge test -q)

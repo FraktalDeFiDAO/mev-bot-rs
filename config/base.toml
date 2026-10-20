@@ -20,6 +20,9 @@ gas_limit_estimate = 1500000
 # Flash loans: Balancer's Base vault is thin (cbBTC ~$900, no wstETH), so loans it cannot fund come from Aave V3's
 # Base pool (5 bps; pool and premium checked on-chain 2026-10-16). Aave liquidations themselves stay off (SVR).
 executor_aave_flash = true
+# V4 hops: the virtual executor gets the PoolManager below; a deployed one needs `setPoolManager`
+# (scripts/deploy-executor.sh does it). The bot checks this at startup.
+executor_v4 = true
 # No executor is deployed on Base: shadow simulates each liquidation and arbitrage against the executor
 # built from contracts/src, injected with an eth_call state override, so the logs say what it would have
 # earned (liq_sim_ok / sim_ok, or the revert) instead of only `liq_candidate` / `candidate`. Sends nothing.
@@ -160,3 +163,20 @@ name = "uniswap_v2"
 type = "univ2"
 factory = "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6"
 fee_bps = 30
+
+[uniswap_v4]
+# Hookless Uniswap V4 pools on Base (PoolManager checked on-chain 2026-10-20: 24,009 B, deployed
+# between blocks 25,350,523 and 25,351,330). No free endpoint serves its `Initialize` history (dRPC
+# free refuses eth_getLogs, publicnode calls >~1 day old "archive", mainnet.base.org rate-limits), so
+# pools active in the swap window get their keys from the PositionManager's `poolKeys` (8 of the 15
+# busiest pools on 2026-10-20 were hookless and found there); `Initialize` is scanned from today on.
+enabled = true
+pool_manager = "0x498581fF718922c3f8e6A244956aF099B2652b2b"
+position_manager = "0x7C5f5A4bBd8fD63184577525326123B519429bDc"
+log_rpc = "https://base-rpc.publicnode.com"
+first_block = 52860000    # 2026-10-20; older pools come from the PositionManager
+blocks = 5400             # swap-activity window (~3 h at 2 s blocks; ~12 V4 swaps per block, mostly hooked pools)
+step = 300                # ~3-4k Swap logs per request (publicnode and Tenderly serve these 5.4k blocks back)
+min_swaps = 1
+max_pools = 400
+presimulate = true

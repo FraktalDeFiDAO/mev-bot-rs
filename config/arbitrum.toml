@@ -22,7 +22,8 @@ executor_flash_swaps = true
 # the Balancer cap borrow from the Aave pool (5 bps). DECISIONS #51.
 executor_aave_flash = true
 executor_batch = true    # the deployed executor (0x17357E33..., 2026-10-06) has `batch`; see [batch]
-executor_v4 = true       # the deployed executor has Uniswap V4 hops and its PoolManager set; see [uniswap_v4]
+executor_v4 = true       # needs EXECUTOR_ADDRESS = 0x17357E33012e8c05E654a7D1CC7D9dedd6B63acf (V4 hops, PoolManager set,
+                         # batch); 0xb793... has neither and reverts V4 routes with BadRoute (checked at startup)
 loan_tokens = ["WETH", "USDC", "USDT", "WBTC", "ARB", "DAI", "USDC.e"]
 usd_token = "USDC"
 native_token = "WETH"

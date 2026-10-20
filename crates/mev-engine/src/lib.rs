@@ -432,12 +432,20 @@ impl Engine {
         // Liquidation adapters; their assets need swap routes (seized collateral -> debt asset).
         let mut meters = vec![("fast", rpc.meter.clone())];
         let mut liq_shadow_parts = None;
+        // Shadow without a deployed executor simulates against the virtual one (`wire_executor`), so
+        // plans that name the executor name it.
+        let virtual_exec =
+            secrets.executor.is_none() && mode == Mode::Shadow && cfg.shadow_virtual_executor;
         let liq_setup = build_liquidation(
             &cfg,
             &rpc,
             &secrets.sweep_urls,
             &data_dir,
-            secrets.executor.unwrap_or_default(),
+            secrets.executor.unwrap_or(if virtual_exec {
+                mev_sim::VIRTUAL_EXECUTOR
+            } else {
+                Address::ZERO
+            }),
             mode,
             &mut meters,
             &mut liq_shadow_parts,
@@ -529,7 +537,11 @@ impl Engine {
             max_loan.clone()
         };
 
-        let (sim, sender) = wire_executor(&cfg, &secrets, &rpc, mode).await?;
+        let liq_targets: Vec<Address> = liq_setup
+            .as_ref()
+            .map(|(runner, _)| runner.targets().into_iter().map(|(_, a)| a).collect())
+            .unwrap_or_default();
+        let (sim, sender) = wire_executor(&cfg, &secrets, &rpc, mode, &liq_targets).await?;
         let revm_liq = (mode == Mode::Shadow
             && cfg
                 .liquidation
@@ -3183,11 +3195,13 @@ impl Engine {
 }
 
 /// Build the simulator (needs a deployed executor) and, in live mode, the signing sender.
+/// `liq_targets` are allowlisted on a virtual executor, as `scripts/allow-targets.sh` does on a real one.
 async fn wire_executor(
     cfg: &ChainConfig,
     secrets: &Secrets,
     rpc: &Rpc,
     mode: Mode,
+    liq_targets: &[Address],
 ) -> Result<(Option<Simulator>, Option<Arc<Sender>>)> {
     let Some(exec) = secrets.executor else {
         if mode == Mode::Live {
@@ -3196,11 +3210,22 @@ async fn wire_executor(
         if cfg.shadow_virtual_executor {
             // No sender: a virtual executor only simulates (shadow measures profit, sends nothing).
             let weth = cfg.token(&cfg.native_token)?;
-            let mut sim = Simulator::virtual_executor(rpc.http.clone(), cfg.balancer_vault, weth)
-                .await
-                .context("shadow_virtual_executor")?;
+            let pool_manager = cfg
+                .uniswap_v4
+                .as_ref()
+                .filter(|v| v.enabled)
+                .map(|v| v.pool_manager);
+            let mut sim = Simulator::virtual_executor(
+                rpc.http.clone(),
+                cfg.balancer_vault,
+                weth,
+                liq_targets,
+                pool_manager,
+            )
+            .await
+            .context("shadow_virtual_executor")?;
             sim.flash_swaps = cfg.executor_flash_swaps;
-            warn!(executor = %sim.executor(), "EXECUTOR_ADDRESS not set: shadow simulates against a virtual executor built from source");
+            warn!(executor = %sim.executor(), allowlisted = liq_targets.len(), ?pool_manager, "EXECUTOR_ADDRESS not set: shadow simulates against a virtual executor built from source");
             return Ok((Some(sim), None));
         }
         warn!("EXECUTOR_ADDRESS not set: shadow mode will log candidates without simulating");
@@ -3214,6 +3239,9 @@ async fn wire_executor(
         .context("reading executor owner")?;
     let receiver = contract.profitReceiver().call().await?;
     info!(%exec, %owner, %receiver, "executor");
+    if cfg.executor_v4 {
+        check_executor_v4(&contract, cfg, mode).await?;
+    }
     let sender = match (&secrets.private_key, mode) {
         (Some(pk), Mode::Live) => {
             // Broadcast to the sequencer and every extra endpoint (the primary is the reader).
@@ -3436,6 +3464,41 @@ fn metered_rotating(
     let m = RpcMeter::new();
     meters.push((name, m.clone()));
     mev_rpc::metered_rotating_provider(&urls, m)
+}
+
+/// `executor_v4 = true` claims the executor has V4 hops with its PoolManager set. An older executor
+/// without them reverts every V4 route with `BadRoute` (2026-10-17..19: ~400 Arbitrum simulations,
+/// because EXECUTOR_ADDRESS still named the pre-V4 executor). Live refuses to start; shadow warns.
+async fn check_executor_v4<P: alloy::providers::Provider>(
+    contract: &ArbExecutor::ArbExecutorInstance<P>,
+    cfg: &ChainConfig,
+    mode: Mode,
+) -> Result<()> {
+    let want = cfg
+        .uniswap_v4
+        .as_ref()
+        .filter(|v| v.enabled)
+        .map(|v| v.pool_manager);
+    let have = contract.poolManager().call().await.ok();
+    let problem = match (have, want) {
+        (None, _) => Some("has no poolManager() (a pre-V4 executor)".to_string()),
+        (Some(h), _) if h.is_zero() => Some("has no PoolManager set (setPoolManager)".to_string()),
+        (Some(h), Some(w)) if h != w => {
+            Some(format!("PoolManager {h} differs from [uniswap_v4] {w}"))
+        }
+        _ => None,
+    };
+    let Some(problem) = problem else {
+        return Ok(());
+    };
+    let exec = *contract.address();
+    if mode == Mode::Live {
+        bail!(
+            "executor_v4 = true but executor {exec} {problem}; V4 routes would revert with BadRoute"
+        );
+    }
+    error!(%exec, problem, "executor_v4 = true but the executor can't run V4 hops: every V4 route will revert BadRoute");
+    Ok(())
 }
 
 /// Warn about liquidation targets the executor hasn't allowlisted: one line per protocol with the count, one
