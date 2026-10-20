@@ -14,7 +14,10 @@ cargo clippy -q --workspace --all-targets -- -D warnings
 cargo test -q --workspace
 if command -v forge >/dev/null; then
   # The shadow virtual executor (mev-sim) must be the contract in contracts/src.
-  if [[ "$(cd contracts && forge inspect ArbExecutor bytecode | tail -1)" != "$(tr -d '[:space:]' < crates/mev-sim/src/arb_executor.creation.hex)" ]]; then
+  # Compared without the trailing CBOR metadata (its last 2 bytes give its length): that hash
+  # varies with build caches while the code it describes is identical.
+  strip_meta() { local h=${1#0x}; local n=$(( (16#${h: -4} + 2) * 2 )); echo "${h:0:${#h}-n}"; }
+  if [[ "$(strip_meta "$(cd contracts && forge inspect ArbExecutor bytecode | tail -1)")" != "$(strip_meta "$(tr -d '[:space:]' < crates/mev-sim/src/arb_executor.creation.hex)")" ]]; then
     echo "check: crates/mev-sim/src/arb_executor.creation.hex is stale; regenerate it with" >&2
     echo "  (cd contracts && forge inspect ArbExecutor bytecode | tail -1) > crates/mev-sim/src/arb_executor.creation.hex" >&2
     exit 1
