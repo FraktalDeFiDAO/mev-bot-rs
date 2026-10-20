@@ -14,6 +14,7 @@ exec podman run --rm "${tty[@]}" --userns=keep-id --network=host \
   -v "$PWD":/workspace:Z \
   -v mev-bot-cargo-registry:/home/dev/.cargo/registry \
   -v mev-bot-target:/workspace/target \
+  -v mev-bot-svm:/home/dev/.svm \
   -e CARGO_TARGET_DIR=/workspace/target \
   --env-file <(grep -E '^ARBITRUM_(HTTP|WS)_URL=' .env 2>/dev/null || true) \
   -w /workspace "$IMAGE" "${@:-bash}"
