@@ -21,3 +21,11 @@ mev-sequencer = { workspace = true }
 
 [dev-dependencies]
 mev-protocol-uniswap-router = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner
+
+[[bin]]
+name = "mev-presim-probe"
+path = "src/bin/mev-presim-probe.rs"
+test = false  # no tests in the binary

@@ -16,3 +16,8 @@ mev-config = { workspace = true }
 mev-engine = { workspace = true }
 mev-rpc = { workspace = true }
 mev-types = { workspace = true }
+
+[[bin]]
+name = "mev-bot"
+path = "src/main.rs"
+test = false  # no tests in the binary

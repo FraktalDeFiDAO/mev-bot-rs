@@ -14,3 +14,6 @@ mev-types = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

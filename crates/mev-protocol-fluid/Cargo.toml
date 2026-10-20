@@ -9,3 +9,6 @@ description = "Fluid vaults (Arbitrum): LogLiquidate / LogAbsorb events and liqu
 [dependencies]
 alloy = { workspace = true }
 mev-protocol = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

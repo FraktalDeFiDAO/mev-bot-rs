@@ -24,3 +24,6 @@ thiserror = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 mev-protocol-uniswap-router = { workspace = true }
+
+[lib]
+doctest = false  # its only doc block is a ```text grammar sample, not code

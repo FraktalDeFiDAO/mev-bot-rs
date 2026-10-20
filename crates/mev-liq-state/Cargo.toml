@@ -15,3 +15,6 @@ thiserror = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = "3"
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

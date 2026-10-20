@@ -29,3 +29,6 @@ tokio = { workspace = true }
 proptest = { workspace = true }
 mev-protocol-aave-v3 = { workspace = true }
 tempfile = "3"
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

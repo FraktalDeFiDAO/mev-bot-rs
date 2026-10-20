@@ -9,3 +9,6 @@ description = "Uniswap V2 style pairs (Uniswap, Sushi, Camelot V2): swap, sync, 
 [dependencies]
 alloy = { workspace = true }
 mev-protocol = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

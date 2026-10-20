@@ -16,3 +16,6 @@ mev-bindings = { workspace = true }
 mev-risk = { workspace = true }
 mev-rpc = { workspace = true }
 mev-lending = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

@@ -7,11 +7,13 @@ publish.workspace = true
 description = "Process B of the Jev liquidation advisor (JEV-LIQ-012): async worker that drains the advisor outbox, calls TypeSafe through the resilient client and stores shadow decisions. No keys, no RPC, no executor channel."
 
 [lib]
+doctest = false  # no doc examples: skip the empty doc-test runner
 name = "copper_jev_advisor"
 path = "src/lib.rs"
 
 [[bin]]
 name = "copper-jev-advisor"
+test = false  # no tests in the binary
 path = "src/main.rs"
 
 [dependencies]

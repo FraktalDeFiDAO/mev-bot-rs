@@ -9,3 +9,6 @@ description = "CoW Protocol GPv2Settlement: one swap intent (token pair, amount)
 [dependencies]
 alloy = { workspace = true }
 mev-protocol = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

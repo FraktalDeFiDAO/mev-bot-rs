@@ -8,3 +8,6 @@ description = "Core types and the Protocol trait shared by the per-protocol deco
 
 [dependencies]
 alloy = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

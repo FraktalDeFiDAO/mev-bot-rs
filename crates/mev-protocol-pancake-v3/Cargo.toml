@@ -9,3 +9,6 @@ description = "PancakeSwap V3: swap event (Uniswap V3 layout plus protocol fees)
 [dependencies]
 alloy = { workspace = true }
 mev-protocol = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

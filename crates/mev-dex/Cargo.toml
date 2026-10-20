@@ -11,3 +11,6 @@ mev-types = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner
