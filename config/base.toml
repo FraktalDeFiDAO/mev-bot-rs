@@ -138,8 +138,8 @@ weETH = "0x04C0599Ae5A44757c0af6F9eC3b93da8976c150A"
 AERO = "0x940181a94A35A4569E4529A3CDfB74e38FD98631"
 WELL = "0xA88594D404727625A9437C3f886C7643872296AE"
 
-# Factories checked on-chain 2026-10-15 (owner() / allPairsLength() answer). Aerodrome (Solidly-type) is not
-# supported by the pricing model yet; Uniswap V3 carries the main collateral pairs.
+# Factories checked on-chain 2026-10-15 (owner() / allPairsLength() answer). Uniswap V3 carries the main
+# collateral pairs.
 [[dexes]]
 name = "uniswap_v3"
 type = "univ3"
@@ -163,6 +163,14 @@ name = "uniswap_v2"
 type = "univ2"
 factory = "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6"
 fee_bps = 30
+
+# Aerodrome V2 PoolFactory, checked on-chain 2026-10-20 (29,822 pools; WETH/USDC volatile pool 0xcDAC…5C43,
+# fee 30 bps, `getAmountOut` reproduced exactly). Volatile pools only: stable pools use x3y+y3x, not modelled.
+# Slipstream (Aerodrome's concentrated-liquidity pools) is not supported yet.
+[[dexes]]
+name = "aerodrome"
+type = "solidly"
+factory = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da"
 
 [uniswap_v4]
 # Hookless Uniswap V4 pools on Base (PoolManager checked on-chain 2026-10-20: 24,009 B, deployed

@@ -3268,6 +3268,7 @@ dependencies = [
  "mev-bindings",
  "mev-protocol",
  "mev-protocol-aave-v3",
+ "mev-protocol-aerodrome",
  "mev-protocol-balancer",
  "mev-protocol-camelot",
  "mev-protocol-compound-v3",
@@ -3729,6 +3730,14 @@ dependencies = [
 
 [[package]]
 name = "mev-protocol-aave-v3"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-aerodrome"
 version = "0.1.0"
 dependencies = [
  "alloy",

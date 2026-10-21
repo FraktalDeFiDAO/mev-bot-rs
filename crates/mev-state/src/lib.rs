@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use alloy::primitives::U256;
 use alloy::{rpc::types::Log, sol_types::SolEvent};
-use mev_bindings::{IPancakeV3Pool, IPoolManager, IUniswapV2Pair, IUniswapV3Pool};
+use mev_bindings::{IPancakeV3Pool, IPoolManager, ISolidlyPool, IUniswapV2Pair, IUniswapV3Pool};
 use mev_dex::{ExactState, Pool, PoolState, sqrt_price_from_x96};
 use mev_types::{Address, B256, PoolKind};
 
@@ -756,13 +756,23 @@ impl PoolStore {
             return self.apply_v3_liquidity(log, false);
         }
         let pool = self.pools.get_mut(&addr)?;
-        if topic0 == IUniswapV2Pair::Sync::SIGNATURE_HASH {
-            let ev = IUniswapV2Pair::Sync::decode_log_data(log.data()).ok()?;
+        // V2 / Camelot `Sync(uint112,uint112)` and Solidly `Sync(uint256,uint256)`: the same two words.
+        let sync = if topic0 == IUniswapV2Pair::Sync::SIGNATURE_HASH {
+            IUniswapV2Pair::Sync::decode_log_data(log.data())
+                .ok()
+                .map(|ev| (U256::from(ev.reserve0), U256::from(ev.reserve1)))
+        } else if topic0 == ISolidlyPool::Sync::SIGNATURE_HASH {
+            ISolidlyPool::Sync::decode_log_data(log.data())
+                .ok()
+                .map(|ev| (ev.reserve0, ev.reserve1))
+        } else {
+            None
+        };
+        if let Some((reserve0, reserve1)) = sync {
             pool.state = PoolState::V2 {
-                reserve0: f64::from(ev.reserve0),
-                reserve1: f64::from(ev.reserve1),
+                reserve0: f64::from(reserve0),
+                reserve1: f64::from(reserve1),
             };
-            let (reserve0, reserve1) = (U256::from(ev.reserve0), U256::from(ev.reserve1));
             pool.exact = Some(match pool.exact {
                 // A Camelot pair keeps its per-direction fees across reserve updates.
                 Some(ExactState::V2Fee { fee0, fee1, .. }) => ExactState::V2Fee {
@@ -978,6 +988,57 @@ mod tests {
                 reserve0: 500.0,
                 reserve1: 700.0
             }
+        );
+    }
+
+    #[test]
+    fn solidly_sync_updates_reserves_and_keeps_the_fee() {
+        let mut s = PoolStore::default();
+        s.insert(
+            pool(
+                1,
+                PoolKind::SolidlyV2 {
+                    factory: Address::ZERO,
+                },
+                A,
+                B,
+                PoolState::V2 {
+                    reserve0: 1.0,
+                    reserve1: 1.0,
+                },
+            )
+            .with_exact(ExactState::V2Fee {
+                reserve0: U256::from(1),
+                reserve1: U256::from(1),
+                fee0: 30,
+                fee1: 30,
+            }),
+        );
+        let ev = ISolidlyPool::Sync {
+            reserve0: U256::from(500),
+            reserve1: U256::from(700),
+        };
+        let addr = Address::with_last_byte(1);
+        assert_eq!(
+            s.apply_log(&rpc_log(addr, ev.encode_log_data())),
+            Some(addr)
+        );
+        let p = s.get(&addr).unwrap();
+        assert_eq!(
+            p.state,
+            PoolState::V2 {
+                reserve0: 500.0,
+                reserve1: 700.0
+            }
+        );
+        assert_eq!(
+            p.exact,
+            Some(ExactState::V2Fee {
+                reserve0: U256::from(500),
+                reserve1: U256::from(700),
+                fee0: 30,
+                fee1: 30,
+            })
         );
     }
 

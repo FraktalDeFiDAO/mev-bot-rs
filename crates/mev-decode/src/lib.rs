@@ -27,8 +27,9 @@ pub use mev_protocol::{
 
 /// Every protocol crate, in a fixed order. Adding a protocol means adding it here.
 pub fn protocols() -> &'static [&'static dyn Protocol] {
-    static P: [&dyn Protocol; 19] = [
+    static P: [&dyn Protocol; 20] = [
         &mev_protocol_uniswap_v2::UniswapV2,
+        &mev_protocol_aerodrome::Aerodrome,
         &mev_protocol_uniswap_v3::UniswapV3,
         &mev_protocol_uniswap_v4::UniswapV4,
         &mev_protocol_uniswap_router::UniswapRouter,

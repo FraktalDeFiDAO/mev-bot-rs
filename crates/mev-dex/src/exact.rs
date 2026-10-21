@@ -81,6 +81,24 @@ pub fn v2_amount_out(
     Some(num / den)
 }
 
+/// Output of a Solidly-style volatile pool (Aerodrome V2 `Pool.getAmountOut`): the fee is taken off the input
+/// first, rounded down (`amountIn -= amountIn * fee / 10_000`), then `amountIn * reserveOut / (reserveIn + amountIn)`.
+/// Not the V2 formula: the fee is floored separately, so results can differ from it by a wei.
+pub fn solidly_amount_out(
+    amount_in: U256,
+    reserve_in: U256,
+    reserve_out: U256,
+    fee_bps: u32,
+) -> Option<U256> {
+    if amount_in.is_zero() || reserve_in.is_zero() || reserve_out.is_zero() || fee_bps > 10_000 {
+        return None;
+    }
+    let net = amount_in
+        .checked_sub(amount_in.checked_mul(U256::from(fee_bps))? / U256::from(10_000u32))?;
+    let den = reserve_in.checked_add(net)?;
+    Some(net.checked_mul(reserve_out)? / den)
+}
+
 const RATIOS: [(u32, &str); 19] = [
     (0x2, "fff97272373d413259a46990580e213a"),
     (0x4, "fff2e50f5f656932ef12357cf3c7fdcc"),
@@ -481,6 +499,27 @@ mod tests {
 
     fn u(s: &str) -> U256 {
         U256::from_str_radix(s, 10).unwrap()
+    }
+
+    #[test]
+    fn solidly_output_equals_aerodromes_get_amount_out() {
+        // Aerodrome WETH/USDC volatile pool (0xcDAC…5C43, fee 30 bps) on 2026-10-20: `getAmountOut(1e18, WETH)`
+        // returned 2_439_453_053 at these reserves.
+        let (r0, r1) = (u("1711240718743758592625"), u("4189492006497"));
+        assert_eq!(
+            solidly_amount_out(u("1000000000000000000"), r0, r1, 30),
+            Some(U256::from(2_439_453_053u64))
+        );
+        // The fee is floored on its own (8272 * 30 / 10_000 = 24, not 24.8), so the pool pays more than the V2
+        // formula with the same fee would.
+        let (a, r0, r1) = (U256::from(8272), U256::from(140_892), U256::from(596_854));
+        assert_eq!(solidly_amount_out(a, r0, r1, 30), Some(U256::from(33_008)));
+        assert_eq!(
+            v2_amount_out(a, r0, r1, 9_970, 10_000),
+            Some(U256::from(33_005))
+        );
+        assert_eq!(solidly_amount_out(U256::ZERO, r0, r1, 30), None);
+        assert_eq!(solidly_amount_out(a, r0, r1, 10_001), None);
     }
 
     #[test]

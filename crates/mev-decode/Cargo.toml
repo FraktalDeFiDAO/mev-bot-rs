@@ -33,6 +33,7 @@ mev-protocol-unidentified = { workspace = true }
 mev-protocol-fluid = { workspace = true }
 mev-protocol-oneinch = { workspace = true }
 mev-protocol-cow = { workspace = true }
+mev-protocol-aerodrome = { workspace = true }
 mev-protocol-camelot = { workspace = true }
 mev-protocol-sushi = { workspace = true }
 mev-protocol-paraswap = { workspace = true }

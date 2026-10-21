@@ -12,6 +12,7 @@ fn kind_name(k: &PoolKind) -> (&'static str, Option<u32>) {
     match k {
         PoolKind::UniV2 { fee_bps } => ("uniswap_v2", Some(u32::from(*fee_bps))),
         PoolKind::CamelotV2 => ("camelot_v2", None),
+        PoolKind::SolidlyV2 { .. } => ("solidly_v2", None),
         PoolKind::UniV3 { fee } => ("uniswap_v3", Some(*fee)),
         PoolKind::PancakeV3 { fee } => ("pancake_v3", Some(*fee)),
         PoolKind::AlgebraV3 => ("algebra_v3", None),

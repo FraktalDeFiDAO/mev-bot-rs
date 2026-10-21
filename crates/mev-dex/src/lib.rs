@@ -114,6 +114,8 @@ impl Pool {
             PoolKind::UniV3 { fee } | PoolKind::PancakeV3 { fee } => fee as f64 / 1_000_000.0,
             PoolKind::UniV4 { fee, .. } => fee as f64 / 1_000_000.0,
             PoolKind::CamelotV2 => 0.003,
+            // Real fee from the factory via `with_directional_fees`.
+            PoolKind::SolidlyV2 { .. } => 0.003,
             // Real fees come from globalState() via `with_directional_fees`.
             PoolKind::AlgebraV3 => 0.003,
         };
@@ -235,6 +237,23 @@ impl Pool {
                     100_000u64.checked_sub(u64::from(fee))?,
                     100_000,
                 )
+            }
+            (
+                ExactState::V2Fee {
+                    reserve0,
+                    reserve1,
+                    fee0,
+                    ..
+                },
+                PoolKind::SolidlyV2 { .. },
+            ) => {
+                // One fee for both directions, in basis points (stored in `fee0` and `fee1`).
+                let (rin, rout) = if zero_for_one {
+                    (*reserve0, *reserve1)
+                } else {
+                    (*reserve1, *reserve0)
+                };
+                exact::solidly_amount_out(amount_in, rin, rout, *fee0)
             }
             (
                 ExactState::V3 {
@@ -673,7 +692,7 @@ pub fn tick_spacing(kind: &PoolKind) -> u32 {
         // Camelot's deployment (read from two live pools, 2026-10-11) uses spacing 10, not Algebra's default 60.
         PoolKind::AlgebraV3 => 10,
         PoolKind::UniV4 { tick_spacing, .. } => tick_spacing.max(1),
-        PoolKind::UniV2 { .. } | PoolKind::CamelotV2 => 1,
+        PoolKind::UniV2 { .. } | PoolKind::CamelotV2 | PoolKind::SolidlyV2 { .. } => 1,
     }
 }
 
@@ -698,6 +717,44 @@ mod tests {
             token0: A,
             token1: B,
         }
+    }
+
+    #[test]
+    fn solidly_pool_quotes_with_its_own_rounding_both_ways() {
+        let p = Pool::new(
+            info(PoolKind::SolidlyV2 {
+                factory: Address::ZERO,
+            }),
+            PoolState::V2 {
+                reserve0: 140_892.0,
+                reserve1: 596_854.0,
+            },
+        )
+        .with_exact(ExactState::V2Fee {
+            reserve0: U256::from(140_892),
+            reserve1: U256::from(596_854),
+            fee0: 30,
+            fee1: 30,
+        });
+        assert_eq!(
+            p.exact_amount_out(A, U256::from(8272)),
+            Some(U256::from(33_008))
+        );
+        assert_eq!(
+            p.exact_amount_out(B, U256::from(8272)),
+            exact::solidly_amount_out(
+                U256::from(8272),
+                U256::from(596_854),
+                U256::from(140_892),
+                30
+            )
+        );
+        assert_eq!(
+            p.info.kind.hop_kind(),
+            1,
+            "routed through the getAmountOut hop"
+        );
+        assert_eq!(tick_spacing(&p.info.kind), 1);
     }
 
     #[test]

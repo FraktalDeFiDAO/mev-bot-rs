@@ -11,6 +11,8 @@ use serde::Deserialize;
 pub enum DexType {
     Univ2,
     Camelot,
+    /// Solidly-style factory (Aerodrome V2): volatile pools only; stable (x3y+y3x) pools are not modelled.
+    Solidly,
     Univ3,
     Pancakev3,
     Algebra,
