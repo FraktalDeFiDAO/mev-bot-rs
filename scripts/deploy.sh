@@ -56,16 +56,16 @@ if [[ $BUILD == local ]]; then
 fi
 
 no_build=$([[ $BUILD == local ]] && echo 1 || true)
-echo "== server: save old log, rebuild, restart ($mode)"
-ssh "$SERVER" "set -e; cd $REMOTE_DIR; mkdir -p data/logs
-  podman image prune -f >/dev/null 2>&1 || true   # untagged images from earlier builds filled the disk (2026-10-07)
-  if podman container exists mev-bot-arbitrum; then
-    f=data/logs/mev-bot-arbitrum-\$(date -u +%Y%m%d-%H%M%S).log.gz
-    podman logs mev-bot-arbitrum 2>&1 | gzip > \$f && echo \"   saved \$f\"
-    ls -1t data/logs/mev-bot-arbitrum-*.log.gz | tail -n +21 | xargs -r rm -f
-  fi
-  echo y | NO_BUILD=$no_build scripts/run.sh $mode | tail -1
-  podman image prune -f >/dev/null 2>&1 || true"
+echo "== server: save old log, rebuild, restart ($mode) — detached, polled (a dropped SSH session cannot stop it)"
+log=data/logs/deploy-$sha.log
+ssh "$SERVER" "cd $REMOTE_DIR && mkdir -p data/logs && setsid nohup scripts/server-restart.sh $mode $no_build > $log 2>&1 < /dev/null & echo '   started'"
+while :; do
+  sleep 30
+  last=$(ssh -o ConnectTimeout=20 -o ServerAliveInterval=10 "$SERVER" "tail -1 $REMOTE_DIR/$log" 2>/dev/null) || continue
+  [[ $last == deploy-done* ]] && break
+done
+ssh "$SERVER" "grep -v '^ *Compiling\|^ *Downloaded' $REMOTE_DIR/$log | tail -6"
+[[ $last == "deploy-done rc=0" ]] || { echo "server restart failed ($last); see $REMOTE_DIR/$log" >&2; exit 1; }
 
 tag=deploy-$(date -u +%Y%m%d-%H%M%S)
 git tag "$tag" "$sha" && git push -q origin "$tag"
