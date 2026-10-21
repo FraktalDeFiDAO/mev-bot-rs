@@ -82,6 +82,7 @@ mev-bot/
 | L0 | `mev-decode` | Registry over the `mev-protocol-*` crates and the `mev-decode` CLI; standalone decoding, usable alone (`mev-decode` CLI) or as a library: swaps from calldata, swap/liquidity/liquidation/state event table, prices from logs, identified contracts. No RPC/engine/state dependencies |
 | L0 | `mev-protocol` | Core types for protocol crates: `Protocol` trait, `EventKind`, `SwapIntent`, `LiquidationIntent`, `PoolRef`, `PriceUpdate`, ABI word helpers |
 | L0 | `mev-protocol-uniswap-v2` | V2-style pair events (Uniswap, Sushi, Camelot V2): swap, sync, mint, burn |
+| L0 | `mev-protocol-aerodrome` | Aerodrome V2 (Solidly-style, Base) pool events: swap, sync, burn, fees, claim (uint256 reserves, own topics) |
 | L0 | `mev-protocol-uniswap-v3` | V3-style pool events (Uniswap, Sushi, Algebra topic) and position-manager liquidity events |
 | L0 | `mev-protocol-uniswap-v4` | V4 PoolManager swap and modify-liquidity events |
 | L0 | `mev-protocol-uniswap-router` | Calldata of SwapRouter02, SwapRouter v1 and the Universal Router: exact-in V2/V3 swaps, multicall, commands |
