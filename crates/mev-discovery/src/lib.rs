@@ -20,8 +20,8 @@ use alloy::{
 use anyhow::{Context, Result};
 use mev_bindings::{
     IAlgebraFactory, IAlgebraPool, ICamelotPair, IERC20, IPancakeV3Pool, IPoolManager, IPoolMeta,
-    ISolidlyFactory, ISolidlyPool, IUniswapV2Factory, IUniswapV2Pair, IUniswapV3Factory,
-    IUniswapV3Pool,
+    ISlipstreamFactory, ISlipstreamPool, ISolidlyFactory, ISolidlyPool, IUniswapV2Factory,
+    IUniswapV2Pair, IUniswapV3Factory, IUniswapV3Pool,
 };
 use mev_config::{AutoDiscovery, ChainConfig, DexType};
 use mev_dex::{Pool, PoolState, sqrt_price_from_x96};
@@ -84,6 +84,28 @@ pub async fn discover_pools(
                         meta.push((dex.name.clone(), kind, t0, t1));
                     }
                 }
+                DexType::Slipstream => {
+                    for &tick_spacing in &dex.tick_spacings {
+                        let Ok(spacing) = alloy::primitives::aliases::I24::try_from(tick_spacing)
+                        else {
+                            continue;
+                        };
+                        calls.push(call(
+                            dex.factory,
+                            ISlipstreamFactory::getPoolCall {
+                                tokenA: a,
+                                tokenB: b,
+                                tickSpacing: spacing,
+                            },
+                        ));
+                        // The fee is filled in by `load_pools` (it is dynamic).
+                        let kind = PoolKind::SlipstreamV3 {
+                            fee: 0,
+                            tick_spacing,
+                        };
+                        meta.push((dex.name.clone(), kind, t0, t1));
+                    }
+                }
                 DexType::Solidly => {
                     calls.push(call(
                         dex.factory,
@@ -125,6 +147,7 @@ pub async fn discover_pools(
             }
             PoolKind::AlgebraV3 => decode::<IAlgebraFactory::poolByPairCall>(res),
             PoolKind::SolidlyV2 { .. } => decode::<ISolidlyFactory::getPoolCall>(res),
+            PoolKind::SlipstreamV3 { .. } => decode::<ISlipstreamFactory::getPoolCall>(res),
             _ => decode::<IUniswapV2Factory::getPairCall>(res),
         };
         if let Some(address) = addr.filter(|a| !a.is_zero())
@@ -158,6 +181,11 @@ fn calls_for(p: &PoolInfo) -> Vec<(Address, alloy::primitives::Bytes)> {
         PoolKind::PancakeV3 { .. } => vec![
             call(p.address, IPancakeV3Pool::slot0Call {}),
             call(p.address, IUniswapV3Pool::liquidityCall {}),
+        ],
+        PoolKind::SlipstreamV3 { .. } => vec![
+            call(p.address, ISlipstreamPool::slot0Call {}),
+            call(p.address, IUniswapV3Pool::liquidityCall {}),
+            call(p.address, ISlipstreamPool::feeCall {}),
         ],
         PoolKind::AlgebraV3 => vec![
             call(p.address, IAlgebraPool::globalStateCall {}),
@@ -250,6 +278,30 @@ pub async fn load_pools_at(
                             liquidity: l,
                         },
                     )),
+                    _ => None,
+                }
+            }
+            PoolKind::SlipstreamV3 { tick_spacing, .. } => {
+                match (
+                    decode::<ISlipstreamPool::slot0Call>(&r[0]),
+                    decode::<IUniswapV3Pool::liquidityCall>(&r[1]),
+                    decode::<ISlipstreamPool::feeCall>(&r[2]),
+                ) {
+                    (Some(s), Some(l), Some(fee)) => {
+                        // The dynamic fee as of this read replaces whatever the info carried.
+                        let mut info = info;
+                        info.kind = PoolKind::SlipstreamV3 {
+                            fee: fee.to::<u32>(),
+                            tick_spacing,
+                        };
+                        Some(Pool::new(info, v3(s.sqrtPriceX96, l)).with_exact(
+                            mev_dex::ExactState::V3 {
+                                sqrt_price: alloy::primitives::U256::from(s.sqrtPriceX96),
+                                tick: s.tick.as_i32(),
+                                liquidity: l,
+                            },
+                        ))
+                    }
                     _ => None,
                 }
             }
@@ -489,6 +541,7 @@ pub async fn snapshot(
                 p.info.kind,
                 PoolKind::UniV3 { .. }
                     | PoolKind::PancakeV3 { .. }
+                    | PoolKind::SlipstreamV3 { .. }
                     | PoolKind::UniV4 { .. }
                     | PoolKind::AlgebraV3
             ) {

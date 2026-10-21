@@ -35,6 +35,10 @@ pub enum PoolKind {
     UniV3 { fee: u32 },
     /// PancakeSwap V3: Uniswap V3 math, different slot0 layout and Swap event.
     PancakeV3 { fee: u32 },
+    /// Aerodrome Slipstream (Base): Uniswap V3 math, events and swap callback, but pools are keyed by
+    /// `tick_spacing` (not fee) and the fee is dynamic: `fee` is `pool.fee()` as last loaded (each load
+    /// refreshes it; the final simulation, not this value, decides whether a trade is sent).
+    SlipstreamV3 { fee: u32, tick_spacing: u32 },
     /// Algebra (Camelot V3): one pool per pair, dynamic directional fees from `globalState()`.
     AlgebraV3,
     /// Uniswap V4 hookless pool: one pool inside the singleton `manager`, identified by `id` (the
@@ -65,7 +69,10 @@ impl PoolKind {
             PoolKind::UniV2 { .. } => 0,
             PoolKind::CamelotV2 | PoolKind::SolidlyV2 { .. } => 1,
             // All V3-style pools share the executor's swap() path; only the callback name differs.
-            PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. } | PoolKind::AlgebraV3 => 2,
+            PoolKind::UniV3 { .. }
+            | PoolKind::PancakeV3 { .. }
+            | PoolKind::SlipstreamV3 { .. }
+            | PoolKind::AlgebraV3 => 2,
             // V4 hops carry the pool's tick spacing instead of an address; native pools unwrap WETH.
             PoolKind::UniV4 { native: false, .. } => 3,
             PoolKind::UniV4 { native: true, .. } => 4,

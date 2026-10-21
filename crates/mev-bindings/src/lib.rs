@@ -25,6 +25,21 @@ sol! {
         event Sync(uint112 reserve0, uint112 reserve1);
     }
 
+    /// Aerodrome Slipstream `CLFactory`: pools keyed by tick spacing.
+    #[sol(rpc)]
+    interface ISlipstreamFactory {
+        function getPool(address tokenA, address tokenB, int24 tickSpacing) external view returns (address pool);
+        event PoolCreated(address indexed token0, address indexed token1, int24 indexed tickSpacing, address pool);
+    }
+
+    /// Slipstream `CLPool`: `slot0` has no `feeProtocol` (six fields); `fee()` is the current dynamic swap fee
+    /// (equal to the factory's `getSwapFee(pool)`). Events, `ticks` prefix and swap callback are Uniswap V3's.
+    #[sol(rpc)]
+    interface ISlipstreamPool {
+        function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, bool unlocked);
+        function fee() external view returns (uint24);
+    }
+
     /// Solidly-style factory (Aerodrome V2 `PoolFactory`). `getFee` is the pool's effective fee in basis points.
     #[sol(rpc)]
     interface ISolidlyFactory {

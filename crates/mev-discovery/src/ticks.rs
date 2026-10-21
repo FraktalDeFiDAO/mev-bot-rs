@@ -221,10 +221,13 @@ pub async fn load_ticks_at(
     let mut plans = Vec::new();
     for p in pools {
         let (style, tick) = match p.info.kind {
-            PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. } => match current_tick(p) {
-                Some(t) => (Style::V3, t),
-                None => continue,
-            },
+            // Slipstream's `slot0`, `tickBitmap` and the first two words of `ticks` are Uniswap V3's.
+            PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. } | PoolKind::SlipstreamV3 { .. } => {
+                match current_tick(p) {
+                    Some(t) => (Style::V3, t),
+                    None => continue,
+                }
+            }
             PoolKind::AlgebraV3 => match current_tick(p) {
                 Some(t) => (Style::Algebra, t),
                 None => continue,

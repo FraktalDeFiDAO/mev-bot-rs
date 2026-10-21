@@ -7,7 +7,9 @@ use alloy::{
     rpc::types::Log,
     sol_types::SolEvent,
 };
-use mev_bindings::{IAlgebraFactory, ISolidlyFactory, IUniswapV2Factory, IUniswapV3Factory};
+use mev_bindings::{
+    IAlgebraFactory, ISlipstreamFactory, ISolidlyFactory, IUniswapV2Factory, IUniswapV3Factory,
+};
 use mev_config::{DexConfig, DexType};
 use mev_types::{PoolInfo, PoolKind};
 
@@ -30,6 +32,7 @@ pub fn creation_topics() -> Vec<B256> {
         IUniswapV2Factory::PairCreated::SIGNATURE_HASH,
         IAlgebraFactory::Pool::SIGNATURE_HASH,
         ISolidlyFactory::PoolCreated::SIGNATURE_HASH,
+        ISlipstreamFactory::PoolCreated::SIGNATURE_HASH,
     ]
 }
 
@@ -78,6 +81,22 @@ pub fn parse(log: &Log, dexes: &[DexConfig]) -> Option<Created> {
                 kind,
                 Some(u32::from(dex.fee_bps)),
                 None,
+            )
+        }
+        (DexType::Slipstream, t) if t == ISlipstreamFactory::PoolCreated::SIGNATURE_HASH => {
+            let ev = ISlipstreamFactory::PoolCreated::decode_log_data(log.data()).ok()?;
+            let tick_spacing = u32::try_from(ev.tickSpacing.as_i32()).ok()?;
+            (
+                ev.token0,
+                ev.token1,
+                ev.pool,
+                // The fee is dynamic and read when the pool is loaded.
+                PoolKind::SlipstreamV3 {
+                    fee: 0,
+                    tick_spacing,
+                },
+                None,
+                Some(ev.tickSpacing.as_i32()),
             )
         }
         (DexType::Solidly, t) if t == ISolidlyFactory::PoolCreated::SIGNATURE_HASH => {
@@ -141,6 +160,7 @@ mod tests {
     const F2: Address = Address::repeat_byte(0xf2);
     const FA: Address = Address::repeat_byte(0xfa);
     const FS: Address = Address::repeat_byte(0xf5);
+    const FC: Address = Address::repeat_byte(0xfc);
     const A: Address = Address::with_last_byte(0xa);
     const B: Address = Address::with_last_byte(0xb);
     const POOL: Address = Address::with_last_byte(0x99);
@@ -152,12 +172,14 @@ mod tests {
             factory,
             fee_bps,
             fees: vec![],
+            tick_spacings: vec![],
         };
         vec![
             d("uniswap_v3", DexType::Univ3, F3, 0),
             d("sushi_v2", DexType::Univ2, F2, 30),
             d("camelot_v3", DexType::Algebra, FA, 0),
             d("aerodrome", DexType::Solidly, FS, 0),
+            d("slipstream", DexType::Slipstream, FC, 0),
         ]
     }
 
@@ -228,6 +250,23 @@ mod tests {
             parse(&log(FS, solidly(true).encode_log_data()), &dexes()).is_none(),
             "stable (x3y+y3x) pools are not priced"
         );
+
+        let cl = ISlipstreamFactory::PoolCreated {
+            token0: A,
+            token1: B,
+            tickSpacing: I24::try_from(100).unwrap(),
+            pool: POOL,
+        };
+        let c = parse(&log(FC, cl.encode_log_data()), &dexes()).unwrap();
+        assert_eq!(
+            c.info.kind,
+            PoolKind::SlipstreamV3 {
+                fee: 0,
+                tick_spacing: 100
+            },
+            "the dynamic fee is read at load"
+        );
+        assert_eq!(c.tick_spacing, Some(100));
     }
 
     #[test]

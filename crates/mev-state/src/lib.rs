@@ -345,7 +345,10 @@ impl PoolStore {
         let pool = self.pools.get_mut(&addr)?;
         if !matches!(
             pool.info.kind,
-            PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. } | PoolKind::AlgebraV3
+            PoolKind::UniV3 { .. }
+                | PoolKind::PancakeV3 { .. }
+                | PoolKind::SlipstreamV3 { .. }
+                | PoolKind::AlgebraV3
         ) {
             return None;
         }
