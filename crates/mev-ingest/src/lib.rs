@@ -17,6 +17,10 @@ pub const LOG_BUFFER: usize = 32_768;
 // busiest), and the engine can be busy for several blocks. Keep two orders of magnitude of headroom, checked at build.
 const _: () = assert!(LOG_BUFFER >= 300 * 100);
 
+/// How long `eth_subscribe` may take. Once alloy's WS backend task has stopped (a malformed provider message, a missed
+/// pong), the request can wait forever, and the engine with it: no state updates, no heartbeat (2026-10-21, Arbitrum).
+pub const SUBSCRIBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Stream of every pool event the decoder knows (swaps, liquidity changes, V2 `Sync`, fee collection, flash loans, V4
 /// pool creation and donations) for `pools`
 /// (for V4, the PoolManager's address; see `PoolStore::log_addresses`). The stream ends if the WS connection drops;
@@ -34,11 +38,15 @@ pub async fn pool_logs(
     // alloy's subscription buffer defaults to 16 messages and, when the consumer falls behind, silently drops the oldest
     // (logged at debug only). A block's burst is 50-150 logs, delivered one message each, so the default lost events:
     // measured as ~0.3% of tracked-pool events missing from the journal, all inside busy blocks (DECISIONS #109).
-    let sub = ws
-        .subscribe_logs(&filter)
-        .channel_size(LOG_BUFFER)
-        .await
-        .context("log subscription failed")?;
+    let sub = tokio::time::timeout(
+        SUBSCRIBE_TIMEOUT,
+        ws.subscribe_logs(&filter)
+            .channel_size(LOG_BUFFER)
+            .into_future(),
+    )
+    .await
+    .context("log subscription timed out")?
+    .context("log subscription failed")?;
     Ok(sub.into_stream())
 }
 
