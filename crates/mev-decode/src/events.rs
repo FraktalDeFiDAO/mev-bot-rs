@@ -18,7 +18,13 @@ pub fn kinds() -> &'static [Kind] {
 /// restatements, fee collection, flash loans, pool creation and donations. Not the position manager's own events
 /// (their liquidity is also in the pool's `Mint` / `Burn`), and not lending or Balancer events (other emitters).
 pub fn pool_event_topics() -> Vec<alloy::primitives::B256> {
-    const POOL_PROTOCOLS: [&str; 4] = ["uniswap_v2", "uniswap_v3", "pancake_v3", "uniswap_v4"];
+    const POOL_PROTOCOLS: [&str; 5] = [
+        "uniswap_v2",
+        "aerodrome",
+        "uniswap_v3",
+        "pancake_v3",
+        "uniswap_v4",
+    ];
     kinds()
         .iter()
         .filter(|k| {
@@ -91,7 +97,8 @@ pub fn describe(
         })
     };
     let rows: Vec<(&'static str, Option<String>)> = match kind.name {
-        "swap_v2" => vec![
+        // Aerodrome lists `to` second rather than last, but both index it, so the topics are in the same places.
+        "swap_v2" | "swap_solidly" => vec![
             ("sender", ta(1)),
             ("to", ta(2)),
             ("amount0_in", u(0)),
@@ -99,7 +106,20 @@ pub fn describe(
             ("amount0_out", u(2)),
             ("amount1_out", u(3)),
         ],
-        "sync_v2" => vec![("reserve0", u(0)), ("reserve1", u(1))],
+        "sync_v2" | "sync_solidly" => vec![("reserve0", u(0)), ("reserve1", u(1))],
+        "burn_solidly" => vec![
+            ("sender", ta(1)),
+            ("to", ta(2)),
+            ("amount0", u(0)),
+            ("amount1", u(1)),
+        ],
+        "fees_solidly" => vec![("sender", ta(1)), ("amount0", u(0)), ("amount1", u(1))],
+        "claim_solidly" => vec![
+            ("sender", ta(1)),
+            ("recipient", ta(2)),
+            ("amount0", u(0)),
+            ("amount1", u(1)),
+        ],
         "mint_v2" => vec![("sender", ta(1)), ("amount0", u(0)), ("amount1", u(1))],
         "burn_v2" => vec![
             ("sender", ta(1)),

@@ -25,6 +25,22 @@ sol! {
         event Sync(uint112 reserve0, uint112 reserve1);
     }
 
+    /// Solidly-style factory (Aerodrome V2 `PoolFactory`). `getFee` is the pool's effective fee in basis points.
+    #[sol(rpc)]
+    interface ISolidlyFactory {
+        function getPool(address tokenA, address tokenB, bool stable) external view returns (address pool);
+        function getFee(address pool, bool stable) external view returns (uint256);
+        event PoolCreated(address indexed token0, address indexed token1, bool indexed stable, address pool, uint256 index);
+    }
+
+    /// Solidly-style pool (Aerodrome V2): uint256 reserves, so its `Sync` and `Swap` topics differ from V2's.
+    #[sol(rpc)]
+    interface ISolidlyPool {
+        function getReserves() external view returns (uint256 reserve0, uint256 reserve1, uint256 blockTimestampLast);
+        event Sync(uint256 reserve0, uint256 reserve1);
+        event Swap(address indexed sender, address indexed to, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out);
+    }
+
     #[sol(rpc)]
     interface ICamelotPair {
         function stableSwap() external view returns (bool);

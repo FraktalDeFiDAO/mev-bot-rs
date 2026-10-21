@@ -27,6 +27,10 @@ pub enum PoolKind {
     UniV2 { fee_bps: u16 },
     /// Camelot V2 volatile pair: directional fees, priced on-chain via `getAmountOut`.
     CamelotV2,
+    /// Solidly-style volatile pool (Aerodrome V2 on Base): constant product, one fee in basis points
+    /// read from `factory.getFee(pool, false)`, priced on-chain via the pool's `getAmountOut`. Uses the
+    /// executor's Camelot V2 hop (same `getAmountOut(amountIn, tokenIn)` and `swap` interface).
+    SolidlyV2 { factory: Address },
     /// Uniswap V3 / Sushi V3 concentrated liquidity. `fee` in hundredths of a bip (500 = 0.05%).
     UniV3 { fee: u32 },
     /// PancakeSwap V3: Uniswap V3 math, different slot0 layout and Swap event.
@@ -59,7 +63,7 @@ impl PoolKind {
     pub fn hop_kind(&self) -> u8 {
         match self {
             PoolKind::UniV2 { .. } => 0,
-            PoolKind::CamelotV2 => 1,
+            PoolKind::CamelotV2 | PoolKind::SolidlyV2 { .. } => 1,
             // All V3-style pools share the executor's swap() path; only the callback name differs.
             PoolKind::UniV3 { .. } | PoolKind::PancakeV3 { .. } | PoolKind::AlgebraV3 => 2,
             // V4 hops carry the pool's tick spacing instead of an address; native pools unwrap WETH.

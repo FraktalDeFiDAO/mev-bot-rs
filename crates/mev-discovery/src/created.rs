@@ -7,7 +7,7 @@ use alloy::{
     rpc::types::Log,
     sol_types::SolEvent,
 };
-use mev_bindings::{IAlgebraFactory, IUniswapV2Factory, IUniswapV3Factory};
+use mev_bindings::{IAlgebraFactory, ISolidlyFactory, IUniswapV2Factory, IUniswapV3Factory};
 use mev_config::{DexConfig, DexType};
 use mev_types::{PoolInfo, PoolKind};
 
@@ -29,6 +29,7 @@ pub fn creation_topics() -> Vec<B256> {
         IUniswapV3Factory::PoolCreated::SIGNATURE_HASH,
         IUniswapV2Factory::PairCreated::SIGNATURE_HASH,
         IAlgebraFactory::Pool::SIGNATURE_HASH,
+        ISolidlyFactory::PoolCreated::SIGNATURE_HASH,
     ]
 }
 
@@ -79,6 +80,23 @@ pub fn parse(log: &Log, dexes: &[DexConfig]) -> Option<Created> {
                 None,
             )
         }
+        (DexType::Solidly, t) if t == ISolidlyFactory::PoolCreated::SIGNATURE_HASH => {
+            let ev = ISolidlyFactory::PoolCreated::decode_log_data(log.data()).ok()?;
+            // Stable pools use the x3y+y3x curve, which the model does not price.
+            if ev.stable {
+                return None;
+            }
+            (
+                ev.token0,
+                ev.token1,
+                ev.pool,
+                PoolKind::SolidlyV2 {
+                    factory: dex.factory,
+                },
+                None,
+                None,
+            )
+        }
         (DexType::Algebra, t) if t == IAlgebraFactory::Pool::SIGNATURE_HASH => {
             let ev = IAlgebraFactory::Pool::decode_log_data(log.data()).ok()?;
             (
@@ -122,6 +140,7 @@ mod tests {
     const F3: Address = Address::repeat_byte(0xf3);
     const F2: Address = Address::repeat_byte(0xf2);
     const FA: Address = Address::repeat_byte(0xfa);
+    const FS: Address = Address::repeat_byte(0xf5);
     const A: Address = Address::with_last_byte(0xa);
     const B: Address = Address::with_last_byte(0xb);
     const POOL: Address = Address::with_last_byte(0x99);
@@ -138,6 +157,7 @@ mod tests {
             d("uniswap_v3", DexType::Univ3, F3, 0),
             d("sushi_v2", DexType::Univ2, F2, 30),
             d("camelot_v3", DexType::Algebra, FA, 0),
+            d("aerodrome", DexType::Solidly, FS, 0),
         ]
     }
 
@@ -193,6 +213,21 @@ mod tests {
         let c = parse(&log(FA, alg.encode_log_data()), &dexes()).unwrap();
         assert_eq!(c.info.kind, PoolKind::AlgebraV3);
         assert_eq!(c.info.dex, "camelot_v3");
+
+        let solidly = |stable| ISolidlyFactory::PoolCreated {
+            token0: A,
+            token1: B,
+            stable,
+            pool: POOL,
+            index: U256::from(1),
+        };
+        let c = parse(&log(FS, solidly(false).encode_log_data()), &dexes()).unwrap();
+        assert_eq!(c.info.kind, PoolKind::SolidlyV2 { factory: FS });
+        assert_eq!((c.info.address, c.info.dex.as_str()), (POOL, "aerodrome"));
+        assert!(
+            parse(&log(FS, solidly(true).encode_log_data()), &dexes()).is_none(),
+            "stable (x3y+y3x) pools are not priced"
+        );
     }
 
     #[test]

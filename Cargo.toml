@@ -90,6 +90,7 @@ mev-protocol-unidentified = { path = "crates/mev-protocol-unidentified" }
 mev-protocol-fluid = { path = "crates/mev-protocol-fluid" }
 mev-protocol-oneinch = { path = "crates/mev-protocol-oneinch" }
 mev-protocol-cow = { path = "crates/mev-protocol-cow" }
+mev-protocol-aerodrome = { path = "crates/mev-protocol-aerodrome" }
 mev-protocol-camelot = { path = "crates/mev-protocol-camelot" }
 mev-protocol-sushi = { path = "crates/mev-protocol-sushi" }
 mev-protocol-paraswap = { path = "crates/mev-protocol-paraswap" }

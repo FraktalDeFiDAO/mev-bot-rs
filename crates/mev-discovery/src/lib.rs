@@ -20,7 +20,8 @@ use alloy::{
 use anyhow::{Context, Result};
 use mev_bindings::{
     IAlgebraFactory, IAlgebraPool, ICamelotPair, IERC20, IPancakeV3Pool, IPoolManager, IPoolMeta,
-    IUniswapV2Factory, IUniswapV2Pair, IUniswapV3Factory, IUniswapV3Pool,
+    ISolidlyFactory, ISolidlyPool, IUniswapV2Factory, IUniswapV2Pair, IUniswapV3Factory,
+    IUniswapV3Pool,
 };
 use mev_config::{AutoDiscovery, ChainConfig, DexType};
 use mev_dex::{Pool, PoolState, sqrt_price_from_x96};
@@ -83,6 +84,24 @@ pub async fn discover_pools(
                         meta.push((dex.name.clone(), kind, t0, t1));
                     }
                 }
+                DexType::Solidly => {
+                    calls.push(call(
+                        dex.factory,
+                        ISolidlyFactory::getPoolCall {
+                            tokenA: a,
+                            tokenB: b,
+                            stable: false,
+                        },
+                    ));
+                    meta.push((
+                        dex.name.clone(),
+                        PoolKind::SolidlyV2 {
+                            factory: dex.factory,
+                        },
+                        t0,
+                        t1,
+                    ));
+                }
                 DexType::Algebra => {
                     calls.push(call(
                         dex.factory,
@@ -105,6 +124,7 @@ pub async fn discover_pools(
                 decode::<IUniswapV3Factory::getPoolCall>(res)
             }
             PoolKind::AlgebraV3 => decode::<IAlgebraFactory::poolByPairCall>(res),
+            PoolKind::SolidlyV2 { .. } => decode::<ISolidlyFactory::getPoolCall>(res),
             _ => decode::<IUniswapV2Factory::getPairCall>(res),
         };
         if let Some(address) = addr.filter(|a| !a.is_zero())
@@ -163,6 +183,16 @@ fn calls_for(p: &PoolInfo) -> Vec<(Address, alloy::primitives::Bytes)> {
             call(p.address, ICamelotPair::stableSwapCall {}),
             call(p.address, ICamelotPair::token0FeePercentCall {}),
             call(p.address, ICamelotPair::token1FeePercentCall {}),
+        ],
+        PoolKind::SolidlyV2 { factory } => vec![
+            call(p.address, ISolidlyPool::getReservesCall {}),
+            call(
+                factory,
+                ISolidlyFactory::getFeeCall {
+                    pool: p.address,
+                    stable: false,
+                },
+            ),
         ],
     }
 }
@@ -295,6 +325,34 @@ pub async fn load_pools_at(
                         .with_directional_fees(
                             f0 as f64 / CAMELOT_FEE_DENOM,
                             f1 as f64 / CAMELOT_FEE_DENOM,
+                        ),
+                    ),
+                    _ => None,
+                }
+            }
+            PoolKind::SolidlyV2 { .. } => {
+                let reserves = decode::<ISolidlyPool::getReservesCall>(&r[0]);
+                let fee = decode::<ISolidlyFactory::getFeeCall>(&r[1])
+                    .and_then(|f| u32::try_from(f).ok())
+                    .filter(|f| *f <= 10_000);
+                match (reserves, fee) {
+                    (Some(x), Some(fee)) => Some(
+                        Pool::new(
+                            info,
+                            PoolState::V2 {
+                                reserve0: f64::from(x.reserve0),
+                                reserve1: f64::from(x.reserve1),
+                            },
+                        )
+                        .with_exact(mev_dex::ExactState::V2Fee {
+                            reserve0: x.reserve0,
+                            reserve1: x.reserve1,
+                            fee0: fee,
+                            fee1: fee,
+                        })
+                        .with_directional_fees(
+                            f64::from(fee) / 10_000.0,
+                            f64::from(fee) / 10_000.0,
                         ),
                     ),
                     _ => None,
