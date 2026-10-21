@@ -44,7 +44,9 @@ if grep -q "^$KEY=0x" .env && [[ $REDEPLOY == 0 ]]; then
 fi
 
 echo "running fork tests first..."
-(cd contracts && ARBITRUM_HTTP_URL="${ARBITRUM_HTTP_URL:-https://arb1.arbitrum.io/rpc}" forge test -q)  # Arbitrum fork tests
+# FORK_RPC_URL (set when calling, not in .env) overrides a keyed ARBITRUM_HTTP_URL whose quota is spent.
+(cd contracts && ARBITRUM_HTTP_URL="${FORK_RPC_URL:-${ARBITRUM_HTTP_URL:-https://arb1.arbitrum.io/rpc}}" forge test -q) \
+  || { echo "fork tests failed (a spent RPC quota? retry with FORK_RPC_URL=https://arb1.arbitrum.io/rpc)"; exit 1; }
 
 read -r -p "Deploy ArbExecutor to $CHAIN mainnet now? [y/N] " ok
 [[ $ok == y || $ok == Y ]] || { echo "aborted"; exit 1; }
