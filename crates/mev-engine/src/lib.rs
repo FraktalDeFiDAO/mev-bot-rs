@@ -150,6 +150,8 @@ const SIM_OK_TTL: Duration = Duration::from_secs(300);
 /// Presim-applied state not confirmed by a real log within this long is rolled back (a block arrives within about
 /// a second; a pending transaction that reverted or never landed leaves no log).
 const TENTATIVE_TTL: Duration = Duration::from_secs(3);
+/// Longest a post-subscribe state snapshot may take before the loop gives up, backs off and resubscribes.
+const RECONCILE_TIMEOUT: Duration = Duration::from_secs(300);
 /// A pending feed transaction's call is kept this long for verifying trades it triggers.
 const TRIGGER_CALL_KEEP: Duration = Duration::from_secs(20);
 /// A pool is re-read after a failed simulation at most this often.
@@ -1218,7 +1220,16 @@ impl Engine {
             };
             // Subscribe first, then reconcile at a pinned block. Buffered logs at or below this
             // snapshot are never applied on top of newer state.
-            if let Err(e) = self.reconcile_subscription().await {
+            // Bounded: a snapshot over a dead connection would otherwise park the loop (no updates, no heartbeat).
+            let reconciled = tokio::time::timeout(RECONCILE_TIMEOUT, self.reconcile_subscription())
+                .await
+                .unwrap_or_else(|_| {
+                    Err(anyhow::anyhow!(
+                        "timed out after {}s",
+                        RECONCILE_TIMEOUT.as_secs()
+                    ))
+                });
+            if let Err(e) = reconciled {
                 warn!(error = %e, "subscription snapshot incomplete; submissions remain disabled");
                 tokio::time::sleep(backoff.next_delay()).await;
                 continue;
