@@ -111,7 +111,9 @@ impl Pool {
     pub fn new(info: PoolInfo, state: PoolState) -> Self {
         let fee = match info.kind {
             PoolKind::UniV2 { fee_bps } => fee_bps as f64 / 10_000.0,
-            PoolKind::UniV3 { fee } | PoolKind::PancakeV3 { fee } => fee as f64 / 1_000_000.0,
+            PoolKind::UniV3 { fee }
+            | PoolKind::PancakeV3 { fee }
+            | PoolKind::SlipstreamV3 { fee, .. } => fee as f64 / 1_000_000.0,
             PoolKind::UniV4 { fee, .. } => fee as f64 / 1_000_000.0,
             PoolKind::CamelotV2 => 0.003,
             // Real fee from the factory via `with_directional_fees`.
@@ -261,7 +263,9 @@ impl Pool {
                     tick,
                     liquidity,
                 },
-                PoolKind::UniV3 { fee } | PoolKind::PancakeV3 { fee },
+                PoolKind::UniV3 { fee }
+                | PoolKind::PancakeV3 { fee }
+                | PoolKind::SlipstreamV3 { fee, .. },
             ) => self.exact_v3_walk(
                 *sqrt_price,
                 *tick,
@@ -681,6 +685,7 @@ impl Pool {
 /// Tick spacing of a V3-style pool (the factories' fee-tier defaults; Algebra/Camelot uses 60).
 pub fn tick_spacing(kind: &PoolKind) -> u32 {
     match *kind {
+        PoolKind::SlipstreamV3 { tick_spacing, .. } => tick_spacing.max(1),
         PoolKind::UniV3 { fee } | PoolKind::PancakeV3 { fee } => match fee {
             100 => 1,
             500 => 10,
@@ -755,6 +760,28 @@ mod tests {
             "routed through the getAmountOut hop"
         );
         assert_eq!(tick_spacing(&p.info.kind), 1);
+    }
+
+    #[test]
+    fn slipstream_uses_the_v3_hop_and_its_own_tick_spacing() {
+        let k = PoolKind::SlipstreamV3 {
+            fee: 684,
+            tick_spacing: 100,
+        };
+        assert_eq!(k.hop_kind(), 2, "Uniswap V3 swap() and callback");
+        assert_eq!(
+            tick_spacing(&k),
+            100,
+            "keyed by spacing, not derived from the fee"
+        );
+        let p = Pool::new(
+            info(k),
+            PoolState::V3 {
+                sqrt_price: 1.0,
+                liquidity: 1.0,
+            },
+        );
+        assert_eq!((p.fee0, p.fee1), (0.000684, 0.000684));
     }
 
     #[test]

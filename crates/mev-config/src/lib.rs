@@ -13,6 +13,8 @@ pub enum DexType {
     Camelot,
     /// Solidly-style factory (Aerodrome V2): volatile pools only; stable (x3y+y3x) pools are not modelled.
     Solidly,
+    /// Aerodrome Slipstream concentrated-liquidity factory: pools looked up by `tick_spacings`.
+    Slipstream,
     Univ3,
     Pancakev3,
     Algebra,
@@ -30,6 +32,9 @@ pub struct DexConfig {
     /// V3 fee tiers to look up.
     #[serde(default)]
     pub fees: Vec<u32>,
+    /// Slipstream tick spacings to look up (its pools are keyed by spacing, not fee).
+    #[serde(default)]
+    pub tick_spacings: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

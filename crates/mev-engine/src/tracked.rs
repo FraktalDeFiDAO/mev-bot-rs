@@ -15,6 +15,7 @@ fn kind_name(k: &PoolKind) -> (&'static str, Option<u32>) {
         PoolKind::SolidlyV2 { .. } => ("solidly_v2", None),
         PoolKind::UniV3 { fee } => ("uniswap_v3", Some(*fee)),
         PoolKind::PancakeV3 { fee } => ("pancake_v3", Some(*fee)),
+        PoolKind::SlipstreamV3 { fee, .. } => ("slipstream", Some(*fee)),
         PoolKind::AlgebraV3 => ("algebra_v3", None),
         PoolKind::UniV4 { fee, .. } => ("uniswap_v4", Some(*fee)),
     }
