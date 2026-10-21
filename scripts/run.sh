@@ -14,6 +14,9 @@
 #   scripts/run.sh advisor-stop | advisor-status | advisor-logs
 #   scripts/run.sh base-shadow      start the Base bot (shadow only, no .env) next to Arbitrum; public RPCs,
 #                                   plus keyed BASE_* RPC URLs from secrets/base-rpc.env when present (mode 0600)
+#   scripts/run.sh base-live        start the Base bot in live mode (sends trades) — asks for confirmation;
+#                                   takes only PRIVATE_KEY, BASE_EXECUTOR_ADDRESS and PROFIT_RECEIVER from .env
+#   scripts/run.sh base-halt | base-resume   Base kill switch (data/base/STOP)
 #   scripts/run.sh base-stop | base-status | base-logs
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -99,7 +102,8 @@ BASE_CTR=mev-bot-base
 BOT_IMAGE=localhost/mev-bot:dev
 BASE_RPC_ENV=secrets/base-rpc.env
 
-# Base runs shadow only (DECISIONS #175): public endpoints from config/base.toml, no signer. Keyed
+# Base shadow (DECISIONS #175): public endpoints from config/base.toml, no signer; `base-live` adds
+# only the signer's three variables (base_live_env). Keyed
 # RPC URLs are optional and come from their own file, never .env (which holds the signing key): only
 # BASE_{HTTP,WS,SWEEP,PRESIM}_URL* lines are allowed, so nothing else can reach the container.
 base_rpc_env() {
@@ -113,10 +117,30 @@ base_rpc_env() {
   env_args=(--env-file "$BASE_RPC_ENV")
 }
 
+BASE_STOP_FILE=data/base/STOP
+BASE_LIVE_ENV=.env.base-live
+
+# Live mode's signing env: only the three variables Base needs, never the rest of .env (Arbitrum's
+# keyed URLs and settings stay out). Values are copied as data, not sourced.
+base_live_env() {
+  [[ -f .env ]] || { echo "missing .env" >&2; exit 1; }
+  for k in PRIVATE_KEY BASE_EXECUTOR_ADDRESS PROFIT_RECEIVER; do
+    grep -q "^$k=." .env || { echo "$k not set in .env — Base live mode needs it" >&2; exit 1; }
+  done
+  local tmp
+  tmp=$(mktemp "$BASE_LIVE_ENV.XXXXXX")
+  chmod 600 "$tmp"
+  awk '/^(PRIVATE_KEY|BASE_EXECUTOR_ADDRESS|PROFIT_RECEIVER)=/ {print}' .env > "$tmp"
+  mv "$tmp" "$BASE_LIVE_ENV"
+  env_args+=(--env-file "$BASE_LIVE_ENV")
+}
+
 base_start() {
+  local mode=${1:-shadow}
   mkdir -p data/base
   local env_args
   base_rpc_env
+  if [[ $mode == live ]]; then base_live_env; fi
   podman image exists "$BOT_IMAGE" || compose build bot >/dev/null
   podman rm -f "$BASE_CTR" >/dev/null 2>&1 || true
   podman run -d --name "$BASE_CTR" --network host "${env_args[@]}" \
@@ -128,12 +152,28 @@ base_start() {
     --health-interval 60s --health-timeout 5s --health-retries 3 --health-start-period 120s \
     -e RUST_LOG="${RUST_LOG:-info}" -e NO_COLOR=1 \
     -v "$PWD/data:/var/lib/mev-bot:Z" -v "$PWD/config:/app/config:ro,Z" \
-    "$BOT_IMAGE" --mode shadow --config /app/config/base.toml >/dev/null
-  echo "Base bot started (shadow${env_args[*]:+, keyed RPCs from $BASE_RPC_ENV}) — 'scripts/run.sh base-logs' to follow"
+    "$BOT_IMAGE" --mode "$mode" --config /app/config/base.toml >/dev/null
+  echo "Base bot started ($mode) — 'scripts/run.sh base-logs' to follow, 'scripts/run.sh base-halt' to stop trading"
 }
 
 case "${1:-}" in
-  base-shadow)    base_start ;;
+  base-shadow)    base_start shadow ;;
+  base-live)
+    read -r -p "Start LIVE trading on Base with real funds? [y/N] " ok
+    [[ $ok == y || $ok == Y ]] || { echo "aborted"; exit 1; }
+    # A STOP file means someone (or the watchdog) halted trading: don't clear it silently.
+    if [[ -f $BASE_STOP_FILE ]]; then
+      echo "kill switch is ON ($BASE_STOP_FILE, set $(date -r "$BASE_STOP_FILE" '+%F %T')). Run '$0 base-resume' first." >&2
+      exit 1
+    fi
+    base_start live ;;
+  base-halt)      mkdir -p data/base && touch "$BASE_STOP_FILE" && echo "Base kill switch on — no new trades will be sent" ;;
+  base-resume)
+    if [[ -f $BASE_STOP_FILE ]]; then
+      read -r -p "Clear the Base kill switch and allow trading? [y/N] " ok
+      [[ $ok == y || $ok == Y ]] || { echo "aborted"; exit 1; }
+    fi
+    rm -f "$BASE_STOP_FILE" && echo "Base kill switch off" ;;
   base-stop)      podman stop -t 20 "$BASE_CTR" && podman rm "$BASE_CTR" ;;
   base-status)
     podman ps -a --filter name=$BASE_CTR --format '{{.Names}}  {{.Status}}'
@@ -173,5 +213,5 @@ case "${1:-}" in
     fi
     rm -f "$STOP_FILE" && echo "kill switch off" ;;
   stop)   compose down ;;
-  *) sed -n '2,16p' "$0"; exit 2 ;;
+  *) sed -n '2,20p' "$0"; exit 2 ;;
 esac
