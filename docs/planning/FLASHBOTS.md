@@ -46,3 +46,22 @@ several guesses (direction × size) per hint, and the builder's simulation keeps
 ## Not in scope
 
 Sandwiching (never: see the project charter). Ethereum liquidations stay out until a measurement shows non-SVR wins.
+
+## Phase 1 first result (2026-10-22): the hinted backrun market looks empty
+
+Method (scratchpad scripts, public data only):
+- MEV-Share history API, last 150 blocks: ~21k hints in 30 min, of which ~3.7k were swap hints that expose their
+  log data.
+- Hint hashes are bundle hashes, not transaction hashes, so each hint was matched to the chain by its swap log
+  (pool, topics, data) within 5 blocks.
+- 120 sampled; 69 matched a landed swap.
+
+Of those 69:
+- **No refund** was paid to any of the users later in the same block, from the builder or from anyone else. MEV-Share
+  pays 90% of a backrun's profit to the user, so a backrun would show up as a refund.
+- 5 were followed by another transaction on the same pool, and the 3 inspected were ordinary user swaps, not
+  arbitrage.
+
+So almost none of this order flow is worth backrunning: the swaps are too small to move prices beyond the fees.
+A larger sample could change this, but on this evidence the executor deploy (~$5–15) is not justified. Gate stays
+closed.
