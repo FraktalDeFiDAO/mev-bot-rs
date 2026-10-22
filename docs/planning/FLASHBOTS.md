@@ -65,3 +65,27 @@ Of those 69:
 So almost none of this order flow is worth backrunning: the swaps are too small to move prices beyond the fees.
 A larger sample could change this, but on this evidence the executor deploy (~$5–15) is not justified. Gate stays
 closed.
+
+## Base same-block backruns (2026-10-22): measured, not reachable from here
+
+Measured with `mev-flashblocks-record` (new binary in mev-sequencer): a 10-minute Flashblocks recording joined with
+receipts, 299 blocks.
+- 1,758 multi-pool (arbitrage-like) transactions. 992 had no trigger earlier in the same block.
+- Of the 766 with a same-block trigger, 361 landed in the **same** flashblock as the trigger: they were sent before
+  the trigger was public (prediction or spam).
+- The other 405 landed **later**, 325 of them in the very next flashblock (~200 ms).
+- The most-reverting destinations had 408, 316 and 251 failed transactions in those 10 minutes. On Base the winning
+  style is to spray backruns and let unprofitable ones revert (~$0.005 each).
+
+Local shadow run with `[presim]` against the Flashblocks feed, ~50 min:
+- 6,120 presimulated updates; mean `eth_simulateV1` time 130 ms once warm (762 ms cold, public endpoints).
+- 37 candidates, $7.33 modelled in total (max $0.83). All were `NotProfitable` at verification: the gap was gone.
+
+Conclusion:
+- An RPC simulation round trip (150–300 ms from the server or locally) already uses up the 200 ms window to the next
+  flashblock.
+- Reacting in-process (local decode plus exact math, fire and let the executor revert) would cut compute time but not
+  distance. The bot runs in Germany, and the Base sequencer's endpoints answer in ~150 ms round trip, so receive plus
+  send is already about one flashblock.
+- Winning the next flashblock needs co-location near the sequencer, which costs money. Presim stays off for Base live:
+  it roughly triples public-RPC load for no gain.
