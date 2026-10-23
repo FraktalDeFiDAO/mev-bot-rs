@@ -41,6 +41,9 @@ pub struct SequencedTx {
     pub seq: u64,
     /// When this process received it.
     pub received: Instant,
+    /// Timestamp (unix seconds) of the block it was sequenced into, when the feed says (Base
+    /// Flashblocks' block header); `None` on feeds without one.
+    pub block_timestamp: Option<u64>,
     pub hash: B256,
     pub to: Option<Address>,
     pub input: Bytes,
@@ -408,6 +411,7 @@ async fn stream_once(
                 let st = SequencedTx {
                     seq,
                     received,
+                    block_timestamp: None,
                     hash: *t.tx_hash(),
                     to: t.to(),
                     input: t.input().clone(),
@@ -438,6 +442,7 @@ mod tests {
         SequencedTx {
             seq,
             received: Instant::now(),
+            block_timestamp: None,
             hash: *t.tx_hash(),
             to: t.to(),
             input: t.input().clone(),
@@ -480,6 +485,7 @@ mod tests {
             SequencedTx {
                 seq: 1,
                 received: Instant::now(),
+                block_timestamp: None,
                 hash: *env.tx_hash(),
                 to: env.to(),
                 input: env.input().clone(),

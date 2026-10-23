@@ -567,7 +567,14 @@ impl LiquidationAdapter for MorphoAdapter {
             Some(true) => return no_plan("healthy at the exact re-read"),
             None => return no_plan("exact health overflow"),
         }
-        let Some(size) = math::exact::size(collateral, borrowed, s.price_raw, pm.lltv) else {
+        let Some(size) = math::exact::size(
+            collateral,
+            U256::from(pos.borrowShares),
+            s.total_borrow_assets_raw,
+            s.total_borrow_shares_raw,
+            s.price_raw,
+            pm.lltv,
+        ) else {
             return no_plan("exact size failed");
         };
         let borrowed_f = f64::from(borrowed);
@@ -723,15 +730,16 @@ impl MorphoAdapter {
         let size = math::size(collateral, borrowed, s.price, lltv)?;
         // Amounts that reach calldata come from the integer size when the caller has exact reads
         // (the `plan` path); the speculative `predict` path only has estimates and keeps its haircut.
-        let (seized, repaid) = match exact {
-            Some(x) => (x.seized, x.repaid),
+        let (seized, flash) = match exact {
+            Some(x) => (x.seized, x.flash),
+            // Speculative (predicted price, no re-read): estimates, flashing 1% over the estimated
+            // repayment. Never simulated; the executor's on-chain profit check guards it.
             None => (
                 U256::from(size.seized as u128),
-                U256::from(size.repaid as u128),
+                U256::from(size.repaid as u128).checked_mul(U256::from(101u8))? / U256::from(100u8)
+                    + U256::from(1u8),
             ),
         };
-        // Flash 1% over the computed repayment (rounding / interest accrual); excess is returned.
-        let flash = repaid.checked_mul(U256::from(101u8))? / U256::from(100u8) + U256::from(1u8);
         let data = IMorpho::liquidateCall {
             marketParams: IMorpho::MarketParams {
                 loanToken: pm.loan,
