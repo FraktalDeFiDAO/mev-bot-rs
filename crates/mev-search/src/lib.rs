@@ -48,7 +48,9 @@ pub fn two_pool_arbs(
                 if buy.marginal_rate(loan) * sell.marginal_rate(other) <= 1.0 {
                     continue;
                 }
-                let cap = max_loan.min(buy.reserve_of(loan) * 0.5);
+                // Search the whole loan range: profit is concave in the input, so the
+                // ternary search finds the true optimum (no guessed bound on the size).
+                let cap = max_loan;
                 let path = [(*buy, loan), (*sell, other)];
                 let min_raw = if usd > 0.0 {
                     params.min_est_profit_usd / usd
@@ -342,7 +344,8 @@ mod props {
         fn ternary_search_beats_a_brute_force_grid(r in 1e6f64..1e12, p1 in 1.0f64..3.0, gap in 1.0f64..1.3) {
             let (buy, sell) = (v2(1, r, r * p1 * gap), v2(2, r, r * p1));
             let f = |x: f64| sell.amount_out(B, buy.amount_out(A, x)) - x;
-            let cap = r * 0.5;
+            // Ten times the reserve: the search range no longer stops at half the pool.
+            let cap = r * 10.0;
             let (_, best) = best_size(cap, f);
             let grid_best = (0..=2_000).map(|i| f(cap * i as f64 / 2_000.0)).fold(f64::MIN, f64::max);
             prop_assert!(best >= grid_best - grid_best.abs() * 1e-6 - 1e-6);
