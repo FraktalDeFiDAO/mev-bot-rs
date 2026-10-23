@@ -428,6 +428,43 @@ async fn stream_once(
 
 #[cfg(test)]
 mod tests {
+    /// How long after a transaction arrives in the Arbitrum sequencer feed the RPC serves its
+    /// receipt: polls each of 20 transactions every 10 ms. Prints p50/p90/max (`--nocapture`).
+    /// Location-dependent: run it where the bot runs.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn measure_rpc_visibility_after_feed() {
+        use alloy::providers::{Provider, ProviderBuilder};
+        let rpc = std::env::var("ARB_RPC").unwrap_or("https://arb1.arbitrum.io/rpc".into());
+        let p = ProviderBuilder::new().connect_http(rpc.parse().unwrap());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tokio::spawn(run("wss://arb1-feed.arbitrum.io/feed".into(), tx));
+        let mut lags = Vec::new();
+        while lags.len() < 20 {
+            let st = rx.recv().await.unwrap();
+            let seen = st.received;
+            loop {
+                if let Ok(Some(_)) = p.get_transaction_receipt(st.hash).await {
+                    lags.push(seen.elapsed().as_millis() as u64);
+                    break;
+                }
+                if seen.elapsed() > Duration::from_secs(5) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            while rx.try_recv().is_ok() {} // next sample: a fresh transaction
+        }
+        lags.sort_unstable();
+        println!(
+            "receipt visible after feed: p50 {} ms, p90 {} ms, max {} ms (n={})",
+            lags[lags.len() / 2],
+            lags[lags.len() * 9 / 10],
+            lags[lags.len() - 1],
+            lags.len()
+        );
+    }
+
     use super::*;
     use alloy::{
         consensus::{SignableTransaction, TxEip1559},

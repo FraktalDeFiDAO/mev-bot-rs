@@ -3573,6 +3573,11 @@ async fn build_liquidation(
         min_debt_usd: lcfg.min_debt_usd,
         sweep_secs: lcfg.sweep_secs,
         fallback_poll_secs: lcfg.fallback_poll_secs,
+        burst_offsets: lcfg
+            .burst_offsets_ms
+            .iter()
+            .map(|ms| Duration::from_millis(*ms))
+            .collect(),
         executor,
     };
     Ok(Some((Runner::new(rcfg, adapters), via)))

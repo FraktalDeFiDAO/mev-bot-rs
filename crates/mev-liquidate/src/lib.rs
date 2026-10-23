@@ -28,14 +28,6 @@ pub use shadow::{
 /// Delay before the single retry of an adapter whose sweep failed (instead of a full `sweep_secs`).
 const SWEEP_RETRY: Duration = Duration::from_secs(60);
 const BACKFILL_EVERY: Duration = Duration::from_secs(5);
-/// After a price-feed tx, re-poll at these offsets: the block containing the update lands
-/// ~0.5-1 s after the feed. Three polls instead of every 250 ms for 1.8 s (7 polls) — the
-/// bursts were the largest paid-RPC consumer in live logs (~60 calls/min).
-const BURST_OFFSETS: [Duration; 3] = [
-    Duration::from_millis(400),
-    Duration::from_millis(900),
-    Duration::from_millis(1_600),
-];
 const BURST_TICK: Duration = Duration::from_millis(100);
 /// Delayed updates kept per adapter (oldest dropped first).
 const MAX_DELAYED: usize = 8;
@@ -99,6 +91,8 @@ pub struct RunnerConfig {
     pub sweep_secs: u64,
     /// Fallback at-risk poll period (feed-triggered bursts handle the fast path).
     pub fallback_poll_secs: u64,
+    /// Re-poll offsets after a price-feed transaction (measured RPC visibility; see config).
+    pub burst_offsets: Vec<Duration>,
     /// Passed to adapters building plans.
     pub executor: Address,
 }
@@ -771,10 +765,14 @@ impl Runner {
                     let now = Instant::now();
                     for i in 0..self.slots.len() {
                         let Some((start, next)) = self.slots[i].burst else { continue };
-                        if now.duration_since(start) < BURST_OFFSETS[next] {
+                        let Some(offset) = self.cfg.burst_offsets.get(next) else {
+                            self.slots[i].burst = None; // no offsets configured: no burst
+                            continue;
+                        };
+                        if now.duration_since(start) < *offset {
                             continue;
                         }
-                        self.slots[i].burst = (next + 1 < BURST_OFFSETS.len()).then_some((start, next + 1));
+                        self.slots[i].burst = (next + 1 < self.cfg.burst_offsets.len()).then_some((start, next + 1));
                         let feeds = self.slots[i].burst_feeds.clone();
                         if !self.poll(i, Some(&feeds), &tx).await { return; }
                     }
@@ -981,6 +979,7 @@ mod tests {
             min_debt_usd: 20.0,
             sweep_secs: 3600,
             fallback_poll_secs: 3600,
+            burst_offsets: vec![Duration::from_millis(400), Duration::from_millis(900)],
             executor: Address::ZERO,
         }
     }
@@ -1617,6 +1616,7 @@ mod tests {
         let (_hf, a) = fake(0.97, AdapterStatus::Live);
         let c = RunnerConfig {
             fallback_poll_secs: 1,
+            burst_offsets: vec![Duration::from_millis(400), Duration::from_millis(900)],
             ..cfg()
         };
         let r = Runner::new(c, vec![a]).with_shadow_schedule(sched);

@@ -206,6 +206,51 @@ async fn stream_once(
 mod tests {
     use super::*;
 
+    /// How long after a transaction arrives in Flashblocks the RPC serves its receipt (the
+    /// preconfirmed state a `pending` read sees): polls each of 20 transactions every 10 ms.
+    /// Prints p50/p90; run with `--nocapture`. Location-dependent: run it where the bot runs.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn measure_rpc_visibility_after_flashblock() {
+        use alloy::providers::{Provider, ProviderBuilder};
+        let rpc = std::env::var("BASE_RPC").unwrap_or("https://mainnet.base.org".into());
+        let p = ProviderBuilder::new().connect_http(rpc.parse().unwrap());
+        let (mut ws, _) = tokio_tungstenite::connect_async("wss://mainnet.flashblocks.base.org/ws")
+            .await
+            .unwrap();
+        let mut lags = Vec::new();
+        while lags.len() < 20 {
+            let raw = match ws.next().await.unwrap().unwrap() {
+                Message::Binary(b) => b.to_vec(),
+                Message::Text(t) => t.as_bytes().to_vec(),
+                _ => continue,
+            };
+            let seen = std::time::Instant::now();
+            let Some(t) = parse_flashblock(&raw).unwrap().txs.into_iter().last() else {
+                continue;
+            };
+            let h = *t.tx_hash();
+            loop {
+                if let Ok(Some(_)) = p.get_transaction_receipt(h).await {
+                    lags.push(seen.elapsed().as_millis() as u64);
+                    break;
+                }
+                if seen.elapsed() > Duration::from_secs(5) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        lags.sort_unstable();
+        println!(
+            "receipt visible after flashblock: p50 {} ms, p90 {} ms, max {} ms (n={})",
+            lags[lags.len() / 2],
+            lags[lags.len() * 9 / 10],
+            lags[lags.len() - 1],
+            lags.len()
+        );
+    }
+
     /// Base's live feed: the first flashblock of a block carries its timestamp, and Base's
     /// timestamps are genesis (1686789347) + 2 s x block number.
     #[tokio::test]
