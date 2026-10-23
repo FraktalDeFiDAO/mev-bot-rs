@@ -28,7 +28,7 @@ case $CHAIN in
     RPC=${BASE_HTTP_URL:-https://mainnet.base.org}; KEY=BASE_EXECUTOR_ADDRESS
     WETH=0x4200000000000000000000000000000000000006
     POOL_MANAGER=0x498581fF718922c3f8e6A244956aF099B2652b2b   # Uniswap V4 PoolManager (Base)
-    # Morpho Blue; Moonwell's markets are listed by the bot at startup ("not allowlisted ... fix=").
+    # Morpho Blue; Moonwell's markets: the bot prints the scripts/allow-targets.sh command at startup.
     ALLOW=(0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb) ;;
   *) echo "unknown chain $CHAIN (arbitrum | base)"; exit 2 ;;
 esac
