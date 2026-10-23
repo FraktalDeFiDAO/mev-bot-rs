@@ -130,6 +130,18 @@ pub trait LiquidationAdapter: Send + Sync {
         WatchDetail::default()
     }
 
+    /// `predict` with the report's exact integer answer. `Some`: this adapter predicts `feed`
+    /// exactly (possibly no plans, where it can't predict exactly rather than estimate); `None`:
+    /// no exact model for `feed`, and the runner falls back to `predict`.
+    fn predict_exact(
+        &self,
+        _feed: Address,
+        _answer: alloy::primitives::U256,
+        _executor: Address,
+    ) -> Option<Vec<Plan>> {
+        None
+    }
+
     /// Contracts the executor must allowlist (call targets and approval spenders).
     fn targets(&self) -> Vec<Address>;
 
