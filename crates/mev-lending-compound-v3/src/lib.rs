@@ -58,6 +58,8 @@ sol! {
         function baseScale() external view returns (uint256);
         function numAssets() external view returns (uint8);
         function getAssetInfo(uint8 i) external view returns (AssetInfo memory);
+        function getAssetInfoByAddress(address asset) external view returns (AssetInfo memory);
+        function quoteCollateral(address asset, uint256 baseAmount) external view returns (uint256);
         function storeFrontPriceFactor() external view returns (uint256);
         function getPrice(address priceFeed) external view returns (uint256);
         function borrowBalanceOf(address account) external view returns (uint256);
@@ -186,6 +188,9 @@ struct Buy {
     asset: Address,
     amount: f64,
     absorb: bool,
+    /// Exact `(baseAmount, minAmount)` from Comet's integer quote (the `plan` path, which re-reads
+    /// raw state); `None` on the speculative `predict` path, which only has estimates.
+    exact: Option<(U256, U256)>,
 }
 
 /// Per Comet from a sweep: market and at-risk borrowers' positions.
@@ -291,6 +296,40 @@ impl CompoundV3Adapter {
         )
     }
 
+    /// Exact `(baseAmount, minAmount)` for buying `asset` from Comet `c`: the raw target (the
+    /// borrower's collateral when absorbing, else the storefront reserves) and Comet's integer
+    /// `quoteCollateral` inputs, re-read now; the largest payment whose quote fits the target.
+    async fn exact_buy(
+        &self,
+        c: &Comet,
+        account: AccountRef,
+        asset: Address,
+        absorb: bool,
+    ) -> Result<Option<(U256, U256)>> {
+        let comet = IComet::new(c.address, self.rpc.fast.clone());
+        let target = if absorb {
+            U256::from(
+                comet
+                    .userCollateral(account.account, asset)
+                    .call()
+                    .await?
+                    .balance,
+            )
+        } else {
+            comet.getCollateralReserves(asset).call().await?
+        };
+        let info = comet.getAssetInfoByAddress(asset).call().await?;
+        let params = math::exact::QuoteParams {
+            asset_price: comet.getPrice(info.priceFeed).call().await?,
+            base_price: comet.getPrice(c.base_feed).call().await?,
+            asset_scale: U256::from(info.scale),
+            base_scale: comet.baseScale().call().await?,
+            storefront_factor: comet.storeFrontPriceFactor().call().await?,
+            liquidation_factor: U256::from(info.liquidationFactor),
+        };
+        Ok(params.max_buy(target))
+    }
+
     /// The executor plan for buying `amount` of `asset` (after `absorb` of `account` if set).
     fn build_plan(
         &self,
@@ -304,12 +343,23 @@ impl CompoundV3Adapter {
             asset,
             amount,
             absorb,
+            exact,
         } = buy;
         let q = market.quote(asset, amount)?;
-        if q.base_amount < 1.0 {
-            return None;
-        }
-        let base_amount = U256::from(q.base_amount as u128);
+        // Calldata amounts: exact when the caller re-read raw state; otherwise (predict) the float
+        // quote with its margins, unsimulated and guarded by the executor's profit check.
+        let (base_amount, min_amount) = match exact {
+            Some(x) => x,
+            None => {
+                if q.base_amount < 1.0 {
+                    return None;
+                }
+                (
+                    U256::from((q.base_amount * math::QUOTE_HAIRCUT) as u128),
+                    U256::from((amount * MIN_AMOUNT_FRACTION) as u128),
+                )
+            }
+        };
         let mut calls = Vec::new();
         if absorb {
             calls.push(ProtocolCall {
@@ -328,7 +378,7 @@ impl CompoundV3Adapter {
             target: c.address,
             data: IComet::buyCollateralCall {
                 asset,
-                minAmount: U256::from((amount * MIN_AMOUNT_FRACTION) as u128),
+                minAmount: min_amount,
                 baseAmount: base_amount,
                 recipient: executor,
             }
@@ -753,6 +803,9 @@ impl LiquidationAdapter for CompoundV3Adapter {
             };
             (asset, amount, true)
         };
+        let Some(exact) = self.exact_buy(c, h.account, asset, absorb).await? else {
+            return Ok(None);
+        };
         Ok(self.build_plan(
             c,
             &market,
@@ -761,6 +814,7 @@ impl LiquidationAdapter for CompoundV3Adapter {
                 asset,
                 amount,
                 absorb,
+                exact: Some(exact),
             },
             executor,
         ))
@@ -838,6 +892,7 @@ impl LiquidationAdapter for CompoundV3Adapter {
                         asset,
                         amount,
                         absorb: true,
+                        exact: None,
                     },
                     executor,
                 ));
@@ -912,4 +967,52 @@ mod slippage_floor_tests {
     // The base is priced at QUOTE_HAIRCUT of the quote, so received collateral is about
     // QUOTE_HAIRCUT x amount; the floor must leave room for rounding on both sides.
     const _: () = assert!(MIN_AMOUNT_FRACTION < math::QUOTE_HAIRCUT - 1e-4);
+}
+
+#[cfg(test)]
+mod exact_quote_live {
+    use super::*;
+    use alloy::providers::{Provider, ProviderBuilder};
+
+    /// The integer quote equals Comet's own `quoteCollateral` for every collateral of the Arbitrum
+    /// USDC Comet, at several sizes.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn exact_quote_matches_comet_on_arbitrum() {
+        let p = ProviderBuilder::new()
+            .connect_http("https://arb1.arbitrum.io/rpc".parse().unwrap())
+            .erased();
+        let comet = IComet::new(
+            "0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf"
+                .parse()
+                .unwrap(),
+            p.clone(),
+        );
+        let base_feed = comet.baseTokenPriceFeed().call().await.unwrap();
+        let base_price = comet.getPrice(base_feed).call().await.unwrap();
+        let base_scale = comet.baseScale().call().await.unwrap();
+        let storefront = comet.storeFrontPriceFactor().call().await.unwrap();
+        let n = comet.numAssets().call().await.unwrap();
+        for i in 0..n {
+            let info = comet.getAssetInfo(i).call().await.unwrap();
+            let params = math::exact::QuoteParams {
+                asset_price: comet.getPrice(info.priceFeed).call().await.unwrap(),
+                base_price,
+                asset_scale: U256::from(info.scale),
+                base_scale,
+                storefront_factor: storefront,
+                liquidation_factor: U256::from(info.liquidationFactor),
+            };
+            for base in [1u64, 999_999, 123_456_789, 50_000_000_000] {
+                let b = U256::from(base);
+                let onchain = comet.quoteCollateral(info.asset, b).call().await.unwrap();
+                assert_eq!(
+                    params.quote(b),
+                    Some(onchain),
+                    "asset {} base {base}",
+                    info.asset
+                );
+            }
+        }
+    }
 }
