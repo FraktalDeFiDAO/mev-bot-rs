@@ -127,7 +127,12 @@ impl Engine {
         hub.auctions.retain(|_, (t, _)| t.elapsed() < AUCTION_TTL);
         let hint = a.hints.as_ref().map(|h| {
             let answer: f64 = h.median_price.to_string().parse().unwrap_or(0.0);
-            (h.aggregator, answer, hub.watched.contains(&h.aggregator))
+            (
+                h.aggregator,
+                answer,
+                hub.watched.contains(&h.aggregator),
+                h.median_price,
+            )
         });
         self.metrics.event(
             "atlas_auction",
@@ -137,12 +142,13 @@ impl Engine {
                 "deadline": a.deadline.to_string(), "control": a.control,
             }),
         );
-        if let Some((feed, answer, true)) = hint
+        if let Some((feed, answer, true, answer_exact)) = hint
             && answer > 0.0
         {
             let _ = hub.hint_tx.send(OracleHint {
                 feed,
                 answer,
+                answer_exact,
                 auction_id: a.id.clone(),
                 received: Instant::now(),
             });
