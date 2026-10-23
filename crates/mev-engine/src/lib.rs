@@ -944,7 +944,9 @@ impl Engine {
                     held = held.len(),
                     "price feeds held back by SVR (no instant backruns on them)"
                 );
-                let runner = runner.with_held_feeds(held);
+                let runner = runner
+                    .with_held_feeds(held)
+                    .with_watchlist(data_dir.join("liq-watchlist.json"));
                 let runner = match hint_rx.take() {
                     Some(rx) => runner.with_hints(rx),
                     None => runner,
