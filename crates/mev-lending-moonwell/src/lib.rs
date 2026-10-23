@@ -565,11 +565,19 @@ impl LiquidationAdapter for MoonwellAdapter {
     }
 
     /// Collateral is pooled across markets, so there is no single liquidation price; the
-    /// watchlist uses the uniform price drop instead.
+    /// watchlist uses the uniform price drop instead. The liquidator seizes `repay × incentive`
+    /// and the protocol keeps its seize share of that (`seizeInternal`): the bonus rate is
+    /// `incentive × (1 − share) − 1` (3% share on every Base market, 2026-10-23: 6.7%, not 10%).
+    /// With differing shares the largest is used, so the rate is a lower bound.
     fn watch_detail(&self, h: &Health) -> WatchDetail {
+        let share = self
+            .markets
+            .iter()
+            .map(|m| f64::from(m.protocol_seize_share) / MANTISSA)
+            .fold(0.0, f64::max);
         WatchDetail {
             max_repay_usd: Some(h.debt_usd * f64::from(self.close_factor) / MANTISSA),
-            bonus_rate: Some(f64::from(self.incentive) / MANTISSA - 1.0),
+            bonus_rate: Some(f64::from(self.incentive) / MANTISSA * (1.0 - share) - 1.0),
             ..WatchDetail::default()
         }
     }
