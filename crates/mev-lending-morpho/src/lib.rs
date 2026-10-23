@@ -51,7 +51,46 @@ sol! {
     #[sol(rpc)]
     interface IMorphoOracle {
         function price() external view returns (uint256);
+        function SCALE_FACTOR() external view returns (uint256);
+        function BASE_VAULT() external view returns (address);
+        function QUOTE_VAULT() external view returns (address);
     }
+}
+
+/// A `MorphoChainlinkOracleV2` whose price can be recomputed exactly from Chainlink answers:
+/// no ERC-4626 vaults (their conversion moves every block) and only plain Chainlink proxies
+/// (`aggregator()` set; the proxy answer is the aggregator's). `price()` is
+/// `SCALE_FACTOR.mulDiv(base1 × base2, quote1 × quote2)` over these aggregators' answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExactOracle {
+    scale: U256,
+    base: Vec<Address>,
+    quote: Vec<Address>,
+}
+
+impl ExactOracle {
+    fn price(&self, answers: &HashMap<Address, U256>) -> Option<U256> {
+        let prod = |aggs: &[Address]| {
+            aggs.iter()
+                .try_fold(U256::from(1u8), |acc, a| acc.checked_mul(*answers.get(a)?))
+        };
+        let (num, den) = (prod(&self.base)?, prod(&self.quote)?);
+        if den.is_zero() {
+            return None;
+        }
+        Some(self.scale.checked_mul(num)? / den)
+    }
+}
+
+/// An at-risk position kept for prediction: estimates (raw units as f64) for the float path and
+/// the exact collateral and borrow shares for the exact one.
+#[derive(Debug, Clone, Copy)]
+struct SnapPos {
+    account: AccountRef,
+    collateral: f64,
+    borrowed: f64,
+    collateral_raw: U256,
+    borrow_shares: U256,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -89,6 +128,8 @@ pub struct MorphoAdapter {
     /// price is base1·base2 / (quote1·quote2), so a base feed moves it by ratio^+1 and a quote feed
     /// by ratio^-1. Markets with other oracle types are not predicted.
     feed_signs: HashMap<Address, Vec<(u64, f64)>>,
+    /// Oracles (by address) whose price can be recomputed exactly from Chainlink answers.
+    exact_oracles: HashMap<Address, ExactOracle>,
     /// Backrun prediction state, refreshed by sweeps and moved by each predicted update.
     snapshot: Mutex<Snapshot>,
     /// Markets (short ids) whose state could not be read on the last sweep (oracle reverts, loan
@@ -105,20 +146,23 @@ pub struct MorphoAdapter {
 /// Re-resolve price feeds at most this often while indexing finds new markets.
 const FEED_REFRESH: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// Feed index (aggregator -> market short ids) and prediction signs.
+/// Feed index (aggregator -> market short ids), prediction signs, exactly predictable oracles.
 type Feeds = (
     HashMap<Address, HashSet<u64>>,
     HashMap<Address, Vec<(u64, f64)>>,
+    HashMap<Address, ExactOracle>,
 );
 
 #[derive(Default)]
 struct Snapshot {
     /// Market short id -> (id, state).
     markets: HashMap<u64, (B256, MarketState)>,
-    /// At-risk positions: (account, collateral raw, borrowed raw).
-    positions: Vec<(AccountRef, f64, f64)>,
+    /// At-risk positions.
+    positions: Vec<SnapPos>,
     /// Aggregator -> last known answer.
     answers: HashMap<Address, f64>,
+    /// Aggregator -> last known answer, exact (aggregators of `exact_oracles`).
+    answers_exact: HashMap<Address, U256>,
 }
 
 /// Sweeps keep positions below this health factor for prediction.
@@ -151,23 +195,26 @@ impl MorphoAdapter {
             decimals: Mutex::new(HashMap::new()),
             feeds: HashMap::new(),
             feed_signs: HashMap::new(),
+            exact_oracles: HashMap::new(),
             snapshot: Mutex::new(Snapshot::default()),
             unpriced: Mutex::new(HashSet::new()),
             feeds_markets: 0,
             feeds_at: None,
         };
         let ids: Vec<B256> = me.market_ids();
-        let (feeds, feed_signs) = me.resolve_feeds(&ids).await?;
+        let (feeds, feed_signs, exact_oracles) = me.resolve_feeds(&ids).await?;
         info!(
             protocol = ID,
             markets = ids.len(),
             borrowers_cached = me.index.len(),
             predictable_feeds = feed_signs.len(),
+            exact_oracles = exact_oracles.len(),
             "adapter ready"
         );
         Ok(Self {
             feeds,
             feed_signs,
+            exact_oracles,
             feeds_markets: ids.len(),
             feeds_at: Some(std::time::Instant::now()),
             ..me
@@ -202,7 +249,11 @@ impl MorphoAdapter {
             Ok(held) => feed_signs.retain(|a, _| !held.contains(a)),
             Err(e) => warn!(protocol = ID, error = %format!("{e:#}"), "SVR feed check failed"),
         }
-        Ok((feeds, feed_signs))
+        let mut unique: Vec<Address> = oracles.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        let exact = exact_oracles(&self.rpc.fast, &unique).await;
+        Ok((feeds, feed_signs, exact))
     }
 
     /// Track a (market, borrower) learned elsewhere (another indexer, a liquidation feed, tests).
@@ -374,7 +425,7 @@ impl LiquidationAdapter for MorphoAdapter {
         if ids.len() > self.feeds_markets && due {
             self.feeds_at = Some(std::time::Instant::now());
             match self.resolve_feeds(&ids).await {
-                Ok((feeds, signs)) => {
+                Ok((feeds, signs, exact)) => {
                     info!(
                         protocol = ID,
                         markets = ids.len(),
@@ -384,6 +435,7 @@ impl LiquidationAdapter for MorphoAdapter {
                     );
                     self.feeds = feeds;
                     self.feed_signs = signs;
+                    self.exact_oracles = exact;
                     self.feeds_markets = ids.len();
                 }
                 Err(e) => {
@@ -460,7 +512,7 @@ impl LiquidationAdapter for MorphoAdapter {
             })
             .collect();
         let res = multicall(p, &calls, 200).await?;
-        let mut at_risk: Vec<(AccountRef, f64, f64)> = Vec::new();
+        let mut at_risk: Vec<SnapPos> = Vec::new();
         let out: Vec<Health> = pairs
             .iter()
             .zip(res.iter())
@@ -487,7 +539,13 @@ impl LiquidationAdapter for MorphoAdapter {
                 let health_factor =
                     math::health_factor(collateral, borrowed, s.price, self.lltv(id));
                 if !fast && health_factor < SNAPSHOT_HF {
-                    at_risk.push((*a, collateral, borrowed));
+                    at_risk.push(SnapPos {
+                        account: *a,
+                        collateral,
+                        borrowed,
+                        collateral_raw: U256::from(pos.collateral),
+                        borrow_shares: U256::from(pos.borrowShares),
+                    });
                 }
                 Some(Health {
                     account: *a,
@@ -501,6 +559,14 @@ impl LiquidationAdapter for MorphoAdapter {
             // Prediction snapshot (sweep RPC; direct eth_calls for access-controlled aggregators).
             let aggs: Vec<Address> = self.feed_signs.keys().copied().collect();
             let answers = mev_oracle::latest_answers(p, &aggs).await;
+            let mut exact_aggs: Vec<Address> = self
+                .exact_oracles
+                .values()
+                .flat_map(|o| o.base.iter().chain(&o.quote).copied())
+                .collect();
+            exact_aggs.sort_unstable();
+            exact_aggs.dedup();
+            let answers_exact = mev_oracle::latest_answers_exact(p, &exact_aggs).await;
             let markets = states
                 .into_iter()
                 .map(|(id, st)| (short_id(&id), (id, st)))
@@ -509,6 +575,7 @@ impl LiquidationAdapter for MorphoAdapter {
                 markets,
                 positions: at_risk,
                 answers,
+                answers_exact,
             };
         }
         Ok(out)
@@ -613,17 +680,85 @@ impl LiquidationAdapter for MorphoAdapter {
             let lltv = f64::from(pm.lltv) / 1e18;
             let before = s.price;
             s.price *= ratio.powf(*sign);
-            for (acct, collateral, borrowed) in snap.positions.iter().filter(|p| p.0.sub_id == *sid)
-            {
-                let hf_before = math::health_factor(*collateral, *borrowed, before, lltv);
-                let hf_after = math::health_factor(*collateral, *borrowed, s.price, lltv);
+            for sp in snap.positions.iter().filter(|p| p.account.sub_id == *sid) {
+                let hf_before = math::health_factor(sp.collateral, sp.borrowed, before, lltv);
+                let hf_after = math::health_factor(sp.collateral, sp.borrowed, s.price, lltv);
                 if hf_before < PREDICT_HF_MAX || hf_after >= PREDICT_HF_MAX {
                     continue; // already the regular re-poll's job, or still healthy
                 }
-                plans.extend(self.build_plan(*acct, &pm, s, *collateral, *borrowed, None));
+                plans.extend(self.build_plan(sp.account, &pm, s, sp.collateral, sp.borrowed, None));
             }
         }
         plans
+    }
+
+    /// Exact prediction: for each market priced by `feed` through an `ExactOracle`, the new
+    /// oracle price from the exact answers, then each at-risk position's exact health before and
+    /// after and, where the update makes it liquidatable, the exact size. Markets whose oracle
+    /// is not exactly computable get no plan (the post-update polls cover them).
+    fn predict_exact(&self, feed: Address, answer: U256, _executor: Address) -> Option<Vec<Plan>> {
+        let links = self.feed_signs.get(&feed)?;
+        let mut guard = self.snapshot.lock().unwrap();
+        let snap = &mut *guard;
+        snap.answers_exact.insert(feed, answer);
+        let params = self.params.lock().unwrap();
+        let mut plans = Vec::new();
+        for (sid, _) in links {
+            let Some(pm) = snap
+                .markets
+                .get(sid)
+                .and_then(|(id, _)| params.get(id).copied())
+            else {
+                continue;
+            };
+            let Some(price) = self
+                .exact_oracles
+                .get(&pm.oracle)
+                .and_then(|o| o.price(&snap.answers_exact))
+            else {
+                continue;
+            };
+            let Some((_, s)) = snap.markets.get_mut(sid) else {
+                continue;
+            };
+            let before = s.price_raw;
+            s.price_raw = price;
+            s.price = f64::from(price);
+            let s = *s;
+            for sp in snap.positions.iter().filter(|p| p.account.sub_id == *sid) {
+                let Some(borrowed) = math::exact::borrow_assets_up(
+                    sp.borrow_shares,
+                    s.total_borrow_assets_raw,
+                    s.total_borrow_shares_raw,
+                ) else {
+                    continue;
+                };
+                let healthy =
+                    |px| math::exact::is_healthy(sp.collateral_raw, borrowed, px, pm.lltv);
+                if healthy(before) != Some(true) || healthy(price) != Some(false) {
+                    continue; // already the regular re-poll's job, or still healthy
+                }
+                let Some(size) = math::exact::size(
+                    sp.collateral_raw,
+                    sp.borrow_shares,
+                    s.total_borrow_assets_raw,
+                    s.total_borrow_shares_raw,
+                    price,
+                    pm.lltv,
+                ) else {
+                    continue;
+                };
+                plans.extend(self.build_plan(
+                    sp.account,
+                    &pm,
+                    &s,
+                    sp.collateral,
+                    sp.borrowed,
+                    Some(size),
+                ));
+            }
+        }
+        Some(plans)
     }
 
     fn price_feeds(&self) -> Vec<Address> {
@@ -695,7 +830,12 @@ impl MorphoAdapter {
         self.feed_signs.get(&feed).map_or(0, |links| {
             links
                 .iter()
-                .map(|(sid, _)| snap.positions.iter().filter(|p| p.0.sub_id == *sid).count())
+                .map(|(sid, _)| {
+                    snap.positions
+                        .iter()
+                        .filter(|p| p.account.sub_id == *sid)
+                        .count()
+                })
                 .sum()
         })
     }
@@ -771,6 +911,80 @@ impl MorphoAdapter {
             }],
         })
     }
+}
+
+/// The oracles among `oracles` whose price is exactly computable from Chainlink answers (see
+/// `ExactOracle`). Anything unreadable or of another shape is left out (never estimated).
+async fn exact_oracles(p: &DynProvider, oracles: &[Address]) -> HashMap<Address, ExactOracle> {
+    let mut calls = Vec::with_capacity(oracles.len() * 7);
+    for o in oracles {
+        calls.push(call(*o, IMorphoOracle::SCALE_FACTORCall {}));
+        calls.push(call(*o, IMorphoOracle::BASE_VAULTCall {}));
+        calls.push(call(*o, IMorphoOracle::QUOTE_VAULTCall {}));
+        calls.push(call(*o, IPriceSource::BASE_FEED_1Call {}));
+        calls.push(call(*o, IPriceSource::BASE_FEED_2Call {}));
+        calls.push(call(*o, IPriceSource::QUOTE_FEED_1Call {}));
+        calls.push(call(*o, IPriceSource::QUOTE_FEED_2Call {}));
+    }
+    let Ok(res) = multicall(p, &calls, 200).await else {
+        return HashMap::new();
+    };
+    // (oracle, scale, base proxies, quote proxies) for vault-free oracles.
+    let mut shapes: Vec<(Address, U256, Vec<Address>, Vec<Address>)> = Vec::new();
+    for (i, o) in oracles.iter().enumerate() {
+        let r = &res[7 * i..7 * i + 7];
+        let (Some(scale), Some(bv), Some(qv), Some(b1), Some(b2), Some(q1), Some(q2)) = (
+            decode::<IMorphoOracle::SCALE_FACTORCall>(&r[0]),
+            decode::<IMorphoOracle::BASE_VAULTCall>(&r[1]),
+            decode::<IMorphoOracle::QUOTE_VAULTCall>(&r[2]),
+            decode::<IPriceSource::BASE_FEED_1Call>(&r[3]),
+            decode::<IPriceSource::BASE_FEED_2Call>(&r[4]),
+            decode::<IPriceSource::QUOTE_FEED_1Call>(&r[5]),
+            decode::<IPriceSource::QUOTE_FEED_2Call>(&r[6]),
+        ) else {
+            continue;
+        };
+        if !bv.is_zero() || !qv.is_zero() || scale.is_zero() {
+            continue;
+        }
+        let nz = |v: [Address; 2]| v.into_iter().filter(|a| !a.is_zero()).collect::<Vec<_>>();
+        shapes.push((*o, scale, nz([b1, b2]), nz([q1, q2])));
+    }
+    let proxies: Vec<Address> = shapes
+        .iter()
+        .flat_map(|(_, _, b, q)| b.iter().chain(q).copied())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let calls: Vec<_> = proxies
+        .iter()
+        .map(|a| call(*a, IPriceSource::aggregatorCall {}))
+        .collect();
+    let Ok(res) = multicall(p, &calls, 200).await else {
+        return HashMap::new();
+    };
+    let agg: HashMap<Address, Address> = proxies
+        .iter()
+        .zip(&res)
+        .filter_map(|(p, r)| {
+            let a = decode::<IPriceSource::aggregatorCall>(r)?;
+            (!a.is_zero()).then_some((*p, a))
+        })
+        .collect();
+    shapes
+        .into_iter()
+        .filter_map(|(o, scale, b, q)| {
+            let base = b
+                .iter()
+                .map(|p| agg.get(p).copied())
+                .collect::<Option<Vec<_>>>()?;
+            let quote = q
+                .iter()
+                .map(|p| agg.get(p).copied())
+                .collect::<Option<Vec<_>>>()?;
+            Some((o, ExactOracle { scale, base, quote }))
+        })
+        .collect()
 }
 
 /// For each aggregator, the MorphoChainlinkOracleV2 markets it prices and the exponent of its
@@ -892,5 +1106,134 @@ mod decimals_tests {
         let right = loan_usd(1_500_000.0, &market(1.0, 6));
         let wrong = loan_usd(1_500_000.0, &market(1.0, 18));
         assert!((right / wrong - 1e12).abs() / 1e12 < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod exact_oracle_tests {
+    use super::*;
+    use alloy::providers::{Provider, ProviderBuilder};
+
+    #[test]
+    fn exact_price_is_scale_mul_div_of_the_answers() {
+        let (b, q) = (Address::with_last_byte(1), Address::with_last_byte(2));
+        let o = ExactOracle {
+            scale: U256::from(10u64).pow(U256::from(26u8)),
+            base: vec![b],
+            quote: vec![q],
+        };
+        let answers: HashMap<Address, U256> = [
+            (b, U256::from(300_000_000_000u64)),
+            (q, U256::from(100_000_000u64)),
+        ]
+        .into();
+        // 1e26 x 3000e8 / 1e8 = 3e29.
+        assert_eq!(
+            o.price(&answers),
+            Some(U256::from(3u64) * U256::from(10u64).pow(U256::from(29u8)))
+        );
+        assert_eq!(
+            o.price(&HashMap::new()),
+            None,
+            "missing answer: no price, never a guess"
+        );
+    }
+
+    /// For the 20 most-borrowed Base markets: every oracle `exact_oracles` accepts reproduces
+    /// the on-chain `price()` exactly from its aggregators' answers, at one pinned block.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn exact_oracles_reproduce_base_morpho_prices() {
+        let p = ProviderBuilder::new()
+            .connect_http("https://base.gateway.tenderly.co".parse().unwrap())
+            .erased();
+        let morpho = IMorpho::new(
+            "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb"
+                .parse()
+                .unwrap(),
+            p.clone(),
+        );
+        let ids = [
+            "0x9103c3b4e834476c9a62ea009ba2c884ee42e94e6e314a26f04d312434191836", // market id
+            "0xd4a903dc6d949519060c7707f9604fdc9772c046e05c2e3a8fce0bd7196e4109", // market id
+            "0x8793cf302b8ffd655ab97bd1c695dbd967807e8367a65cb2f4edaf1380ba1bda", // market id
+            "0x0ca10126f6c94cbd9cf0a48cc9516ae5e3dec5aa68303e6d988ee37c5149bf0d", // market id
+            "0x7dc02ff6c536b1d49d7fba770438d79f5bd1f1c78884629b7d1aaee19675782b", // market id
+            "0x09276541cfecb6920a80679a1deced4dde3ae64bf5fc2c9c1f9c21e0c152e1a5", // market id
+            "0x73527ddd796e6d4f48387adaae36f6f3d49d606d7f2a15eb0c931416a58875d8", // market id
+            "0xd7520ad198b497b6eb75bc690268f4597630dbc12e305e9d4105843bab36e41d", // market id
+            "0x9125d0fa03c3137166df68bcc72283477830de2a4a5536512374c573ad4583c3", // market id
+            "0xe458a501c1103ca3b256f2bcb45d223263fb34b6349d82675494ce3a94ce1327", // market id
+            "0x76629002c9fdb20fb2092053a4f22c5c65e04a81887218b9546f2a2d82b4c0a8", // market id
+            "0x78d11c03944e0dc298398f0545dc8195ad201a18b0388cb8058b1bcb89440971", // market id
+            "0x84662b4f95b85d6b082b68d32cf71bb565b3f22f216a65509cc2ede7dccdfe8c", // market id
+            "0x3b3769cfca57be2eaed03fcc5299c25691b77781a1e124e7a8d520eb9a7eabb5", // market id
+            "0x13c42741a359ac4a8aa8287d2be109dcf28344484f91185f9a79bd5a805a55ae", // market id
+            "0xdaa04f6819210b11fe4e3b65300c725c32e55755e3598671559b9ae3bac453d7", // market id
+            "0x67ebd84b2fb39e3bc5a13d97e4c07abe1ea617e40654826e9abce252e95f049e", // market id
+            "0x3a4048c64ba1b375330d376b1ce40e4047d03b47ab4d48af484edec9fec801ba", // market id
+            "0x54cf9be57fdfa6457a660991907434ff9d295c465a603a50126ff647d50b7354", // market id
+            "0x1c21c59df9db44bf6f645d854ee710a8ca17b479451447e9f56758aee10a2fad", // market id
+        ];
+        let mut oracles = Vec::new();
+        for id in ids {
+            let m = morpho
+                .idToMarketParams(id.parse().unwrap())
+                .call()
+                .await
+                .unwrap();
+            oracles.push(m.oracle);
+        }
+        oracles.sort_unstable();
+        oracles.dedup();
+        let exact = exact_oracles(&p, &oracles).await;
+        let mut checked = 0;
+        for (addr, o) in &exact {
+            // One Multicall3 request, so the answers and price() come from the same node and block.
+            // Aggregators refuse contract callers; their (public) proxies serve the same answer.
+            let feeds = multicall(
+                &p,
+                &[
+                    call(*addr, IPriceSource::BASE_FEED_1Call {}),
+                    call(*addr, IPriceSource::BASE_FEED_2Call {}),
+                    call(*addr, IPriceSource::QUOTE_FEED_1Call {}),
+                    call(*addr, IPriceSource::QUOTE_FEED_2Call {}),
+                ],
+                200,
+            )
+            .await
+            .unwrap();
+            let proxies: Vec<Address> = [
+                decode::<IPriceSource::BASE_FEED_1Call>(&feeds[0]),
+                decode::<IPriceSource::BASE_FEED_2Call>(&feeds[1]),
+                decode::<IPriceSource::QUOTE_FEED_1Call>(&feeds[2]),
+                decode::<IPriceSource::QUOTE_FEED_2Call>(&feeds[3]),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|a| !a.is_zero())
+            .collect();
+            let mut calls = Vec::new();
+            for px in &proxies {
+                calls.push(call(*px, IPriceSource::aggregatorCall {}));
+                calls.push(call(*px, IPriceSource::latestAnswerCall {}));
+            }
+            calls.push(call(*addr, IMorphoOracle::priceCall {}));
+            let res = multicall(&p, &calls, 200).await.unwrap();
+            let answers: HashMap<Address, U256> = res
+                .chunks(2)
+                .take(proxies.len())
+                .map(|r| {
+                    let a = decode::<IPriceSource::aggregatorCall>(&r[0]).unwrap();
+                    let v = decode::<IPriceSource::latestAnswerCall>(&r[1]).unwrap();
+                    (a, U256::from(v.unsigned_abs()))
+                })
+                .collect();
+            let onchain = decode::<IMorphoOracle::priceCall>(res.last().unwrap()).unwrap();
+            assert_eq!(o.price(&answers), Some(onchain), "oracle {addr}");
+            checked += 1;
+        }
+        println!("exact oracles: {checked} of {}", oracles.len());
+        assert!(checked > 0);
     }
 }

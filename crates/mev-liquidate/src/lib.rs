@@ -604,14 +604,18 @@ impl Runner {
             .fetch_add(1, std::sync::atomic::Ordering::Release);
         let report = mev_oracle::report_answer(st.to, &st.input)
             .filter(|(agg, _)| *agg == feed && !self.held.contains(agg));
+        let exact = mev_oracle::report_answer_exact(st.to, &st.input)
+            .filter(|(agg, _)| *agg == feed && !self.held.contains(agg));
         let mut predicted: Vec<Plan> = Vec::new();
         for i in hits.iter().copied() {
             let Some((_, answer)) = report else { break };
-            predicted.extend(
-                self.slots[i]
-                    .adapter
-                    .predict(feed, answer, self.cfg.executor),
-            );
+            let adapter = &self.slots[i].adapter;
+            // Exact where the adapter can (integer answer, exact oracle and position math);
+            // the float estimate only for adapters without an exact model.
+            match exact.and_then(|(_, a)| adapter.predict_exact(feed, a, self.cfg.executor)) {
+                Some(plans) => predicted.extend(plans),
+                None => predicted.extend(adapter.predict(feed, answer, self.cfg.executor)),
+            }
         }
         predicted.sort_by(|a, b| b.bonus_usd.total_cmp(&a.bonus_usd));
         {

@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use alloy::{
-    primitives::Address,
+    primitives::{Address, U256},
     providers::{DynProvider, Provider},
     rpc::types::TransactionRequest,
     sol_types::SolCall,
@@ -152,6 +152,28 @@ pub async fn latest_answers(p: &DynProvider, aggregators: &[Address]) -> HashMap
         .await
 }
 
+/// `latest_answers` as exact integers; aggregators with a negative or unreadable answer are left
+/// out.
+pub async fn latest_answers_exact(
+    p: &DynProvider,
+    aggregators: &[Address],
+) -> HashMap<Address, U256> {
+    use futures::StreamExt;
+    futures::stream::iter(aggregators.iter().copied())
+        .map(|a| async move {
+            let tx = TransactionRequest::default()
+                .to(a)
+                .input(IPriceSource::latestAnswerCall {}.abi_encode().into());
+            let raw = p.call(tx).await.ok()?;
+            let v = IPriceSource::latestAnswerCall::abi_decode_returns(&raw).ok()?;
+            (!v.is_negative()).then(|| (a, U256::from(v.unsigned_abs())))
+        })
+        .buffer_unordered(8)
+        .filter_map(|x| async move { x })
+        .collect()
+        .await
+}
+
 /// Contracts other than `c` that `c.latestRoundData()` reads (`eth_createAccessList`). Empty if
 /// none or if the endpoint doesn't serve access lists.
 async fn touched(p: &DynProvider, c: Address) -> Vec<Address> {
@@ -206,6 +228,20 @@ mod report {
 /// aggregator stores (verified against `NewTransmission` on Arbitrum ETH/USD). Handles direct
 /// `transmit` calls and `forward(aggregator, transmit(...))` via an operator's forwarder.
 pub fn report_answer(to: Option<Address>, input: &[u8]) -> Option<(Address, f64)> {
+    report_answer_raw(to, input).and_then(|(a, v)| Some((a, v.to_string().parse().ok()?)))
+}
+
+/// `report_answer` as the exact integer the aggregator will store (the median observation).
+/// `None` for a negative median: Morpho's and Aave's oracles reject negative answers.
+pub fn report_answer_exact(to: Option<Address>, input: &[u8]) -> Option<(Address, U256)> {
+    let (a, v) = report_answer_raw(to, input)?;
+    (!v.is_negative()).then(|| (a, U256::from(v.unsigned_abs())))
+}
+
+fn report_answer_raw(
+    to: Option<Address>,
+    input: &[u8],
+) -> Option<(Address, alloy::primitives::aliases::I192)> {
     use alloy::{
         primitives::{B256, aliases::I192},
         sol_types::{SolCall, SolValue},
@@ -227,7 +263,7 @@ pub fn report_answer(to: Option<Address>, input: &[u8]) -> Option<(Address, f64)
     };
     // Observations arrive sorted; the aggregator takes the middle one.
     let median = observations.get(observations.len() / 2)?;
-    Some((aggregator, median.to_string().parse().ok()?))
+    Some((aggregator, *median))
 }
 
 /// Matches transaction targets against watched feed contracts.
