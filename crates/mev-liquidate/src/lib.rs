@@ -129,6 +129,8 @@ pub enum RunnerEvent {
 pub struct OracleHint {
     pub feed: Address,
     pub answer: f64,
+    /// The same answer exactly (the auction's integer median).
+    pub answer_exact: alloy::primitives::U256,
     pub auction_id: String,
     pub received: Instant,
 }
@@ -673,11 +675,12 @@ impl Runner {
                 .fetch_add(1, std::sync::atomic::Ordering::Release);
             let mut predicted: Vec<Plan> = Vec::new();
             for &i in self.feeds.slots_for(h.feed) {
-                predicted.extend(self.slots[i].adapter.predict(
-                    h.feed,
-                    h.answer,
-                    self.cfg.executor,
-                ));
+                let adapter = &self.slots[i].adapter;
+                // Exact where the adapter can; the float estimate only without an exact model.
+                match adapter.predict_exact(h.feed, h.answer_exact, self.cfg.executor) {
+                    Some(plans) => predicted.extend(plans),
+                    None => predicted.extend(adapter.predict(h.feed, h.answer, self.cfg.executor)),
+                }
             }
             predicted.sort_by(|a, b| b.bonus_usd.total_cmp(&a.bonus_usd));
             predicted.truncate(MAX_BACKRUNS_PER_UPDATE);
@@ -1533,6 +1536,7 @@ mod tests {
         let hint = |id: &str| OracleHint {
             feed: agg,
             answer: 269_591_000_000.0,
+            answer_exact: alloy::primitives::U256::from(269_591_000_000u64),
             auction_id: id.into(),
             received: Instant::now(),
         };
