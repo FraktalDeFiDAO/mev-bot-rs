@@ -929,7 +929,7 @@ impl Engine {
             Some((runner, via)) => {
                 liq_watch = runner.targets().into_iter().map(|(_, a)| a).collect();
                 if let Some(exec) = secrets.executor {
-                    check_allowlist(&rpc, exec, &runner.targets()).await;
+                    check_allowlist(&rpc, &cfg.name, exec, &runner.targets()).await;
                 }
                 watched_feeds = runner.watched_feeds();
                 let held = match mev_oracle::held_aggregators(&rpc.http, &watched_feeds).await {
@@ -3512,9 +3512,14 @@ async fn check_executor_v4<P: alloy::providers::Provider>(
     Ok(())
 }
 
-/// Warn about liquidation targets the executor hasn't allowlisted: one line per protocol with the count, one
-/// example of the exact fix, and the full list at debug level (Fluid alone has ~50 vaults).
-async fn check_allowlist(rpc: &Rpc, exec: Address, targets: &[(&'static str, Address)]) {
+/// Warn about liquidation targets the executor hasn't allowlisted: one line per protocol with the count and the
+/// exact command that allowlists all of them on this chain (Fluid alone has ~50 vaults).
+async fn check_allowlist(
+    rpc: &Rpc,
+    chain: &str,
+    exec: Address,
+    targets: &[(&'static str, Address)],
+) {
     let c = ArbExecutor::new(exec, &rpc.http);
     let mut missing: std::collections::BTreeMap<&'static str, Vec<Address>> = Default::default();
     for (protocol, t) in targets {
@@ -3525,14 +3530,13 @@ async fn check_allowlist(rpc: &Rpc, exec: Address, targets: &[(&'static str, Add
         }
     }
     for (protocol, list) in missing {
-        tracing::debug!(protocol, targets = ?list, "not allowlisted");
-        let example = list[0];
+        let addrs: Vec<String> = list.iter().map(|a| a.to_string()).collect();
         warn!(
             protocol,
             not_allowlisted = list.len(),
-            example = %example,
-            fix = format!("cast send {exec} 'setTarget(address,bool)' <target> true --private-key $PRIVATE_KEY --rpc-url $ARBITRUM_HTTP_URL"),
-            "liquidation targets not allowlisted on executor; liquidations on them will revert until they are (scripts/allow-targets.sh)"
+            %exec,
+            fix = format!("scripts/allow-targets.sh --chain {chain} {}", addrs.join(" ")),
+            "liquidation targets not allowlisted on executor; liquidations on them will revert until they are"
         );
     }
 }
