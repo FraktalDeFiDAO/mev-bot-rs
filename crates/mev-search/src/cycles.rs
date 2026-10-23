@@ -129,7 +129,8 @@ impl CycleIndex {
             if rate <= 1.0 {
                 continue;
             }
-            let cap = max_loan.min(pools[0].reserve_of(c.loan) * 0.5);
+            // The whole loan range: profit is concave in the input (see `best_size`).
+            let cap = max_loan;
             let path = [
                 (pools[0], c.legs[0].1),
                 (pools[1], c.legs[1].1),
