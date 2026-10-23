@@ -44,9 +44,13 @@ alloy::sol! {
 pub const ID: ProtocolId = "aave-v3";
 /// getUserAccountData walks every reserve + oracle: keep batches small.
 const ACCOUNT_DATA_CHUNK: usize = 50;
-/// Flash this much more than the user's debt: Aave rounds variable debt up; excess is returned.
+/// Speculative (`predict`) plans only: flash this much more than the user's debt read at the last
+/// sweep (no re-read there). `plan` flashes the exact debt at `LANDING_HORIZON` instead.
 const FLASH_BUFFER_NUM: u64 = 1002;
 const FLASH_BUFFER_DEN: u64 = 1000;
+/// `plan` sizes the flash loan to the debt as it will be this long after the plan is built: the
+/// latest the liquidation is expected to land (the excess is returned to the lender).
+const LANDING_HORIZON_SECS: u64 = 60;
 /// Sweeps fetch reserve bitmaps for accounts below this health factor (the runner's at-risk set).
 const EXPOSURE_HF: f64 = 1.10;
 /// Reserve ids can exceed the live reserve count after reserves are dropped.
@@ -410,6 +414,13 @@ impl AaveV3Adapter {
                 && !exact.is_zero()
             {
                 pos.debt_exact.push((*a, exact));
+                pos.debt_accrual.push(math::DebtAccrual {
+                    asset: *a,
+                    scaled_variable: d.scaledVariableDebt,
+                    stable_principal: d.principalStableDebt,
+                    stable_rate: d.stableBorrowRate,
+                    stable_last_update: d.stableRateLastUpdated.to::<u64>(),
+                });
             }
             if coll > 0.0 && d.usageAsCollateralEnabled {
                 pos.collateral.push((*a, coll));
@@ -455,13 +466,24 @@ impl AaveV3Adapter {
     }
 
     /// Executor plan for liquidating `pos` as sized by `p`.
-    fn build_plan(&self, account: AccountRef, pos: &Position, p: &LiquidationPlan) -> Option<Plan> {
-        let debt_raw = pos
-            .debt_exact
-            .iter()
-            .find(|(a, _)| *a == p.debt)
-            .map(|(_, d)| *d)?;
-        let flash = flash_amount(debt_raw)?;
+    fn build_plan(
+        &self,
+        account: AccountRef,
+        pos: &Position,
+        p: &LiquidationPlan,
+        exact_flash: Option<U256>,
+    ) -> Option<Plan> {
+        let flash = match exact_flash {
+            Some(f) => f,
+            None => {
+                let debt_raw = pos
+                    .debt_exact
+                    .iter()
+                    .find(|(a, _)| *a == p.debt)
+                    .map(|(_, d)| *d)?;
+                flash_amount(debt_raw)?
+            }
+        };
         let data = liquidationCallCall {
             collateralAsset: p.collateral,
             debtAsset: p.debt,
@@ -572,7 +594,34 @@ impl LiquidationAdapter for AaveV3Adapter {
     async fn plan(&self, h: &Health, _executor: Address) -> Result<Option<Plan>> {
         let reserves = self.reserves_info().await?;
         let pos = self.position(h.account.account, h.health_factor).await?;
-        Ok(math::plan(&pos, &reserves).and_then(|p| self.build_plan(h.account, &pos, &p)))
+        let Some(p) = math::plan(&pos, &reserves) else {
+            return Ok(None);
+        };
+        let Some(acc) = pos.debt_accrual.iter().find(|a| a.asset == p.debt).copied() else {
+            return Ok(None);
+        };
+        let r = IAaveDataProvider::new(self.cfg.data_provider, self.rpc.fast.clone())
+            .getReserveData(p.debt)
+            .call()
+            .await?;
+        let reserve = exact::VariableDebtState {
+            rate: r.variableBorrowRate,
+            index: r.variableBorrowIndex,
+            last_update: r.lastUpdateTimestamp.to::<u64>(),
+        };
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs()
+            + LANDING_HORIZON_SECS;
+        let flash = exact::debt_at(
+            acc.scaled_variable,
+            &reserve,
+            acc.stable_principal,
+            acc.stable_rate,
+            acc.stable_last_update,
+            at,
+        );
+        Ok(flash.and_then(|f| self.build_plan(h.account, &pos, &p, Some(f))))
     }
 
     fn predict(&self, feed: Address, answer: f64, _executor: Address) -> Vec<Plan> {
@@ -589,7 +638,7 @@ impl LiquidationAdapter for AaveV3Adapter {
         } = &mut *snap;
         math::predict(reserves, cached, assets, answer / old)
             .into_iter()
-            .filter_map(|(pos, p)| self.build_plan(self.account(pos.user), &pos, &p))
+            .filter_map(|(pos, p)| self.build_plan(self.account(pos.user), &pos, &p, None))
             .collect()
     }
 
@@ -705,5 +754,66 @@ mod flash_amount_tests {
         let want = debt * U256::from(1002u64) / U256::from(1000u64) + U256::from(1u8);
         assert_eq!(flash_amount(debt), Some(want));
         assert_eq!(flash_amount(U256::MAX), None);
+    }
+}
+
+#[cfg(test)]
+mod exact_debt_live {
+    use alloy::{
+        eips::BlockId,
+        primitives::{Address, U256},
+        providers::{Provider, ProviderBuilder},
+    };
+    use mev_bindings::{IAaveDataProvider, IAavePool};
+
+    use crate::exact::VariableDebtState;
+
+    /// The ported interest math equals the pool's own normalized variable debt, at one pinned
+    /// block, for every reserve of Aave V3 Arbitrum with debt.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn normalized_debt_matches_the_pool_on_arbitrum() {
+        let p = ProviderBuilder::new()
+            .connect_http("https://arb1.arbitrum.io/rpc".parse().unwrap())
+            .erased();
+        let pool_addr: Address = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+            .parse()
+            .unwrap();
+        let dp_addr: Address = "0x243Aa95cAC2a25651eda86e80bEe66114413c43b"
+            .parse()
+            .unwrap();
+        let pool = IAavePool::new(pool_addr, p.clone());
+        let dp = IAaveDataProvider::new(dp_addr, p.clone());
+        let block = p.get_block_number().await.unwrap() - 5;
+        let at = BlockId::number(block);
+        let ts = p
+            .get_block_by_number(block.into())
+            .await
+            .unwrap()
+            .unwrap()
+            .header
+            .timestamp;
+        let mut checked = 0;
+        for asset in pool.getReservesList().call().block(at).await.unwrap() {
+            let r = dp.getReserveData(asset).call().block(at).await.unwrap();
+            if r.totalVariableDebt.is_zero() {
+                continue;
+            }
+            let state = VariableDebtState {
+                rate: r.variableBorrowRate,
+                index: r.variableBorrowIndex,
+                last_update: r.lastUpdateTimestamp.to::<u64>(),
+            };
+            let onchain = pool
+                .getReserveNormalizedVariableDebt(asset)
+                .call()
+                .block(at)
+                .await
+                .unwrap();
+            assert_eq!(state.normalized_at(ts), Some(onchain), "reserve {asset}");
+            checked += 1;
+        }
+        assert!(checked > 5, "only {checked} reserves had debt");
+        let _ = U256::ZERO;
     }
 }
