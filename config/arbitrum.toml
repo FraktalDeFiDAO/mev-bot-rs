@@ -56,6 +56,9 @@ at_risk_hf = 1.05
 min_debt_usd = 20.0              # bonus on less won't cover gas
 sweep_secs = 300
 fallback_poll_secs = 30          # sequencer price-feed triggers are the fast path
+# RPC receipt visibility after the sequencer feed, p50 / p90 / max (measure_rpc_visibility_after_feed,
+# arb1.arbitrum.io/rpc, measured from Europe 2026-10-23; re-measure where the bot runs).
+burst_offsets_ms = [854, 1020, 1048]
 route_via = ["WETH", "USDC", "USDT"]
 # revm_shadow = false   # shadow only: also simulate the exact final calldata with REVM and log it vs eth_call (JEV-LIQ-015)
 
