@@ -118,6 +118,13 @@ pub trait LiquidationAdapter: Send + Sync {
         Vec::new()
     }
 
+    /// How long after a price round's timestamp the protocol starts using it. Moonwell's
+    /// Chainlink OEV wrappers keep serving the previous round for `maxRoundDelay` (10 s on Base)
+    /// unless a liquidator pays to unlock it early, so re-polls must land after that.
+    fn feed_unlock_delay(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+
     /// Watchlist details for `health`, a position the last sweep read. Cached state only.
     fn watch_detail(&self, _health: &Health) -> WatchDetail {
         WatchDetail::default()

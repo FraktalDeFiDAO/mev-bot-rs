@@ -3513,6 +3513,7 @@ dependencies = [
  "mev-config",
  "mev-lending",
  "mev-lending-index",
+ "mev-oracle",
  "mev-rpc",
  "tokio",
  "tracing",
