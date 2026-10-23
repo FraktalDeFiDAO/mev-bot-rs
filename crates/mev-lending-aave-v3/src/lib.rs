@@ -624,6 +624,13 @@ impl LiquidationAdapter for AaveV3Adapter {
         Ok(flash.and_then(|f| self.build_plan(h.account, &pos, &p, Some(f))))
     }
 
+    /// No exact model of Aave's oracle sources and health yet: answer that the update is known
+    /// but predicts nothing, so the runner never falls back to the float `predict` for feed
+    /// reports (no estimated sends); the post-update re-polls check the positions instead.
+    fn predict_exact(&self, feed: Address, _answer: U256, _executor: Address) -> Option<Vec<Plan>> {
+        self.feed_assets.contains_key(&feed).then(Vec::new)
+    }
+
     fn predict(&self, feed: Address, answer: f64, _executor: Address) -> Vec<Plan> {
         let Some(assets) = self.feed_assets.get(&feed) else {
             return vec![];
