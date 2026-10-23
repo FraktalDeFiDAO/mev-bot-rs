@@ -13,7 +13,12 @@
 //!   (`liquidateCalculateSeizeTokens`), less the protocol's seize share.
 //!
 //! Prices are Moonwell's own oracle (`getUnderlyingPrice`, scaled 1e(36 − underlying decimals)).
-//! Base has no public sequencer feed, so there are no price-feed triggers: the runner polls.
+//! Its feeds (`getFeed(symbol)`) are mostly Chainlink OEV wrappers: a new round is served only
+//! `maxRoundDelay` (10 s) after its timestamp unless a liquidator pays through
+//! `updatePriceEarlyAndLiquidate` (keeping `liquidatorFeeBps` = 30% of the bonus). Most Moonwell
+//! liquidations (284 of 300, 2026-10-09..23) are plain ones right after that unlock, so the
+//! adapter exposes the aggregators behind every feed (`price_feeds`) and the delay
+//! (`feed_unlock_delay`): the runner re-polls when the unlock lands.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -36,7 +41,7 @@ use mev_lending::{
 };
 use mev_lending_index::{EventIndex, IndexConfig, market_key};
 use mev_rpc::{call, decode, multicall};
-use tracing::info;
+use tracing::{info, warn};
 
 pub const ID: ProtocolId = "moonwell";
 
@@ -67,6 +72,17 @@ sol! {
     #[sol(rpc)]
     interface IOracle {
         function getUnderlyingPrice(address mToken) external view returns (uint256);
+        function getFeed(string symbol) external view returns (address);
+    }
+
+    interface IErc20Symbol {
+        function symbol() external view returns (string);
+    }
+
+    /// Moonwell's ChainlinkOEVWrapper (other feed types revert on these).
+    interface IOevWrapper {
+        function priceFeed() external view returns (address);
+        function maxRoundDelay() external view returns (uint256);
     }
 }
 
@@ -101,6 +117,10 @@ pub struct MoonwellAdapter {
     close_factor: U256,
     incentive: U256,
     index: EventIndex,
+    /// Aggregators behind the oracle's feeds (empty if they could not be resolved).
+    feeds: Vec<Address>,
+    /// Longest `maxRoundDelay` among the OEV-wrapped feeds.
+    unlock_delay: Duration,
 }
 
 impl MoonwellAdapter {
@@ -139,8 +159,17 @@ impl MoonwellAdapter {
             cache_path,
             name: ID,
         });
+        let (feeds, unlock_delay) = match resolve_feeds(&rpc.fast, oracle, &markets).await {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(protocol = ID, error = %format!("{e:#}"), "price feeds not resolved; polling only");
+                (Vec::new(), Duration::ZERO)
+            }
+        };
         info!(
             protocol = ID,
+            feeds = feeds.len(),
+            unlock_delay_s = unlock_delay.as_secs(),
             markets = markets.len(),
             skipped = mtokens.len() - markets.len(),
             close_factor = %close_factor,
@@ -156,6 +185,8 @@ impl MoonwellAdapter {
             close_factor,
             incentive,
             index,
+            feeds,
+            unlock_delay,
         })
     }
 
@@ -185,6 +216,62 @@ impl MoonwellAdapter {
             .filter(|(_, px)| !px.is_zero())
             .collect())
     }
+}
+
+/// The aggregators that receive the price updates behind every market's oracle feed, and the
+/// longest OEV unlock delay among them.
+async fn resolve_feeds(
+    p: &DynProvider,
+    oracle: Address,
+    markets: &[Market],
+) -> Result<(Vec<Address>, Duration)> {
+    let reads: Vec<_> = markets
+        .iter()
+        .map(|m| call(m.underlying, IErc20Symbol::symbolCall {}))
+        .collect();
+    let symbols: Vec<String> = multicall(p, &reads, CHUNK)
+        .await?
+        .iter()
+        .filter_map(decode::<IErc20Symbol::symbolCall>)
+        .collect();
+    let reads: Vec<_> = symbols
+        .iter()
+        .map(|s| call(oracle, IOracle::getFeedCall { symbol: s.clone() }))
+        .collect();
+    let mut wrappers: Vec<Address> = multicall(p, &reads, CHUNK)
+        .await?
+        .iter()
+        .filter_map(decode::<IOracle::getFeedCall>)
+        .filter(|a| !a.is_zero())
+        .collect();
+    wrappers.sort_unstable();
+    wrappers.dedup();
+    let reads: Vec<_> = wrappers
+        .iter()
+        .flat_map(|w| {
+            [
+                call(*w, IOevWrapper::priceFeedCall {}),
+                call(*w, IOevWrapper::maxRoundDelayCall {}),
+            ]
+        })
+        .collect();
+    let res = multicall(p, &reads, CHUNK).await?;
+    let mut delay = 0u64;
+    let sources: Vec<Address> = wrappers
+        .iter()
+        .zip(res.chunks(2))
+        .map(|(w, r)| {
+            if let Some(d) = decode::<IOevWrapper::maxRoundDelayCall>(&r[1]) {
+                delay = delay.max(d.saturating_to::<u64>());
+            }
+            // OEV wrapper: its Chainlink proxy; any other feed type is resolved as it is.
+            decode::<IOevWrapper::priceFeedCall>(&r[0])
+                .filter(|a| !a.is_zero())
+                .unwrap_or(*w)
+        })
+        .collect();
+    let aggs = mev_oracle::resolve_aggregators(p, &sources).await?;
+    Ok((aggs.into_keys().collect(), Duration::from_secs(delay)))
 }
 
 /// USD value of `raw` underlying at an oracle price scaled 1e(36 − decimals).
@@ -439,7 +526,11 @@ impl LiquidationAdapter for MoonwellAdapter {
     }
 
     fn price_feeds(&self) -> Vec<Address> {
-        Vec::new()
+        self.feeds.clone()
+    }
+
+    fn feed_unlock_delay(&self) -> Duration {
+        self.unlock_delay
     }
 
     /// Collateral is pooled across markets, so there is no single liquidation price; the
