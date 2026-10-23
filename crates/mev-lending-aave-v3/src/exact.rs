@@ -29,6 +29,82 @@ pub fn percent_div(value: U256, pct: U256) -> Option<U256> {
         .checked_div(pct)
 }
 
+const RAY: u128 = 1_000_000_000_000_000_000_000_000_000;
+/// `MathUtils.SECONDS_PER_YEAR` (365 days).
+const SECONDS_PER_YEAR: u64 = 365 * 24 * 3600;
+
+/// `WadRayMath.rayMul`: half-up.
+pub fn ray_mul(a: U256, b: U256) -> Option<U256> {
+    a.checked_mul(b)?
+        .checked_add(U256::from(RAY / 2))?
+        .checked_div(U256::from(RAY))
+}
+
+/// `rayMul` rounded up: at least what any `rayMul` rounding gives (for amounts that must cover).
+pub fn ray_mul_up(a: U256, b: U256) -> Option<U256> {
+    Some(a.checked_mul(b)?.div_ceil(U256::from(RAY)))
+}
+
+/// `MathUtils.calculateCompoundedInterest(rate, lastUpdate, now)` (ray), as in aave-v3-origin:
+/// `x = rate·exp / SECONDS_PER_YEAR; RAY + x + rayMul(x, x/2 + rayMul(x, x/6))` (checked against
+/// the Arbitrum pool's `getReserveNormalizedVariableDebt`, 2026-10-23; the older three-term
+/// binomial form was off by ~2e-14).
+pub fn compounded_interest(rate: U256, last_update: u64, now: u64) -> Option<U256> {
+    let exp = U256::from(now.checked_sub(last_update)?);
+    if exp.is_zero() {
+        return Some(U256::from(RAY));
+    }
+    let x = rate.checked_mul(exp)? / U256::from(SECONDS_PER_YEAR);
+    let inner = (x / U256::from(2u8)).checked_add(ray_mul(x, x / U256::from(6u8))?)?;
+    U256::from(RAY)
+        .checked_add(x)?
+        .checked_add(ray_mul(x, inner)?)
+}
+
+/// Variable debt reserve state (`AaveProtocolDataProvider.getReserveData`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VariableDebtState {
+    pub rate: U256,
+    pub index: U256,
+    pub last_update: u64,
+}
+
+impl VariableDebtState {
+    /// `ReserveLogic.getNormalizedDebt` at `now`.
+    pub fn normalized_at(&self, now: u64) -> Option<U256> {
+        if now <= self.last_update {
+            return Some(self.index);
+        }
+        ray_mul(
+            compounded_interest(self.rate, self.last_update, now)?,
+            self.index,
+        )
+    }
+}
+
+/// Debt a position will owe at `at` (unix s): scaled variable debt at the normalized debt then,
+/// plus stable principal compounded at the user's stable rate. Rounded up, so it covers what
+/// `liquidationCall` can pull when it lands by `at`.
+pub fn debt_at(
+    scaled_variable: U256,
+    reserve: &VariableDebtState,
+    stable_principal: U256,
+    stable_rate: U256,
+    stable_last_update: u64,
+    at: u64,
+) -> Option<U256> {
+    let variable = ray_mul_up(scaled_variable, reserve.normalized_at(at)?)?;
+    let stable = if stable_principal.is_zero() {
+        U256::ZERO
+    } else {
+        ray_mul_up(
+            stable_principal,
+            compounded_interest(stable_rate, stable_last_update, at.max(stable_last_update))?,
+        )?
+    };
+    variable.checked_add(stable)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Payout {
     /// Collateral the liquidator receives (after the protocol fee).
@@ -151,5 +227,55 @@ mod tests {
         let mut i = base();
         i.collateral_price = U256::ZERO;
         assert_eq!(available_collateral(&i), None);
+    }
+}
+
+#[cfg(test)]
+mod debt_tests {
+    use super::*;
+
+    #[test]
+    fn debt_at_rounds_up_and_grows_with_time() {
+        let ray = U256::from(RAY);
+        let reserve = VariableDebtState {
+            rate: ray / U256::from(20u8),        // 5% a year
+            index: ray + ray / U256::from(10u8), // 1.1
+            last_update: 1_000,
+        };
+        // No time elapsed: scaled x index, rounded up (1_000_001 x 1.1 = 1_100_001.1 -> ..02).
+        let now = debt_at(
+            U256::from(1_000_001u64),
+            &reserve,
+            U256::ZERO,
+            U256::ZERO,
+            0,
+            1_000,
+        );
+        assert_eq!(now, Some(U256::from(1_100_002u64)));
+        // A year later at 5%: about 1.0513 x (continuous compounding, Aave's expansion).
+        let later = debt_at(
+            U256::from(1_000_000u64),
+            &reserve,
+            U256::ZERO,
+            U256::ZERO,
+            0,
+            1_000 + SECONDS_PER_YEAR,
+        )
+        .unwrap();
+        assert!(
+            later > U256::from(1_156_390u64) && later < U256::from(1_156_400u64),
+            "{later}"
+        );
+        // Stable principal adds its own compounding.
+        let with_stable = debt_at(
+            U256::from(1_000_000u64),
+            &reserve,
+            U256::from(500u64),
+            ray,
+            1_000,
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(with_stable, U256::from(1_100_000u64 + 500));
     }
 }
