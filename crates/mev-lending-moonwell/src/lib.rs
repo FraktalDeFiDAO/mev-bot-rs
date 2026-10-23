@@ -32,7 +32,7 @@ use async_trait::async_trait;
 use mev_config::MoonwellConfig;
 use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
-    ProtocolId,
+    ProtocolId, WatchDetail,
 };
 use mev_lending_index::{EventIndex, IndexConfig, market_key};
 use mev_rpc::{call, decode, multicall};
@@ -440,6 +440,16 @@ impl LiquidationAdapter for MoonwellAdapter {
 
     fn price_feeds(&self) -> Vec<Address> {
         Vec::new()
+    }
+
+    /// Collateral is pooled across markets, so there is no single liquidation price; the
+    /// watchlist uses the uniform price drop instead.
+    fn watch_detail(&self, h: &Health) -> WatchDetail {
+        WatchDetail {
+            max_repay_usd: Some(h.debt_usd * f64::from(self.close_factor) / MANTISSA),
+            bonus_rate: Some(f64::from(self.incentive) / MANTISSA - 1.0),
+            ..WatchDetail::default()
+        }
     }
 
     fn targets(&self) -> Vec<Address> {

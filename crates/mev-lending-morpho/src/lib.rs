@@ -29,7 +29,7 @@ use mev_bindings::{IAaveOracle, IERC20, IPriceSource};
 use mev_config::MorphoConfig;
 use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
-    ProtocolId,
+    ProtocolId, WatchDetail,
 };
 use mev_lending_index::{EventIndex, IndexConfig, topic_address};
 use mev_rpc::{call, decode, multicall};
@@ -627,6 +627,37 @@ impl LiquidationAdapter for MorphoAdapter {
         self.feeds
             .get(&feed)
             .is_none_or(|markets| markets.contains(&account.sub_id))
+    }
+
+    /// One collateral and one loan token per market: the position becomes liquidatable when the
+    /// collateral price falls by its health factor (loan price unchanged), and Morpho lets a
+    /// liquidator repay all of the debt at the market's incentive.
+    fn watch_detail(&self, h: &Health) -> WatchDetail {
+        let snap = self.snapshot.lock().unwrap();
+        let Some((id, st)) = snap.markets.get(&h.account.sub_id) else {
+            return WatchDetail::default();
+        };
+        let Some(pm) = self.params.lock().unwrap().get(id).copied() else {
+            return WatchDetail::default();
+        };
+        let coll_dec = self.decimals.lock().unwrap().get(&pm.collateral).copied();
+        // Oracle price: loan base units per collateral base unit, scaled by 1e36.
+        let price_usd = coll_dec.map(|d| {
+            st.price / math::ORACLE_PRICE_SCALE * 10f64.powi(d as i32)
+                / 10f64.powi(st.loan_decimals as i32)
+                * st.loan_usd
+        });
+        let hf = h.health_factor;
+        WatchDetail {
+            collateral: Some(pm.collateral),
+            debt: Some(pm.loan),
+            collateral_price_usd: price_usd,
+            liquidation_price_usd: price_usd
+                .filter(|_| hf.is_finite() && hf > 0.0)
+                .map(|p| p / hf),
+            max_repay_usd: Some(h.debt_usd),
+            bonus_rate: Some(math::incentive_factor(f64::from(pm.lltv) / 1e18) - 1.0),
+        }
     }
 
     fn targets(&self) -> Vec<Address> {
