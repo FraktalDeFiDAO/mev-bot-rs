@@ -95,6 +95,13 @@ pub struct OracleHint {
 
 struct Slot {
     adapter: Box<dyn LiquidationAdapter>,
+    /// This venue's state version: bumped by every read or price event that can change its
+    /// accounts' health. A plan carries the version of the venue it was computed from
+    /// (invariant 3), so reading one venue never invalidates another venue's plans.
+    revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// False while this venue's last full sweep failed or a read is in flight (invariant 7:
+    /// degraded state blocks this venue's submissions, not unrelated venues').
+    confidence: std::sync::Arc<std::sync::atomic::AtomicBool>,
     reconciled: bool,
     at_risk: HashMap<AccountRef, Health>,
     backfilled: bool,
@@ -122,8 +129,6 @@ const INDEX_BACKOFF_MIN: Duration = Duration::from_secs(15);
 const INDEX_BACKOFF_MAX: Duration = Duration::from_secs(600);
 
 pub struct Runner {
-    revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    confidence: std::sync::Arc<std::sync::atomic::AtomicBool>,
     cfg: RunnerConfig,
     slots: Vec<Slot>,
     feeds: FeedWatcher<usize>,
@@ -169,6 +174,8 @@ impl Runner {
             }
             slots.push(Slot {
                 adapter,
+                revision: Default::default(),
+                confidence: Default::default(),
                 reconciled: false,
                 at_risk: HashMap::new(),
                 backfilled: false,
@@ -189,8 +196,6 @@ impl Runner {
             feeds.contracts().into_iter().collect::<HashSet<_>>(),
         ));
         Self {
-            revision: Default::default(),
-            confidence: Default::default(),
             cfg,
             slots,
             feeds,
@@ -204,30 +209,38 @@ impl Runner {
         }
     }
 
-    fn stamp_plan(&self, mut plan: Plan) -> Plan {
+    /// Tag `plan` with the state version of venue `i`, the one it was computed from.
+    fn stamp_plan(&self, i: usize, mut plan: Plan) -> Plan {
+        let slot = &self.slots[i];
         plan.dependencies.push(mev_types::StateVersion {
-            revision: self.revision.clone(),
-            confidence: self.confidence.clone(),
-            expected: self.revision.load(std::sync::atomic::Ordering::Acquire),
+            revision: slot.revision.clone(),
+            confidence: slot.confidence.clone(),
+            expected: slot.revision.load(std::sync::atomic::Ordering::Acquire),
         });
         plan
     }
 
-    fn invalidate(&mut self, picked: &[usize]) {
-        self.confidence
-            .store(false, std::sync::atomic::Ordering::Release);
-        self.revision
+    /// Supersede venue `i`'s state version: its outstanding plans are dropped.
+    fn bump(&self, i: usize) {
+        self.slots[i]
+            .revision
             .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    fn invalidate(&mut self, picked: &[usize]) {
         for &i in picked {
+            self.slots[i]
+                .confidence
+                .store(false, std::sync::atomic::Ordering::Release);
+            self.bump(i);
             self.slots[i].reconciled = false;
         }
     }
 
-    fn restore_confidence(&self) {
-        self.confidence.store(
-            !self.slots.is_empty() && self.slots.iter().all(|s| s.reconciled),
-            std::sync::atomic::Ordering::Release,
-        );
+    fn restore_confidence(&self, i: usize) {
+        let slot = &self.slots[i];
+        slot.confidence
+            .store(slot.reconciled, std::sync::atomic::Ordering::Release);
     }
 
     /// Take oracle updates announced by SVR auctions as another source of backruns.
@@ -376,15 +389,14 @@ impl Runner {
 
     /// Store a sweep's at-risk accounts; false if it failed.
     fn apply_sweep(&mut self, i: usize, accounts: usize, res: anyhow::Result<Vec<Health>>) -> bool {
-        self.revision
-            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        self.bump(i);
         let res = res.and_then(|hs| {
             anyhow::ensure!(hs.len() == accounts, "incomplete borrower health sweep");
             Ok(hs)
         });
         self.slots[i].reconciled = res.is_ok();
         self.slots[i].sweeps += 1;
-        self.restore_confidence();
+        self.restore_confidence(i);
         let id = self.slots[i].adapter.id();
         match res {
             Ok(hs) => {
@@ -459,7 +471,7 @@ impl Runner {
         }
         // A subset poll cannot restore confidence lost by a failed full sweep.
         self.slots[i].reconciled = previously_reconciled;
-        self.restore_confidence();
+        self.restore_confidence(i);
         for h in hs {
             self.slots[i].at_risk.insert(h.account, h);
             if !h.liquidatable() || !self.worth_watching(&h) {
@@ -473,7 +485,7 @@ impl Runner {
             };
             self.last_plan.insert(h.account, (Instant::now(), cooldown));
             let ev = match self.slots[i].adapter.plan(&h, self.cfg.executor).await {
-                Ok(Some(p)) => RunnerEvent::Plan(self.stamp_plan(p)),
+                Ok(Some(p)) => RunnerEvent::Plan(self.stamp_plan(i, p)),
                 Ok(None) => RunnerEvent::NoPlan(h),
                 Err(e) => {
                     warn!(protocol = self.slots[i].adapter.id(), account = %h.account, error = %format!("{e:#}"), "plan failed");
@@ -493,22 +505,25 @@ impl Runner {
         let Some(feed) = self.feeds.matched_contract(st.to, &st.input) else {
             return;
         };
-        self.revision
-            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        for &i in &hits {
+            self.bump(i);
+        }
         let report = mev_oracle::report_answer(st.to, &st.input)
             .filter(|(agg, _)| *agg == feed && !self.held.contains(agg));
-        let mut predicted: Vec<Plan> = Vec::new();
+        let mut predicted: Vec<(usize, Plan)> = Vec::new();
         for i in hits.iter().copied() {
             let Some((_, answer)) = report else { break };
             predicted.extend(
                 self.slots[i]
                     .adapter
-                    .predict(feed, answer, self.cfg.executor),
+                    .predict(feed, answer, self.cfg.executor)
+                    .into_iter()
+                    .map(|p| (i, p)),
             );
         }
-        predicted.sort_by(|a, b| b.bonus_usd.total_cmp(&a.bonus_usd));
+        predicted.sort_by(|a, b| b.1.bonus_usd.total_cmp(&a.1.bonus_usd));
         {
-            for plan in predicted.into_iter().take(MAX_BACKRUNS_PER_UPDATE) {
+            for (i, plan) in predicted.into_iter().take(MAX_BACKRUNS_PER_UPDATE) {
                 let recent = self
                     .last_backrun
                     .get(&plan.account)
@@ -519,7 +534,7 @@ impl Runner {
                 self.last_backrun.insert(plan.account, Instant::now());
                 let lead = st.received.elapsed();
                 let _ = tx.send(RunnerEvent::Backrun {
-                    plan: self.stamp_plan(plan),
+                    plan: self.stamp_plan(i, plan),
                     lead,
                 });
             }
@@ -552,19 +567,24 @@ impl Runner {
         });
         let key = (h.feed, h.answer.to_bits());
         if !self.hint_plans.contains_key(&key) {
-            self.revision
-                .fetch_add(1, std::sync::atomic::Ordering::Release);
-            let mut predicted: Vec<Plan> = Vec::new();
-            for &i in self.feeds.slots_for(h.feed) {
-                predicted.extend(self.slots[i].adapter.predict(
-                    h.feed,
-                    h.answer,
-                    self.cfg.executor,
-                ));
+            let hit: Vec<usize> = self.feeds.slots_for(h.feed).to_vec();
+            let mut predicted: Vec<(usize, Plan)> = Vec::new();
+            for &i in &hit {
+                self.bump(i);
+                predicted.extend(
+                    self.slots[i]
+                        .adapter
+                        .predict(h.feed, h.answer, self.cfg.executor)
+                        .into_iter()
+                        .map(|p| (i, p)),
+                );
             }
-            predicted.sort_by(|a, b| b.bonus_usd.total_cmp(&a.bonus_usd));
+            predicted.sort_by(|a, b| b.1.bonus_usd.total_cmp(&a.1.bonus_usd));
             predicted.truncate(MAX_BACKRUNS_PER_UPDATE);
-            let predicted = predicted.into_iter().map(|p| self.stamp_plan(p)).collect();
+            let predicted = predicted
+                .into_iter()
+                .map(|(i, p)| self.stamp_plan(i, p))
+                .collect();
             self.hint_plans.insert(key, (Instant::now(), predicted));
         }
         for plan in &self.hint_plans[&key].1 {
@@ -1021,13 +1041,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn one_successful_adapter_cannot_restore_another_failed_adapter() {
+    async fn plans_depend_only_on_their_own_venue_state() {
         use std::sync::atomic::Ordering::Acquire;
         let (_, a) = fake(1.02, AdapterStatus::Live);
         let (_, b) = fake(1.02, AdapterStatus::Live);
         let mut r = Runner::new(cfg(), vec![a, b]);
         r.sweep_all(None).await;
-        assert!(r.confidence.load(Acquire));
+        assert!(r.slots.iter().all(|s| s.confidence.load(Acquire)));
         let h = *r.slots[0].at_risk.values().next().unwrap();
         let p = r.slots[0]
             .adapter
@@ -1035,21 +1055,33 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let proof = r.stamp_plan(p);
+        let proof = r.stamp_plan(0, p);
         assert!(proof.dependencies.iter().all(|d| d.current()));
+
+        // Another venue's reads and failures don't touch venue 0's plan.
         r.invalidate(&[1]);
-        assert!(!proof.dependencies.iter().all(|d| d.current()));
         assert!(!r.apply_sweep(1, 1, Err(anyhow::anyhow!("RPC failure"))));
-        r.sweep_all(Some(&[0])).await;
-        assert!(!r.confidence.load(Acquire));
+        assert!(!r.slots[1].confidence.load(Acquire));
+        assert!(
+            proof.dependencies.iter().all(|d| d.current()),
+            "venue 1's failed sweep cannot stale venue 0's plan"
+        );
+
+        // A failed venue stays degraded until its own full sweep succeeds.
         let (tx, _) = mpsc::unbounded_channel();
         r.poll(1, None, &tx).await;
         assert!(
-            !r.confidence.load(Acquire),
+            !r.slots[1].confidence.load(Acquire),
             "subset poll cannot certify a failed full sweep"
         );
         r.sweep_all(Some(&[1])).await;
-        assert!(r.confidence.load(Acquire));
+        assert!(r.slots[1].confidence.load(Acquire));
+
+        // A read of the plan's own venue supersedes it, and restoring confidence can't revive it.
+        r.invalidate(&[0]);
+        assert!(!proof.dependencies.iter().all(|d| d.current()));
+        r.sweep_all(Some(&[0])).await;
+        assert!(r.slots[0].confidence.load(Acquire));
         assert!(
             !proof.dependencies.iter().all(|d| d.current()),
             "restoring confidence cannot revive an old revision"
