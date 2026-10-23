@@ -824,6 +824,13 @@ impl LiquidationAdapter for CompoundV3Adapter {
         self.feeds.keys().copied().collect()
     }
 
+    /// No exact model of Comet's prices and positions in prediction yet (positions are held as
+    /// floats): answer that the update is known but predicts nothing, so feed reports never use
+    /// the float `predict` (no estimated sends); the post-update re-polls check the positions.
+    fn predict_exact(&self, feed: Address, _answer: U256, _executor: Address) -> Option<Vec<Plan>> {
+        self.feed_assets.contains_key(&feed).then(Vec::new)
+    }
+
     fn predict(&self, feed: Address, answer: f64, executor: Address) -> Vec<Plan> {
         let Some(hit) = self.feed_assets.get(&feed) else {
             return vec![];
