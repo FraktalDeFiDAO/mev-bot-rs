@@ -604,7 +604,6 @@ pub struct ChainConfig {
     /// Most triangular cycles kept in the index (deepest first; thin long-tail cycles rank last).
     #[serde(default = "default_max_cycles")]
     pub max_cycles: usize,
-    pub gas_limit_estimate: u64,
     /// The deployed executor has `executeFlashSwap`: routes starting on a V3-style pool run
     /// without a lender (no fee, no lender-balance cap). Only set after deploying that executor.
     #[serde(default)]

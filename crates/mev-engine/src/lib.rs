@@ -158,13 +158,76 @@ const TRIGGER_CALL_KEEP: Duration = Duration::from_secs(20);
 const HEAL_MIN_GAP: Duration = Duration::from_secs(10);
 /// A route whose simulation reverted is not simulated again for this long (seconds).
 const SIM_BAD_TTL: u64 = 120;
-const BACKRUN_GAS: u64 = 900_000;
+/// Gas limit of an unsimulated liquidation backrun. Until a liquidation of the same protocol has
+/// been simulated (`liq_gas`), its cost is priced at this limit: the most it can cost, not a guess.
 const BACKRUN_GAS_LIMIT: u64 = 2_000_000;
-/// Share of the oracle-price bonus expected to survive swap fees and slippage.
-const BACKRUN_BONUS_HAIRCUT: f64 = 0.7;
 
-/// Share of the flash lender's balance we're willing to borrow.
+/// Risk policy, not an estimate: borrow at most this share of a flash lender's balance.
 const LENDER_SHARE: f64 = 0.5;
+
+/// Unit of Balancer's flash-loan fee percentage (1e18 = 100%).
+const BALANCER_FEE_ONE: u128 = 1_000_000_000_000_000_000;
+/// Unit of Aave V3's `FLASHLOAN_PREMIUM_TOTAL` (basis points).
+const AAVE_PREMIUM_ONE: u128 = 10_000;
+
+alloy::sol! {
+    #[sol(rpc)]
+    interface IAaveFlashPremium {
+        function FLASHLOAN_PREMIUM_TOTAL() external view returns (uint128);
+    }
+    #[sol(rpc)]
+    interface IBalancerVaultFees {
+        function getProtocolFeesCollector() external view returns (address);
+    }
+    #[sol(rpc)]
+    interface IBalancerFeesCollector {
+        function getFlashLoanFeePercentage() external view returns (uint256);
+    }
+}
+
+/// A liquidation that passed the shared checks: its swap route, log context, Aave pool when Aave
+/// funds it, and the route's quoted output (raw debt units, from cached pool states).
+struct Precheck {
+    hops: Vec<mev_types::Hop>,
+    base: serde_json::Value,
+    aave_pool: Option<Address>,
+    out: f64,
+}
+
+/// A flash lender's fee: `num/den` of the amount, rounded the way that lender rounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FlashFee {
+    num: u128,
+    den: u128,
+    /// Balancer V2 `FixedPoint.mulUp` rounds up; Aave V3 `PercentageMath.percentMul` rounds
+    /// half up.
+    half_up: bool,
+}
+
+impl FlashFee {
+    fn on(&self, amount: U256) -> U256 {
+        let (n, d) = (U256::from(self.num), U256::from(self.den));
+        if self.half_up {
+            (amount * n + d / U256::from(2u8)) / d
+        } else {
+            (amount * n).div_ceil(d)
+        }
+    }
+}
+
+/// Flash-loan fees read from the lenders at start-up. `None`: unreadable, and that lender is not
+/// used for unsimulated sends.
+#[derive(Debug, Clone, Copy, Default)]
+struct FlashFees {
+    balancer: Option<FlashFee>,
+    aave: Option<FlashFee>,
+}
+
+/// Debt left after repaying a flash loan of `flash` raw units and its fee from `out` raw units of
+/// swap output (the executor must repay both from it). Raw units, may be negative.
+fn net_after_flash(out: f64, flash: U256, fee: FlashFee) -> f64 {
+    out - f64::from(flash + fee.on(flash))
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -182,6 +245,11 @@ pub struct Engine {
     native: Address,
     usd_decimals: u8,
     max_loan: HashMap<Address, f64>,
+    /// Flash-loan fees read on-chain at start-up.
+    flash_fees: FlashFees,
+    /// Gas of the latest successful liquidation simulation per protocol: what unsimulated
+    /// backruns of that protocol are priced at (`BACKRUN_GAS_LIMIT` until one exists).
+    liq_gas: HashMap<&'static str, u64>,
     /// What the arbitrage search may size up to: `max_loan`, or with flash swaps the risk limit
     /// (a V3-first route borrows from its own first pool). Balancer-funded routes above `max_loan`
     /// are dropped (`fundable`).
@@ -527,6 +595,8 @@ impl Engine {
                 max_loan.insert(*t, cap);
             }
         }
+        let flash_fees = read_flash_fees(&rpc, &cfg).await;
+        info!(balancer = ?flash_fees.balancer, aave = ?flash_fees.aave, "flash-loan fees (numerator, denominator)");
         let search_loan: HashMap<Address, f64> = if cfg.executor_flash_swaps {
             loan_tokens
                 .iter()
@@ -1000,6 +1070,8 @@ impl Engine {
             native,
             usd_decimals,
             max_loan,
+            flash_fees,
+            liq_gas: HashMap::new(),
             search_loan,
             sim,
             revm_liq,
@@ -1610,14 +1682,16 @@ impl Engine {
     /// Swap route for seized collateral. If none is known, look the token's pools up once (per
     /// hour) through the DEX factories: markets found after startup (Morpho grows its index
     /// continuously) otherwise never get routes. New pools are refreshed by the periodic resync.
-    async fn route(&mut self, plan: &Plan, via: &[Address]) -> Option<Vec<mev_types::Hop>> {
+    /// Route for selling the seized collateral, and its quoted output in raw debt units (from the
+    /// cached pool states).
+    async fn route(&mut self, plan: &Plan, via: &[Address]) -> Option<(Vec<mev_types::Hop>, f64)> {
         let (col, debt, amt) = (
             plan.collateral_asset,
             plan.debt_asset,
             plan.expected_collateral,
         );
-        if let Some((h, _)) = best_route(&self.store, col, debt, amt, via) {
-            return Some(h);
+        if let Some(found) = best_route(&self.store, col, debt, amt, via) {
+            return Some(found);
         }
         if self
             .route_lookups
@@ -1648,7 +1722,7 @@ impl Engine {
                 warn!(token = %col, error = %format!("{e:#}"), "on-demand route discovery failed")
             }
         }
-        best_route(&self.store, col, debt, amt, via).map(|(h, _)| h)
+        best_route(&self.store, col, debt, amt, via)
     }
 
     /// A recent integer fee quote. Missing or stale quotes prevent admission.
@@ -1965,6 +2039,28 @@ impl Engine {
     }
 
     /// The Aave pool to flash-borrow from when the executor supports `liquidateViaAave`.
+    /// What an unsimulated liquidation would keep, in USD: the quoted swap output of the seized
+    /// collateral minus the flash loan and its fee (read on-chain), at the debt token's price.
+    /// `None` when the funding lender's fee is unknown: then nothing unsimulated is sent.
+    fn quoted_gross_usd(&self, plan: &Plan, pc: &Precheck, debt_px: f64) -> Option<f64> {
+        let fee = if pc.aave_pool.is_some() {
+            self.flash_fees.aave?
+        } else {
+            self.flash_fees.balancer?
+        };
+        Some(net_after_flash(pc.out, plan.flash_amount, fee) * debt_px)
+    }
+
+    /// Gas to price an unsimulated liquidation of `protocol` at: its latest simulated gas, or the
+    /// gas limit (the most it can cost) before one exists.
+    fn backrun_gas(&self, protocol: &str) -> u64 {
+        self.liq_gas
+            .get(protocol)
+            .copied()
+            .unwrap_or(BACKRUN_GAS_LIMIT)
+            .min(BACKRUN_GAS_LIMIT)
+    }
+
     fn aave_flash_pool(&self) -> Option<Address> {
         self.cfg
             .executor_aave_flash
@@ -2863,10 +2959,7 @@ impl Engine {
     /// capacity. Logs the reason and returns None when the plan can't be sent.
     /// Also picks the funding: Balancer within its cap, otherwise the Aave pool (`Some(pool)`)
     /// when the executor supports it.
-    async fn liq_precheck(
-        &mut self,
-        plan: &Plan,
-    ) -> Option<(Vec<mev_types::Hop>, serde_json::Value, Option<Address>)> {
+    async fn liq_precheck(&mut self, plan: &Plan) -> Option<Precheck> {
         if self.mode == Mode::Live
             && (plan.dependencies.is_empty() || plan.dependencies.iter().any(|v| !v.current()))
         {
@@ -2887,11 +2980,11 @@ impl Engine {
             self.metrics.event("liq_implausible", base);
             return None;
         }
-        let hops = if plan.collateral_asset == plan.debt_asset {
-            vec![]
+        let (hops, out) = if plan.collateral_asset == plan.debt_asset {
+            (vec![], plan.expected_collateral)
         } else {
             match self.route(plan, &via).await {
-                Some(h) => h,
+                Some(found) => found,
                 None => {
                     self.metrics.event("liq_no_route", base);
                     return None;
@@ -2903,11 +2996,21 @@ impl Engine {
             .get(&plan.debt_asset)
             .is_some_and(|cap| f64::from(plan.flash_amount) <= *cap);
         if fits_balancer {
-            return Some((hops, base, None));
+            return Some(Precheck {
+                hops,
+                base,
+                aave_pool: None,
+                out,
+            });
         }
         // Too large for Balancer (or not held there): Aave's own pool lends its reserves deeply.
         if let Some(pool) = self.aave_flash_pool() {
-            return Some((hops, base, Some(pool)));
+            return Some(Precheck {
+                hops,
+                base,
+                aave_pool: Some(pool),
+                out,
+            });
         }
         let why = if self.max_loan.contains_key(&plan.debt_asset) {
             "liq_too_large"
@@ -2928,21 +3031,32 @@ impl Engine {
         tx_done: &mpsc::UnboundedSender<TxDone>,
     ) {
         self.metrics.update(|c| c.liq_planned += 1);
-        let Some((hops, base, aave_pool)) = self.liq_precheck(&plan).await else {
+        let Some(pc) = self.liq_precheck(&plan).await else {
             return;
         };
-        let Some(_debt_px) = self.price(plan.debt_asset) else {
-            return self.metrics.event("liq_no_price", base);
+        let Some(debt_px) = self.price(plan.debt_asset) else {
+            return self.metrics.event("liq_no_price", pc.base);
         };
         let native_px = self.price(self.native).unwrap_or(0.0);
         let Some(gas_price) = self.gas_price() else {
             return self.metrics.event("fee_quote_unavailable", json!({}));
         };
-        let gas_usd = BACKRUN_GAS as f64 * gas_price as f64 * native_px;
-        // Unsimulated: discount the oracle-price bonus for swap fees and slippage.
-        let net_usd = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT - gas_usd;
+        // Unsimulated: what the route quote leaves after repaying the flash loan and its fee.
+        let Some(gross) = self.quoted_gross_usd(&plan, &pc, debt_px) else {
+            return self.metrics.event("liq_flash_fee_unknown", pc.base);
+        };
+        let backrun_gas = self.backrun_gas(plan.protocol);
+        let gas_usd = backrun_gas as f64 * gas_price as f64 * native_px;
+        let net_usd = gross - gas_usd;
+        let Precheck {
+            hops,
+            base,
+            aave_pool,
+            ..
+        } = pc;
         let lead_ms = lead.as_millis() as u64;
-        let ev = json!({ "liq": base, "net_usd": net_usd, "gas_usd": gas_usd, "lead_ms": lead_ms });
+        let ev = json!({ "liq": base, "gross_usd": gross, "net_usd": net_usd, "gas": backrun_gas,
+                         "gas_usd": gas_usd, "lead_ms": lead_ms });
         if net_usd <= 0.0 {
             return self.metrics.event("liq_backrun_unprofitable", ev);
         }
@@ -2950,8 +3064,7 @@ impl Engine {
         self.metrics.event("liq_backrun", ev.clone());
         if !self.sending(false) {
             // Shadow: log the PGA bid this would have placed (nothing is sent).
-            let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
-            if let Some((fees, _)) = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev)
+            if let Some((fees, _)) = self.pga_bid(gross, backrun_gas, gas_price, native_px, &ev)
                 && let Some(min_profit) =
                     self.shadow_floor(BACKRUN_GAS_LIMIT, fees, plan.debt_asset)
             {
@@ -2974,7 +3087,6 @@ impl Engine {
                 json!({ "liq": ev, "reason": format!("{block:?}") }),
             );
         }
-        let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
         if self.batch_on() {
             let versions = hops
                 .iter()
@@ -2987,7 +3099,7 @@ impl Engine {
                 build: Box::new(move |mp| {
                     mev_bindings::liquidation_calldata(&plan, &hops, mp, aave_pool)
                 }),
-                gas: BACKRUN_GAS,
+                gas: backrun_gas,
                 gas_limit: BACKRUN_GAS_LIMIT,
                 gross_usd: gross,
                 est_profit_usd: net_usd,
@@ -3001,7 +3113,7 @@ impl Engine {
             };
             return self.enqueue(item, tx_done).await;
         }
-        let Some((fees, _tip_usd)) = self.pga_bid(gross, BACKRUN_GAS, gas_price, native_px, &ev)
+        let Some((fees, _tip_usd)) = self.pga_bid(gross, backrun_gas, gas_price, native_px, &ev)
         else {
             return;
         };
@@ -3063,7 +3175,13 @@ impl Engine {
             return;
         }
         self.metrics.update(|c| c.liq_planned += 1);
-        let Some((hops, base, aave_pool)) = self.liq_precheck(&plan).await else {
+        let Some(Precheck {
+            hops,
+            base,
+            aave_pool,
+            ..
+        }) = self.liq_precheck(&plan).await
+        else {
             return;
         };
         let Some(sim) = &self.sim else {
@@ -3091,6 +3209,7 @@ impl Engine {
         };
         let gas_usd = gas as f64 * gas_price as f64 * native_px;
         let net_usd = profit_usd - gas_usd;
+        self.liq_gas.insert(plan.protocol, gas);
         self.metrics.update(|c| c.liq_profitable += 1);
         self.metrics.event(
             "liq_sim_ok",
@@ -3459,6 +3578,43 @@ async fn build_liquidation(
     Ok(Some((Runner::new(rcfg, adapters), via)))
 }
 
+/// Read both flash lenders' fees. Balancer V2: the protocol fees collector's flash-loan fee
+/// (1e18 = 100%, governance-set). Aave V3: `FLASHLOAN_PREMIUM_TOTAL` (bps).
+async fn read_flash_fees(rpc: &Rpc, cfg: &ChainConfig) -> FlashFees {
+    let vault = IBalancerVaultFees::new(cfg.balancer_vault, rpc.http.clone());
+    let balancer = match vault.getProtocolFeesCollector().call().await {
+        Ok(c) => IBalancerFeesCollector::new(c, rpc.http.clone())
+            .getFlashLoanFeePercentage()
+            .call()
+            .await
+            .ok()
+            .map(|f| FlashFee {
+                num: f.saturating_to::<u128>(),
+                den: BALANCER_FEE_ONE,
+                half_up: false,
+            }),
+        Err(_) => None,
+    };
+    let aave_pool = cfg
+        .executor_aave_flash
+        .then(|| cfg.aave.as_ref().map(|a| a.pool).or(cfg.aave_flash_pool))
+        .flatten();
+    let aave = match aave_pool {
+        Some(pool) => IAaveFlashPremium::new(pool, rpc.http.clone())
+            .FLASHLOAN_PREMIUM_TOTAL()
+            .call()
+            .await
+            .ok()
+            .map(|p| FlashFee {
+                num: p,
+                den: AAVE_PREMIUM_ONE,
+                half_up: true,
+            }),
+        None => None,
+    };
+    FlashFees { balancer, aave }
+}
+
 fn metered(
     url: &str,
     name: &'static str,
@@ -3656,6 +3812,7 @@ fn spawn_fast_feed(
                     .block_number
                     .saturating_sub(mev_sequencer::ARB_ONE_GENESIS_BLOCK),
                 received: f.received,
+                block_timestamp: None,
                 hash: f.hash,
                 to: f.tx.to(),
                 input: f.tx.input().clone(),
@@ -3879,5 +4036,41 @@ mod aave_pin_tests {
         ));
         assert!(aave_pin_allows(Mode::Shadow, Some(&mismatch)));
         assert!(aave_pin_allows(Mode::Shadow, Some(&rpc)));
+    }
+}
+
+#[cfg(test)]
+mod flash_fee_tests {
+    use super::*;
+
+    #[test]
+    fn flash_fees_round_like_each_lender() {
+        // Aave V3 percentMul, 5 bps: (a*5 + 5000) / 10000.
+        let aave = FlashFee {
+            num: 5,
+            den: AAVE_PREMIUM_ONE,
+            half_up: true,
+        };
+        assert_eq!(aave.on(U256::from(1_000_000u64)), U256::from(500u64));
+        assert_eq!(aave.on(U256::from(999u64)), U256::from(0u64)); // 0.4995 rounds down
+        assert_eq!(aave.on(U256::from(1_000u64)), U256::from(1u64)); // 0.5 rounds up
+        // Balancer mulUp: any remainder rounds up; a zero fee costs nothing.
+        let bal = FlashFee {
+            num: 1,
+            den: BALANCER_FEE_ONE,
+            half_up: false,
+        };
+        assert_eq!(bal.on(U256::from(1u64)), U256::from(1u64));
+        let free = FlashFee {
+            num: 0,
+            den: BALANCER_FEE_ONE,
+            half_up: false,
+        };
+        assert_eq!(free.on(U256::from(123_456u64)), U256::ZERO);
+        // Net: 1_000_600 out, 1_000_000 borrowed at 5 bps -> 100 left.
+        assert_eq!(
+            net_after_flash(1_000_600.0, U256::from(1_000_000u64), aave),
+            100.0
+        );
     }
 }

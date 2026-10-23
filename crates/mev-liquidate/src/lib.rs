@@ -37,38 +37,44 @@ const BURST_OFFSETS: [Duration; 3] = [
     Duration::from_millis(1_600),
 ];
 const BURST_TICK: Duration = Duration::from_millis(100);
-/// Pending delayed schedules kept per adapter (oldest dropped first).
+/// Delayed updates kept per adapter (oldest dropped first).
 const MAX_DELAYED: usize = 8;
+/// Base's block time (rollup config; timestamps are genesis + 2 s x block, checked 2026-10-23).
+const BLOCK_TIME_MS: u64 = 2_000;
+/// When the first three flashblocks of a block reach the bot, measured from the block's build
+/// start (its timestamp - BLOCK_TIME): p50 over 150 blocks on mev-ohio, 2026-10-23 (index 1/2/3
+/// arrived 1831/1679/1540 ms before the block timestamp). A `pending` read sees the block once
+/// its first flashblock is in.
+const UNLOCK_POLL_MS: [u64; 3] = [169, 321, 460];
 
-/// Re-poll offsets (from when we see the update) for prices that apply `delay` after the round's
-/// timestamp. We see an update 0.2-2 s after its block's timestamp, so it takes effect
-/// delay-2 s .. delay-0.2 s after we see it: poll across that window and twice after. Health is
-/// read at `pending` on Base, so the first poll inside the unlocked block sees the new price.
-fn delayed_offsets(delay: Duration) -> Vec<Duration> {
-    if delay.is_zero() {
-        return Vec::new();
-    }
-    let d = delay.as_millis() as u64;
-    [2_000u64, 1_400, 800, 200]
+/// When to re-poll for an update in the block with timestamp `block_ts` (unix s) that takes effect
+/// `delay` later: a block with timestamp T is built during [T - 2 s, T), so `pending` reads see a
+/// timestamp >= block_ts + delay from (block_ts + delay - 2 s); poll as that block's first
+/// flashblocks arrive. Past times are due at once.
+fn unlock_polls(block_ts: u64, delay: Duration, now: std::time::SystemTime) -> Vec<Instant> {
+    let now_ms = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let start_ms = (block_ts * 1_000 + delay.as_millis() as u64).saturating_sub(BLOCK_TIME_MS);
+    let base = Instant::now();
+    UNLOCK_POLL_MS
         .iter()
-        .map(|b| Duration::from_millis(d.saturating_sub(*b)))
-        .chain([d + 400, d + 1_200].map(Duration::from_millis))
+        .map(|off| base + Duration::from_millis((start_ms + off).saturating_sub(now_ms)))
         .collect()
 }
 
-/// Advance `slot`'s delayed schedules to `now`; the feeds whose next offset is due.
+/// Remove and return the feeds of `slot`'s delayed re-polls due by `now`.
 fn due_delayed(slot: &mut Slot, now: Instant) -> Vec<Address> {
     let mut due = Vec::new();
-    let n = slot.delayed_offsets.len();
-    for (start, next, feed) in &mut slot.delayed {
-        if now.duration_since(*start) >= slot.delayed_offsets[*next] {
-            *next += 1;
-            if !due.contains(feed) {
-                due.push(*feed);
-            }
+    slot.delayed.retain(|(at, feed)| {
+        if *at > now {
+            return true;
         }
-    }
-    slot.delayed.retain(|(_, next, _)| *next < n);
+        if !due.contains(feed) {
+            due.push(*feed);
+        }
+        false
+    });
     due
 }
 /// Don't re-plan the same account more often than this.
@@ -142,12 +148,11 @@ struct Slot {
     burst: Option<(Instant, usize)>,
     /// Feed contracts updated since the burst started: only accounts they affect are re-polled.
     burst_feeds: Vec<Address>,
-    /// Re-poll offsets around the moment a feed update takes effect, for adapters that apply
-    /// prices late (`feed_unlock_delay`); empty when updates apply at once.
-    delayed_offsets: Vec<Duration>,
-    /// Pending delayed re-poll schedules: (update seen, next offset index, feed). One per update,
-    /// so a later update doesn't cancel an earlier one's unlock.
-    delayed: Vec<(Instant, usize, Address)>,
+    /// How long after its block's timestamp a price update takes effect (`feed_unlock_delay`).
+    unlock_delay: Duration,
+    /// Re-polls due when a delayed update takes effect: (when, feed). One set per update, so a
+    /// later update doesn't cancel an earlier one's unlock.
+    delayed: Vec<(Instant, Address)>,
     /// After an index error, don't retry before this (exponential backoff; rate limits).
     index_retry_at: Option<Instant>,
     index_backoff: Duration,
@@ -218,7 +223,7 @@ impl Runner {
             for f in adapter.price_feeds() {
                 feeds.watch(f, slots.len());
             }
-            let delayed_offsets = delayed_offsets(adapter.feed_unlock_delay());
+            let unlock_delay = adapter.feed_unlock_delay();
             slots.push(Slot {
                 adapter,
                 reconciled: false,
@@ -226,7 +231,7 @@ impl Runner {
                 backfilled: false,
                 burst: None,
                 burst_feeds: Vec::new(),
-                delayed_offsets,
+                unlock_delay,
                 delayed: Vec::new(),
                 index_retry_at: None,
                 index_backoff: INDEX_BACKOFF_MIN,
@@ -635,11 +640,17 @@ impl Runner {
                 slot.burst_feeds.push(feed);
             }
             slot.burst = Some((Instant::now(), 0));
-            if !slot.delayed_offsets.is_empty() {
-                if slot.delayed.len() >= MAX_DELAYED {
-                    slot.delayed.remove(0);
-                }
-                slot.delayed.push((Instant::now(), 0, feed));
+            if let Some(at) = st
+                .block_timestamp
+                .filter(|_| !slot.unlock_delay.is_zero())
+                .map(|ts| unlock_polls(ts, slot.unlock_delay, std::time::SystemTime::now()))
+            {
+                slot.delayed.extend(at.into_iter().map(|t| (t, feed)));
+                let excess = slot
+                    .delayed
+                    .len()
+                    .saturating_sub(MAX_DELAYED * UNLOCK_POLL_MS.len());
+                slot.delayed.drain(..excess);
             }
             debug!(protocol = self.slots[i].adapter.id(), tx = %st.hash, "price-feed update in sequencer feed");
             let _ = tx.send(RunnerEvent::FeedTrigger {
@@ -1352,55 +1363,67 @@ mod tests {
     }
 
     #[test]
-    fn delayed_offsets_straddle_the_unlock() {
-        assert!(delayed_offsets(Duration::ZERO).is_empty());
-        let o = delayed_offsets(Duration::from_secs(10));
-        let ms: Vec<u64> = o.iter().map(|d| d.as_millis() as u64).collect();
-        assert_eq!(ms, vec![8_000, 8_600, 9_200, 9_800, 10_400, 11_200]);
+    fn unlock_polls_follow_the_unlocked_blocks_first_flashblocks() {
+        // Update in the block stamped t=1000 s, 10 s delay: the block stamped 1010 is built from
+        // 1008 s, so pending reads see the new round from then. Seen at 999.5 s: polls at
+        // 1008.169 / .321 / .460 s, i.e. 8669 / 8821 / 8960 ms from now.
+        let now = std::time::UNIX_EPOCH + Duration::from_millis(999_500);
+        let before = Instant::now();
+        let at = unlock_polls(1_000, Duration::from_secs(10), now);
+        let ms: Vec<u128> = at
+            .iter()
+            .map(|t| t.duration_since(before).as_millis())
+            .collect();
+        for (got, want) in ms.iter().zip([8_669u128, 8_821, 8_960]) {
+            assert!(got.abs_diff(want) <= 5, "{got} vs {want}");
+        }
+        // Already unlocked: due at once.
+        let late = std::time::UNIX_EPOCH + Duration::from_secs(2_000);
+        assert!(
+            unlock_polls(1_000, Duration::from_secs(10), late)
+                .iter()
+                .all(|t| t.duration_since(before) < Duration::from_millis(50))
+        );
     }
 
     #[tokio::test]
     async fn delayed_feed_updates_schedule_polls_that_later_updates_do_not_cancel() {
         let (_, a) = fake(1.02, AdapterStatus::Live);
         let mut r = Runner::new(cfg(), vec![a]);
-        assert!(
-            r.slots[0].delayed_offsets.is_empty(),
-            "no delay: nothing scheduled"
-        );
-        r.slots[0].delayed_offsets = delayed_offsets(Duration::from_secs(10));
         let (tx, _rx) = mpsc::unbounded_channel();
         let feed = Address::with_last_byte(0xfe);
+        let now_s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut st = sequenced(Some(feed));
+        st.block_timestamp = Some(now_s);
+        r.on_feed_tx(&st, &tx);
+        assert!(r.slots[0].delayed.is_empty(), "no delay: nothing scheduled");
+
+        r.slots[0].unlock_delay = Duration::from_secs(10);
         r.on_feed_tx(&sequenced(Some(feed)), &tx);
+        assert!(
+            r.slots[0].delayed.is_empty(),
+            "no block timestamp: nothing guessed"
+        );
+        r.on_feed_tx(&st, &tx);
         assert!(r.slots[0].burst.is_some(), "the immediate burst still runs");
-        assert_eq!(r.slots[0].delayed.len(), 1);
-        let first = r.slots[0].delayed[0].0;
+        assert_eq!(r.slots[0].delayed.len(), UNLOCK_POLL_MS.len());
+        r.on_feed_tx(&st, &tx);
+        assert_eq!(r.slots[0].delayed.len(), 2 * UNLOCK_POLL_MS.len());
 
-        // Nothing due before the unlock window; a second update queues its own schedule.
-        assert!(due_delayed(&mut r.slots[0], first + Duration::from_secs(7)).is_empty());
-        r.on_feed_tx(&sequenced(Some(feed)), &tx);
-        assert_eq!(r.slots[0].delayed.len(), 2);
-
-        // Each offset fires once per schedule; finished schedules are dropped.
-        assert_eq!(
-            due_delayed(&mut r.slots[0], first + Duration::from_millis(8_000)),
-            vec![feed]
-        );
-        // The second update (queued just after) reaches its own 8 s poll a moment later.
-        assert_eq!(
-            due_delayed(&mut r.slots[0], first + Duration::from_millis(8_100)),
-            vec![feed]
-        );
-        assert!(due_delayed(&mut r.slots[0], first + Duration::from_millis(8_200)).is_empty());
-        for _ in 0..10 {
-            due_delayed(&mut r.slots[0], first + Duration::from_secs(30));
-        }
+        // Nothing due now; everything due after the unlock, each feed reported once.
+        assert!(due_delayed(&mut r.slots[0], Instant::now()).is_empty());
+        let later = Instant::now() + Duration::from_secs(20);
+        assert_eq!(due_delayed(&mut r.slots[0], later), vec![feed]);
         assert!(r.slots[0].delayed.is_empty());
 
-        // Bounded: a flood of updates keeps only the newest MAX_DELAYED schedules.
+        // Bounded: a flood of updates keeps only the newest MAX_DELAYED updates' polls.
         for _ in 0..(MAX_DELAYED + 3) {
-            r.on_feed_tx(&sequenced(Some(feed)), &tx);
+            r.on_feed_tx(&st, &tx);
         }
-        assert_eq!(r.slots[0].delayed.len(), MAX_DELAYED);
+        assert_eq!(r.slots[0].delayed.len(), MAX_DELAYED * UNLOCK_POLL_MS.len());
     }
 
     #[tokio::test]
@@ -1548,6 +1571,7 @@ mod tests {
         SequencedTx {
             seq: 1,
             received: Instant::now(),
+            block_timestamp: None,
             hash: *env.tx_hash(),
             to,
             input: Default::default(),

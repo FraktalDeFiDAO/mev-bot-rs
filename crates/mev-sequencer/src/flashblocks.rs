@@ -34,8 +34,16 @@ const MAX_MESSAGE: u64 = 8 * 1024 * 1024;
 #[derive(Deserialize)]
 struct Flashblock {
     index: u64,
+    /// Block header fields; only the block's first flashblock (index 0) carries them.
+    #[serde(default)]
+    base: Option<Base>,
     diff: Diff,
     metadata: Metadata,
+}
+
+#[derive(Deserialize)]
+struct Base {
+    timestamp: alloy::primitives::U64,
 }
 
 #[derive(Deserialize)]
@@ -49,11 +57,13 @@ struct Metadata {
     block_number: u64,
 }
 
-/// One parsed flashblock: block number, index within the block, decodable transactions.
+/// One parsed flashblock: block number, index within the block, the block's timestamp (index 0
+/// only), decodable transactions.
 #[derive(Debug)]
 pub struct Parsed {
     pub block: u64,
     pub index: u64,
+    pub timestamp: Option<u64>,
     pub txs: Vec<TxEnvelope>,
 }
 
@@ -79,6 +89,7 @@ pub fn parse_flashblock(raw: &[u8]) -> Result<Parsed> {
     Ok(Parsed {
         block: fb.metadata.block_number,
         index: fb.index,
+        timestamp: fb.base.map(|b| b.timestamp.to::<u64>()),
         txs,
     })
 }
@@ -128,6 +139,8 @@ async fn stream_once(
             .context("flashblocks connect")?;
     info!(url, "flashblocks feed connected");
     let mut last_seq: Option<u64> = None;
+    // (block, timestamp) from the current block's first flashblock.
+    let mut block_ts: Option<(u64, u64)> = None;
     loop {
         let frame = tokio::time::timeout(FEED_IDLE_TIMEOUT, ws.next())
             .await
@@ -168,10 +181,15 @@ async fn stream_once(
         }
         last_seq = Some(seq);
         stats.messages.fetch_add(1, Relaxed);
+        if let Some(ts) = p.timestamp {
+            block_ts = Some((p.block, ts));
+        }
+        let block_timestamp = block_ts.filter(|(b, _)| *b == p.block).map(|(_, ts)| ts);
         for t in p.txs {
             let st = SequencedTx {
                 seq,
                 received,
+                block_timestamp,
                 hash: *t.tx_hash(),
                 to: t.to(),
                 input: t.input().clone(),
@@ -187,6 +205,29 @@ async fn stream_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Base's live feed: the first flashblock of a block carries its timestamp, and Base's
+    /// timestamps are genesis (1686789347) + 2 s x block number.
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn live_first_flashblock_carries_the_block_timestamp() {
+        let (mut ws, _) = tokio_tungstenite::connect_async("wss://mainnet.flashblocks.base.org/ws")
+            .await
+            .unwrap();
+        loop {
+            let raw = match ws.next().await.unwrap().unwrap() {
+                Message::Binary(b) => b.to_vec(),
+                Message::Text(t) => t.as_bytes().to_vec(),
+                _ => continue,
+            };
+            let p = parse_flashblock(&raw).unwrap();
+            if p.index == 0 {
+                assert_eq!(p.timestamp, Some(1_686_789_347 + 2 * p.block));
+                return;
+            }
+            assert_eq!(p.timestamp, None, "only index 0 carries the header");
+        }
+    }
 
     #[test]
     fn a_recorded_base_flashblock_decodes() {
