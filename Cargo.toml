@@ -104,9 +104,15 @@ codegen-units = 1
 panic = "abort"
 
 # The exact swap math runs millions of 256/512-bit operations in the test matrices; optimise just the
-# integer library and the swap models in debug builds so `cargo test` stays fast.
+# integer library, the swap models and the route search in debug builds so `cargo test` stays fast.
 [profile.dev.package.ruint]
 opt-level = 3
 
 [profile.dev.package.mev-dex]
+opt-level = 3
+
+[profile.dev.package.mev-search]
+opt-level = 3
+
+[profile.dev.package.mev-state]
 opt-level = 3
