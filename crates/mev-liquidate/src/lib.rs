@@ -141,10 +141,16 @@ pub struct OracleHint {
 
 struct Slot {
     adapter: Box<dyn LiquidationAdapter>,
-    /// This venue's state version: bumped by every read or price event that can change its
-    /// accounts' health. A plan carries the version of the venue it was computed from
-    /// (invariant 3), so reading one venue never invalidates another venue's plans.
-    revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// State versions a plan is computed from (invariant 3), per account: bumped when a read
+    /// returns a different health for it, or it leaves the at-risk set. A whole-venue counter
+    /// (bumped by every poll and every one of 358 Base feeds) dropped 1,655 of 1,721 plans as
+    /// stale on 2026-10-24, the same accounts first in line each round.
+    account_rev: HashMap<AccountRef, Rev>,
+    /// Per watched price feed: bumped by each update seen (feed transaction, auction hint). A
+    /// plan depends on every feed that `affected` says can move its account.
+    feed_rev: HashMap<Address, Rev>,
+    /// This venue's price feeds (bounded by the adapter's markets).
+    feed_list: Vec<Address>,
     /// False while this venue's last full sweep failed or a read is in flight (invariant 7:
     /// degraded state blocks this venue's submissions, not unrelated venues').
     confidence: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -231,7 +237,8 @@ impl Runner {
                 info!(protocol = adapter.id(), status = ?adapter.status(), "liquidation adapter not live; skipping");
                 continue;
             }
-            for f in adapter.price_feeds() {
+            let feed_list = adapter.price_feeds();
+            for &f in &feed_list {
                 feeds.watch(f, slots.len());
             }
             for m in adapter.cash_markets() {
@@ -240,7 +247,9 @@ impl Runner {
             let unlock_delay = adapter.feed_unlock_delay();
             slots.push(Slot {
                 adapter,
-                revision: Default::default(),
+                account_rev: HashMap::new(),
+                feed_rev: HashMap::new(),
+                feed_list,
                 confidence: Default::default(),
                 reconciled: false,
                 at_risk: HashMap::new(),
@@ -279,31 +288,53 @@ impl Runner {
         }
     }
 
-    /// Tag `plan` with the state version of venue `i`, the one it was computed from.
-    fn stamp_plan(&self, i: usize, mut plan: Plan) -> Plan {
-        let slot = &self.slots[i];
-        plan.dependencies.push(mev_types::StateVersion {
-            revision: slot.revision.clone(),
+    /// Tag `plan` with the state versions it was computed from: its account's last read and
+    /// every price feed that can move that account, all gated by venue `i`'s confidence.
+    fn stamp_plan(&mut self, i: usize, mut plan: Plan) -> Plan {
+        let slot = &mut self.slots[i];
+        let account = plan.account;
+        let version = |rev: &Rev| mev_types::StateVersion {
+            revision: rev.clone(),
             confidence: slot.confidence.clone(),
-            expected: slot.revision.load(std::sync::atomic::Ordering::Acquire),
-        });
+            expected: rev.load(std::sync::atomic::Ordering::Acquire),
+        };
+        let mut deps = vec![version(slot.account_rev.entry(account).or_default())];
+        for f in &slot.feed_list {
+            if slot.adapter.affected(*f, &account) {
+                deps.push(version(slot.feed_rev.entry(*f).or_default()));
+            }
+        }
+        plan.dependencies.extend(deps);
         plan
     }
 
-    /// Supersede venue `i`'s state version: its outstanding plans are dropped.
-    fn bump(&self, i: usize) {
-        self.slots[i]
-            .revision
-            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    /// Supersede the plans computed from `account`'s state on venue `i`.
+    fn bump_account(&mut self, i: usize, account: &AccountRef) {
+        if let Some(r) = self.slots[i].account_rev.get(account) {
+            r.fetch_add(1, std::sync::atomic::Ordering::Release);
+        }
     }
 
-    fn invalidate(&mut self, picked: &[usize]) {
-        for &i in picked {
-            self.slots[i]
-                .confidence
-                .store(false, std::sync::atomic::Ordering::Release);
-            self.bump(i);
-            self.slots[i].reconciled = false;
+    /// Supersede the plans that depend on `feed`'s price on venue `i`.
+    fn bump_feed(&mut self, i: usize, feed: Address) {
+        if let Some(r) = self.slots[i].feed_rev.get(&feed) {
+            r.fetch_add(1, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// A read of venue `i` failed or came back incomplete: degraded (invariant 7) until its
+    /// next full sweep succeeds.
+    fn degrade(&mut self, i: usize) {
+        self.slots[i].reconciled = false;
+        self.slots[i]
+            .confidence
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Store a read of `h` on venue `i`; a changed health supersedes the account's plans.
+    fn record(&mut self, i: usize, h: Health) {
+        if self.slots[i].at_risk.insert(h.account, h) != Some(h) {
+            self.bump_account(i, &h.account);
         }
     }
 
@@ -356,8 +387,9 @@ impl Runner {
     fn refresh_feeds(&mut self) -> bool {
         let mut feeds = FeedWatcher::default();
         let mut cash = FeedWatcher::default();
-        for (i, s) in self.slots.iter().enumerate() {
-            for f in s.adapter.price_feeds() {
+        for (i, s) in self.slots.iter_mut().enumerate() {
+            s.feed_list = s.adapter.price_feeds();
+            for &f in &s.feed_list {
                 feeds.watch(f, i);
             }
             for m in s.adapter.cash_markets() {
@@ -404,8 +436,8 @@ impl Runner {
         h.debt_usd >= self.cfg.min_debt_usd && h.collateral_usd >= self.cfg.min_debt_usd
     }
 
+    /// Indexing finds accounts; it reads no state, so it supersedes no plan.
     async fn index_all(&mut self) -> bool {
-        self.invalidate(&(0..self.slots.len()).collect::<Vec<_>>());
         let mut all_done = true;
         for s in &mut self.slots {
             if s.index_retry_at.is_some_and(|t| Instant::now() < t) {
@@ -441,8 +473,6 @@ impl Runner {
             Some(w) => w.to_vec(),
             None => (0..self.slots.len()).collect(),
         };
-        // Adapter reads may update their own prediction caches before returning.
-        self.invalidate(&picked);
         let jobs = picked.iter().map(|&i| {
             let s = &self.slots[i];
             let accounts = sweep_set(s);
@@ -497,7 +527,6 @@ impl Runner {
 
     #[cfg(test)]
     async fn sweep(&mut self, i: usize) {
-        self.invalidate(&[i]);
         let accounts = sweep_set(&self.slots[i]);
         let res = self.slots[i].adapter.health(&accounts, false).await;
         self.apply_sweep(i, accounts.len(), res);
@@ -505,7 +534,6 @@ impl Runner {
 
     /// Store a sweep's at-risk accounts; false if it failed.
     fn apply_sweep(&mut self, i: usize, accounts: usize, res: anyhow::Result<Vec<Health>>) -> bool {
-        self.bump(i);
         let res = res.and_then(|hs| {
             anyhow::ensure!(hs.len() == accounts, "incomplete borrower health sweep");
             Ok(hs)
@@ -546,7 +574,24 @@ impl Runner {
                     liquidatable,
                     "sweep"
                 );
-                self.slots[i].at_risk = at_risk;
+                let old = std::mem::replace(&mut self.slots[i].at_risk, at_risk);
+                let changed: Vec<AccountRef> = old
+                    .iter()
+                    .filter(|(a, h)| self.slots[i].at_risk.get(a) != Some(h))
+                    .map(|(a, _)| *a)
+                    .chain(
+                        self.slots[i]
+                            .at_risk
+                            .iter()
+                            .filter(|(a, h)| old.get(a) != Some(h))
+                            .map(|(a, _)| *a),
+                    )
+                    .collect();
+                for a in &changed {
+                    self.bump_account(i, a);
+                }
+                let slot = &mut self.slots[i];
+                slot.account_rev.retain(|a, _| slot.at_risk.contains_key(a));
                 true
             }
             Err(e) => {
@@ -579,12 +624,11 @@ impl Runner {
         if accounts.is_empty() {
             return true;
         }
-        let previously_reconciled = self.slots[i].reconciled;
-        self.invalidate(&[i]);
         let hs = match self.slots[i].adapter.health(&accounts, true).await {
             Ok(h) => h,
             Err(e) => {
                 warn!(protocol = self.slots[i].adapter.id(), error = %format!("{e:#}"), "poll failed");
+                self.degrade(i);
                 return true;
             }
         };
@@ -593,13 +637,11 @@ impl Runner {
                 protocol = self.slots[i].adapter.id(),
                 "incomplete borrower health poll"
             );
+            self.degrade(i);
             return true;
         }
-        // A subset poll cannot restore confidence lost by a failed full sweep.
-        self.slots[i].reconciled = previously_reconciled;
-        self.restore_confidence(i);
         for h in hs {
-            self.slots[i].at_risk.insert(h.account, h);
+            self.record(i, h);
             if !h.liquidatable() || !self.worth_watching(&h) {
                 self.last_plan.remove(&h.account); // healthy again: reset its backoff
                 continue;
@@ -633,7 +675,7 @@ impl Runner {
             return;
         };
         for &i in &hits {
-            self.bump(i);
+            self.bump_feed(i, feed);
         }
         let report = mev_oracle::report_answer(st.to, &st.input)
             .filter(|(agg, _)| *agg == feed && !self.held.contains(agg));
@@ -728,7 +770,7 @@ impl Runner {
             let hit: Vec<usize> = self.feeds.slots_for(h.feed).to_vec();
             let mut predicted: Vec<(usize, Plan)> = Vec::new();
             for &i in &hit {
-                self.bump(i);
+                self.bump_feed(i, h.feed);
                 let adapter = &self.slots[i].adapter;
                 // Exact where the adapter can; the float estimate only without an exact model.
                 let plans = match adapter.predict_exact(h.feed, h.answer_exact, self.cfg.executor) {
@@ -858,6 +900,9 @@ impl Runner {
         }
     }
 }
+
+/// A state version counter shared with the plans stamped from it.
+type Rev = std::sync::Arc<std::sync::atomic::AtomicU64>;
 
 /// Contracts whose sequencer-feed transactions the runner wants: price feeds and cash markets.
 fn watched_set(feeds: &FeedWatcher<usize>, cash: &FeedWatcher<usize>) -> HashSet<Address> {
@@ -1344,7 +1389,6 @@ mod tests {
         assert!(proof.dependencies.iter().all(|d| d.current()));
 
         // Another venue's reads and failures don't touch venue 0's plan.
-        r.invalidate(&[1]);
         assert!(!r.apply_sweep(1, 1, Err(anyhow::anyhow!("RPC failure"))));
         assert!(!r.slots[1].confidence.load(Acquire));
         assert!(
@@ -1362,15 +1406,58 @@ mod tests {
         r.sweep_all(Some(&[1])).await;
         assert!(r.slots[1].confidence.load(Acquire));
 
-        // A read of the plan's own venue supersedes it, and restoring confidence can't revive it.
-        r.invalidate(&[0]);
+        // Re-reading the same state supersedes nothing; an unrelated feed doesn't either.
+        r.sweep_all(Some(&[0])).await;
+        r.poll(0, None, false, &tx).await;
+        r.on_feed_tx(&sequenced(Some(Address::with_last_byte(0x01))), &tx);
+        assert!(proof.dependencies.iter().all(|d| d.current()));
+        // A failed read of the plan's own venue blocks it; a good sweep restores it.
+        assert!(!r.apply_sweep(0, 1, Err(anyhow::anyhow!("RPC failure"))));
         assert!(!proof.dependencies.iter().all(|d| d.current()));
         r.sweep_all(Some(&[0])).await;
-        assert!(r.slots[0].confidence.load(Acquire));
-        assert!(
-            !proof.dependencies.iter().all(|d| d.current()),
-            "restoring confidence cannot revive an old revision"
-        );
+        assert!(proof.dependencies.iter().all(|d| d.current()));
+    }
+
+    #[tokio::test]
+    async fn a_changed_read_or_an_affecting_feed_supersedes_the_plan() {
+        let (hf, a) = fake(1.02, AdapterStatus::Live);
+        let mut r = Runner::new(cfg(), vec![a]);
+        r.sweep(0).await;
+        let h = *r.slots[0].at_risk.values().next().unwrap();
+        let plan = |r: &mut Runner| {
+            let p = Plan {
+                protocol: "fake",
+                account: h.account,
+                debt_asset: Address::ZERO,
+                collateral_asset: Address::ZERO,
+                flash_amount: alloy::primitives::U256::from(1),
+                dependencies: vec![],
+                expected_collateral: 1.0,
+                bonus_usd: 5.0,
+                calls: vec![],
+            };
+            r.stamp_plan(0, p)
+        };
+        let (tx, _) = mpsc::unbounded_channel();
+
+        // The account's health changes: its plan is superseded, a fresh one is current.
+        let old = plan(&mut r);
+        *hf.lock().unwrap() = 1.01;
+        r.poll(0, None, false, &tx).await;
+        assert!(!old.dependencies.iter().all(|d| d.current()));
+        assert!(plan(&mut r).dependencies.iter().all(|d| d.current()));
+
+        // An update of a feed that moves the account supersedes it (before any re-read).
+        let old = plan(&mut r);
+        r.on_feed_tx(&sequenced(Some(Address::with_last_byte(0xfe))), &tx);
+        assert!(!old.dependencies.iter().all(|d| d.current()));
+
+        // An account that leaves the at-risk set supersedes its plans and its version goes.
+        let old = plan(&mut r);
+        *hf.lock().unwrap() = 1.5;
+        r.sweep(0).await;
+        assert!(!old.dependencies.iter().all(|d| d.current()));
+        assert!(r.slots[0].account_rev.is_empty());
     }
 
     #[tokio::test]
