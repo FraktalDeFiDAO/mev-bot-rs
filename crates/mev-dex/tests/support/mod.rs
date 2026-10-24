@@ -320,7 +320,8 @@ pub fn ref_v2(a: U256, rin: U256, rout: U256, fee: u32, den: u32) -> Option<U256
         return None;
     }
     let with_fee = w(a) * U512::from(den - fee);
-    n(with_fee * w(rout) / (w(rin) * U512::from(den) + with_fee))
+    // `swap` requires a non-zero output (`INSUFFICIENT_OUTPUT_AMOUNT`).
+    n(with_fee * w(rout) / (w(rin) * U512::from(den) + with_fee)).filter(|o| !o.is_zero())
 }
 
 /// Solidly volatile `getAmountOut`: the fee is taken from the input first, in basis points.
@@ -329,7 +330,8 @@ pub fn ref_solidly(a: U256, rin: U256, rout: U256, fee_bps: u32) -> Option<U256>
         return None;
     }
     let net = w(a) - w(a) * U512::from(fee_bps) / U512::from(10_000u32);
-    n(net * w(rout) / (w(rin) + net))
+    // `swap` reverts `InsufficientOutputAmount` on a zero output.
+    n(net * w(rout) / (w(rin) + net)).filter(|o| !o.is_zero())
 }
 
 // ---------------------------------------------------------------------------------------------

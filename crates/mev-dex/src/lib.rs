@@ -199,9 +199,24 @@ impl Pool {
     }
 
     /// The protocol-exact output of `amount_in` of `token_in`, or `None` when the exact state is not
-    /// known, the pool type is not modelled exactly (Camelot, Algebra, V4), or a V3 swap would leave the
-    /// loaded tick window. Never an estimate: a `Some` equals what the contract computes from this state.
+    /// known, the pool type is not modelled exactly (Algebra: see `exact_amount_out_bound`), a V3 swap would
+    /// leave the loaded tick window, or the contract would revert: every pool rejects a zero input, and V2-style
+    /// pairs (Uniswap V2 `INSUFFICIENT_OUTPUT_AMOUNT`, Camelot, Aerodrome `InsufficientOutputAmount`) reject an
+    /// output that rounds to zero, which small trades from a many-decimal token into a few-decimal one hit.
+    /// Never an estimate: a `Some` equals what the contract pays from this state.
     pub fn exact_amount_out(&self, token_in: Address, amount_in: U256) -> Option<U256> {
+        if amount_in.is_zero() {
+            return None;
+        }
+        let out = self.exact_quote(token_in, amount_in)?;
+        let pair = matches!(
+            self.info.kind,
+            PoolKind::UniV2 { .. } | PoolKind::CamelotV2 | PoolKind::SolidlyV2 { .. }
+        );
+        (!(pair && out.is_zero())).then_some(out)
+    }
+
+    fn exact_quote(&self, token_in: Address, amount_in: U256) -> Option<U256> {
         let zero_for_one = token_in == self.info.token0;
         match (self.exact.as_ref()?, self.info.kind) {
             (ExactState::V2 { reserve0, reserve1 }, PoolKind::UniV2 { fee_bps }) => {
@@ -314,6 +329,9 @@ impl Pool {
         token_in: Address,
         amount_in: U256,
     ) -> Option<(U256, bool)> {
+        if amount_in.is_zero() {
+            return None;
+        }
         if let Some(out) = self.exact_amount_out(token_in, amount_in) {
             return Some((out, true));
         }
@@ -819,6 +837,43 @@ mod tests {
         assert!((p.price0() - 4.0).abs() < 1e-12);
         let out = p.amount_out(A, 1.0);
         assert!((out - 4.0 * 0.9995).abs() < 1e-3);
+    }
+
+    #[test]
+    fn swaps_the_contract_would_revert_are_not_quoted() {
+        // 18 decimals in, 8 out: 1e9 wei of the input is worth less than one raw unit of the output.
+        let reserves = ExactState::V2 {
+            reserve0: U256::from(10u128.pow(24)),
+            reserve1: U256::from(10u128.pow(14)),
+        };
+        let p = Pool::new(
+            PoolInfo {
+                address: Address::ZERO,
+                dex: "v2".into(),
+                kind: PoolKind::UniV2 { fee_bps: 30 },
+                token0: A,
+                token1: B,
+            },
+            PoolState::V2 {
+                reserve0: 1e24,
+                reserve1: 1e14,
+            },
+        )
+        .with_exact(reserves);
+        assert_eq!(
+            p.exact_amount_out(A, U256::from(1_000_000_000u64)),
+            None,
+            "zero output reverts"
+        );
+        assert_eq!(
+            p.exact_amount_out(A, U256::ZERO),
+            None,
+            "zero input reverts"
+        );
+        assert!(
+            p.exact_amount_out(A, U256::from(10u128.pow(12)))
+                .is_some_and(|o| !o.is_zero())
+        );
     }
 
     #[test]
