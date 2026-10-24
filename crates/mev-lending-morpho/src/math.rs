@@ -16,6 +16,13 @@ pub fn incentive_factor(lltv: f64) -> f64 {
     (1.0 / (1.0 - LIQUIDATION_CURSOR * (1.0 - lltv))).min(MAX_LIQUIDATION_INCENTIVE_FACTOR)
 }
 
+/// Debt one liquidation can repay, in the same unit as both inputs: all of it, unless the
+/// collateral runs out first. Morpho seizes `repaid × incentive`, so an underwater position
+/// (collateral below debt × incentive) repays at most `collateral / incentive`; the rest is bad debt.
+pub fn max_repay(debt: f64, collateral: f64, incentive: f64) -> f64 {
+    debt.min(collateral / incentive).max(0.0)
+}
+
 /// Borrow shares -> assets, rounding up (`toAssetsUp`).
 pub fn borrow_assets(shares: f64, total_assets: f64, total_shares: f64) -> f64 {
     (shares * (total_assets + VIRTUAL_ASSETS) / (total_shares + VIRTUAL_SHARES)).ceil()
@@ -68,6 +75,15 @@ mod tests {
         assert!((incentive_factor(0.86) - 1.0 / (1.0 - 0.3 * 0.14)).abs() < 1e-12); // ~4.38%
         assert!((incentive_factor(0.915) - 1.0 / (1.0 - 0.3 * 0.085)).abs() < 1e-12); // ~2.62%
         assert_eq!(incentive_factor(0.0), MAX_LIQUIDATION_INCENTIVE_FACTOR); // capped
+    }
+
+    #[test]
+    fn max_repay_is_capped_by_seizable_collateral() {
+        assert_eq!(max_repay(100.0, 200.0, 1.05), 100.0); // healthy collateral: all debt
+        // Underwater: 3,719 collateral against 131,396 debt (Base USR, 2026-10-24).
+        let r = max_repay(131_396.0, 3_719.0, 1.026);
+        assert!((r * 1.026 - 3_719.0).abs() < 1e-9);
+        assert_eq!(max_repay(10.0, 0.0, 1.05), 0.0);
     }
 
     #[test]
