@@ -25,7 +25,7 @@ pub enum AdapterStatus {
     Inactive(&'static str),
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Health {
     pub account: AccountRef,
     /// < 1.0 means liquidatable (protocols with other scales normalize to this).
