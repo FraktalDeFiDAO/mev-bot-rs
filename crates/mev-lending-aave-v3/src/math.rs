@@ -52,6 +52,19 @@ pub struct Position {
     pub debt_exact: Vec<(Address, alloy::primitives::U256)>,
     /// Exact aToken balances of the collateral reserves.
     pub collateral_exact: Vec<(Address, alloy::primitives::U256)>,
+    /// Per debt reserve, what its balance accrues from: (asset, scaled variable debt, stable
+    /// principal, user's stable rate, stable last update), for the debt at landing time.
+    pub debt_accrual: Vec<DebtAccrual>,
+}
+
+/// See `Position::debt_accrual`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DebtAccrual {
+    pub asset: Address,
+    pub scaled_variable: alloy::primitives::U256,
+    pub stable_principal: alloy::primitives::U256,
+    pub stable_rate: alloy::primitives::U256,
+    pub stable_last_update: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]

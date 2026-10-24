@@ -18,8 +18,11 @@ use tracing::{info, warn};
 
 use super::{Engine, Mode, TxDone, now_secs};
 
-/// Extra gas allowed per batched trade for the self-call and event.
-const PER_ITEM_OVERHEAD_GAS: u64 = 25_000;
+/// Gas a batch adds per trade over sending it directly (self-call, selector check, `BatchItem`
+/// event, calldata copy): at most 6,753, measured by `test_measureBatchOverheadPerItem`
+/// (contracts/test/Batch.t.sol: 580-8,772-byte items, 1-4 items, cold state), which asserts it.
+/// A one-trade flush is sent directly and adds nothing.
+const PER_ITEM_OVERHEAD_GAS: u64 = 6_753;
 
 /// One trade waiting for the flush.
 pub(crate) struct Item {
@@ -168,9 +171,15 @@ impl Engine {
         let Some(quote) = self.native_price_integer() else {
             return release(self, &items);
         };
+        // A single trade is sent directly (`send_prebuilt`), without the batch call.
+        let overhead = if items.len() == 1 {
+            0
+        } else {
+            PER_ITEM_OVERHEAD_GAS
+        };
         let gas_limits: Option<Vec<u64>> = items
             .iter()
-            .map(|i| i.gas_limit.checked_add(PER_ITEM_OVERHEAD_GAS))
+            .map(|i| i.gas_limit.checked_add(overhead))
             .collect();
         let Some(gas_limits) = gas_limits else {
             return release(self, &items);

@@ -5,7 +5,8 @@
 
 use alloy::primitives::Address;
 
-/// buyCollateral reverts if the quote exceeds available collateral; stay just under it.
+/// Speculative (`predict`) plans only: pay this share of the float quote, so float error can't make
+/// buyCollateral's quote exceed the reserves. `plan` uses the exact integer quote instead.
 pub(crate) const QUOTE_HAIRCUT: f64 = 0.999;
 
 #[derive(Debug, Clone)]
@@ -114,7 +115,7 @@ impl Market {
         }
         let d = self.discount(asset)?;
         let value = self.value_units(a, amount);
-        let base_amount = value * (1.0 - d) / self.base_price * self.base_scale * QUOTE_HAIRCUT;
+        let base_amount = value * (1.0 - d) / self.base_price * self.base_scale;
         Some(Quote {
             base_amount,
             discount_usd: value * d * self.usd_per_unit,
@@ -208,7 +209,7 @@ mod tests {
         let m = usdc_comet();
         // ARB discount = 0.6 * (1 - 0.9) = 6%. 1,000 ARB = $500 -> pay $470 (× haircut).
         let q = m.quote(ARB, 1_000e18).unwrap();
-        assert!((q.base_amount - 470e6 * QUOTE_HAIRCUT).abs() < 1.0);
+        assert!((q.base_amount - 470e6).abs() < 1.0);
         assert!((q.discount_usd - 30.0).abs() < 1e-9);
         assert!(m.quote(ARB, 0.0).is_none());
     }
@@ -289,6 +290,107 @@ mod props {
                 prop_assert!(q.base_amount < market_value_base);
                 prop_assert!(q.discount_usd > 0.0);
             }
+        }
+    }
+}
+
+/// Comet's storefront math in integers, exactly as the contract computes it (`CometMainInterface`
+/// / `Comet.quoteCollateral`, factors scaled 1e18, prices 1e8).
+pub mod exact {
+    use alloy::primitives::U256;
+
+    const FACTOR_SCALE: u128 = 1_000_000_000_000_000_000;
+
+    fn mul_factor(n: U256, f: U256) -> U256 {
+        n * f / U256::from(FACTOR_SCALE)
+    }
+
+    /// Raw parameters `quoteCollateral` reads.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct QuoteParams {
+        pub asset_price: U256,
+        pub base_price: U256,
+        pub asset_scale: U256,
+        pub base_scale: U256,
+        pub storefront_factor: U256,
+        pub liquidation_factor: U256,
+    }
+
+    impl QuoteParams {
+        /// `assetPrice × (1 − storeFrontPriceFactor × (1 − liquidationFactor))`.
+        fn discounted_price(&self) -> U256 {
+            let one = U256::from(FACTOR_SCALE);
+            let discount = mul_factor(
+                self.storefront_factor,
+                one - self.liquidation_factor.min(one),
+            );
+            mul_factor(self.asset_price, one - discount.min(one))
+        }
+
+        /// `quoteCollateral(asset, baseAmount)`: collateral (raw) for `base` (raw).
+        pub fn quote(&self, base: U256) -> Option<U256> {
+            let p = self.discounted_price();
+            if p.is_zero() || self.base_scale.is_zero() {
+                return None;
+            }
+            Some(
+                self.base_price
+                    .checked_mul(base)?
+                    .checked_mul(self.asset_scale)?
+                    / p
+                    / self.base_scale,
+            )
+        }
+
+        /// The largest base payment whose quote is at most `target` collateral, and that quote:
+        /// `buyCollateral(asset, minAmount = quote, baseAmount)` then buys exactly that quote.
+        pub fn max_buy(&self, target: U256) -> Option<(U256, U256)> {
+            if target.is_zero() {
+                return None;
+            }
+            // Exponential search for a base whose quote exceeds the target, then bisect.
+            let mut hi = U256::from(1u8);
+            while self.quote(hi)? <= target {
+                hi = hi.checked_mul(U256::from(2u8))?;
+            }
+            let mut lo = U256::ZERO; // quote(0) = 0 <= target
+            while hi - lo > U256::from(1u8) {
+                let mid = lo + (hi - lo) / U256::from(2u8);
+                if self.quote(mid)? <= target {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let q = self.quote(lo)?;
+            (!lo.is_zero() && !q.is_zero()).then_some((lo, q))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn quote_matches_comet_and_max_buy_is_the_largest_fitting_payment() {
+            // ARB collateral on the USDC Comet: ARB $0.50, USDC $1 (1e8 prices), liquidation
+            // factor 0.9, storefront 0.6 -> 6% discount: 1 USDC buys 1/0.47 ARB.
+            let p = QuoteParams {
+                asset_price: U256::from(50_000_000u64),
+                base_price: U256::from(100_000_000u64),
+                asset_scale: U256::from(10u64).pow(U256::from(18u8)),
+                base_scale: U256::from(1_000_000u64),
+                storefront_factor: U256::from(600_000_000_000_000_000u64),
+                liquidation_factor: U256::from(900_000_000_000_000_000u64),
+            };
+            // 470 USDC -> exactly 1,000 ARB.
+            let thousand = U256::from(1_000u64) * U256::from(10u64).pow(U256::from(18u8));
+            assert_eq!(p.quote(U256::from(470_000_000u64)), Some(thousand));
+            let (base, got) = p.max_buy(thousand).unwrap();
+            assert!(got <= thousand);
+            assert!(p.quote(base + U256::from(1u8)).unwrap() > thousand);
+            assert_eq!(base, U256::from(470_000_000u64));
+            assert_eq!(p.max_buy(U256::ZERO), None);
         }
     }
 }

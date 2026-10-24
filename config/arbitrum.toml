@@ -14,7 +14,6 @@ http_fallbacks = ["https://arbitrum.gateway.tenderly.co", "https://arbitrum-one.
 ws_fallbacks = ["wss://arbitrum.drpc.org", "wss://arbitrum.gateway.tenderly.co"]
 min_pool_liquidity_usd = 2500.0   # was 5000: thin long-tail pools are where few bots look
 max_cycles = 200000               # was 100000, 20000 before: a wider pool set means more triangles; the cap still bounds search memory
-gas_limit_estimate = 1500000
 # Executors since 0x5932C0887173B7E9C4258EaCaB2bAc395137CB29 (2026-10-05) have executeFlashSwap: V3-first routes
 # borrow from their first pool (no fee, no Balancer cap). DECISIONS #46.
 executor_flash_swaps = true
@@ -57,6 +56,9 @@ at_risk_hf = 1.05
 min_debt_usd = 20.0              # bonus on less won't cover gas
 sweep_secs = 300
 fallback_poll_secs = 30          # sequencer price-feed triggers are the fast path
+# RPC receipt visibility after the sequencer feed, p50 / p90 / max (measure_rpc_visibility_after_feed,
+# arb1.arbitrum.io/rpc, measured from Europe 2026-10-23; re-measure where the bot runs).
+burst_offsets_ms = [854, 1020, 1048]
 route_via = ["WETH", "USDC", "USDT"]
 # revm_shadow = false   # shadow only: also simulate the exact final calldata with REVM and log it vs eth_call (JEV-LIQ-015)
 

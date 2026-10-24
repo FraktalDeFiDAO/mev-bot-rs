@@ -16,7 +16,6 @@ sequencer_rpc = "https://mainnet-sequencer.base.org"
 pending_reads = true
 min_pool_liquidity_usd = 5000.0
 max_cycles = 20000
-gas_limit_estimate = 1500000
 # Flash loans: Balancer's Base vault is thin (cbBTC ~$900, no wstETH), so loans it cannot fund come from Aave V3's
 # Base pool (5 bps; pool and premium checked on-chain 2026-10-16). Aave liquidations themselves stay off (SVR).
 executor_aave_flash = true
@@ -69,6 +68,9 @@ at_risk_hf = 1.05
 min_debt_usd = 20.0
 sweep_secs = 300
 fallback_poll_secs = 4          # every 2 Base blocks; Flashblocks price-feed triggers are the fast path
+# RPC receipt visibility after the flashblock, p50 / p90 / max (measure_rpc_visibility_after_flashblock,
+# mainnet.base.org, measured from Europe 2026-10-23; re-measure where the bot runs).
+burst_offsets_ms = [138, 187, 437]
 route_via = ["WETH", "USDC", "cbBTC"]
 
 [morpho]

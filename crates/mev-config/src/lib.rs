@@ -107,6 +107,10 @@ pub struct LiquidationConfig {
     pub sweep_secs: u64,
     /// Fallback at-risk poll period; sequencer price-feed triggers handle the fast path.
     pub fallback_poll_secs: u64,
+    /// After a price-feed transaction, re-poll at these offsets (ms): when the RPC serves the
+    /// transaction's state, measured (p50 / p90 / max) by the `measure_rpc_visibility_*` tests in
+    /// mev-sequencer from where the bot runs.
+    pub burst_offsets_ms: Vec<u64>,
     /// Swap routes for seized collateral may go through these tokens.
     pub route_via: Vec<String>,
     /// Shadow mode only (JEV-LIQ-015): also simulate the exact final calldata with REVM at a
@@ -604,7 +608,6 @@ pub struct ChainConfig {
     /// Most triangular cycles kept in the index (deepest first; thin long-tail cycles rank last).
     #[serde(default = "default_max_cycles")]
     pub max_cycles: usize,
-    pub gas_limit_estimate: u64,
     /// The deployed executor has `executeFlashSwap`: routes starting on a V3-style pool run
     /// without a lender (no fee, no lender-balance cap). Only set after deploying that executor.
     #[serde(default)]

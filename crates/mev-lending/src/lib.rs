@@ -40,6 +40,22 @@ impl Health {
     }
 }
 
+/// What the liquidation watchlist can say about a position beyond its health, from state the
+/// last sweep cached (no RPC). Whatever an adapter can't know stays `None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WatchDetail {
+    /// The position's single collateral and debt assets, when it has one of each (Morpho).
+    pub collateral: Option<Address>,
+    pub debt: Option<Address>,
+    /// Collateral price now and the price at which the position becomes liquidatable, in USD per
+    /// whole token, with every other price unchanged.
+    pub collateral_price_usd: Option<f64>,
+    pub liquidation_price_usd: Option<f64>,
+    /// Debt one liquidation may repay (USD) and the bonus on it (0.10 = 10%).
+    pub max_repay_usd: Option<f64>,
+    pub bonus_rate: Option<f64>,
+}
+
 /// RPC handles an adapter may use. Fast = low-latency (paid/WS-backed); scan = complete wide-range
 /// getLogs; sweep = heavy eth_call batches. Keeps the paid quota for latency-critical reads.
 #[derive(Clone)]
@@ -100,6 +116,30 @@ pub trait LiquidationAdapter: Send + Sync {
     /// profit check is the guard. Default: no prediction.
     fn predict(&self, _feed: Address, _answer: f64, _executor: Address) -> Vec<Plan> {
         Vec::new()
+    }
+
+    /// How long after a price round's timestamp the protocol starts using it. Moonwell's
+    /// Chainlink OEV wrappers keep serving the previous round for `maxRoundDelay` (10 s on Base)
+    /// unless a liquidator pays to unlock it early, so re-polls must land after that.
+    fn feed_unlock_delay(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+
+    /// Watchlist details for `health`, a position the last sweep read. Cached state only.
+    fn watch_detail(&self, _health: &Health) -> WatchDetail {
+        WatchDetail::default()
+    }
+
+    /// `predict` with the report's exact integer answer. `Some`: this adapter predicts `feed`
+    /// exactly (possibly no plans, where it can't predict exactly rather than estimate); `None`:
+    /// no exact model for `feed`, and the runner falls back to `predict`.
+    fn predict_exact(
+        &self,
+        _feed: Address,
+        _answer: alloy::primitives::U256,
+        _executor: Address,
+    ) -> Option<Vec<Plan>> {
+        None
     }
 
     /// Contracts the executor must allowlist (call targets and approval spenders).

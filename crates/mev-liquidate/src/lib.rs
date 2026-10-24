@@ -12,7 +12,7 @@ use std::{
 };
 
 use alloy::primitives::Address;
-use mev_lending::{AccountRef, AdapterStatus, Health, LiquidationAdapter, Plan};
+use mev_lending::{AccountRef, AdapterStatus, Health, LiquidationAdapter, Plan, WatchDetail};
 use mev_oracle::FeedWatcher;
 use mev_sequencer::SequencedTx;
 use tokio::sync::mpsc;
@@ -28,20 +28,58 @@ pub use shadow::{
 /// Delay before the single retry of an adapter whose sweep failed (instead of a full `sweep_secs`).
 const SWEEP_RETRY: Duration = Duration::from_secs(60);
 const BACKFILL_EVERY: Duration = Duration::from_secs(5);
-/// After a price-feed tx, re-poll at these offsets: the block containing the update lands
-/// ~0.5-1 s after the feed. Three polls instead of every 250 ms for 1.8 s (7 polls) — the
-/// bursts were the largest paid-RPC consumer in live logs (~60 calls/min).
-const BURST_OFFSETS: [Duration; 3] = [
-    Duration::from_millis(400),
-    Duration::from_millis(900),
-    Duration::from_millis(1_600),
-];
 const BURST_TICK: Duration = Duration::from_millis(100);
+/// Delayed updates kept per adapter (oldest dropped first).
+const MAX_DELAYED: usize = 8;
+/// Base's block time (rollup config; timestamps are genesis + 2 s x block, checked 2026-10-23).
+const BLOCK_TIME_MS: u64 = 2_000;
+/// When the first three flashblocks of a block reach the bot, measured from the block's build
+/// start (its timestamp - BLOCK_TIME): p50 over 150 blocks on mev-ohio, 2026-10-23 (index 1/2/3
+/// arrived 1831/1679/1540 ms before the block timestamp). A `pending` read sees the block once
+/// its first flashblock is in.
+const UNLOCK_POLL_MS: [u64; 3] = [169, 321, 460];
+
+/// When to re-poll for an update in the block with timestamp `block_ts` (unix s) that takes effect
+/// `delay` later: a block with timestamp T is built during [T - 2 s, T), so `pending` reads see a
+/// timestamp >= block_ts + delay from (block_ts + delay - 2 s); poll as that block's first
+/// flashblocks arrive. Past times are due at once.
+fn unlock_polls(block_ts: u64, delay: Duration, now: std::time::SystemTime) -> Vec<Instant> {
+    let now_ms = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    let start_ms = (block_ts * 1_000 + delay.as_millis() as u64).saturating_sub(BLOCK_TIME_MS);
+    let base = Instant::now();
+    UNLOCK_POLL_MS
+        .iter()
+        .map(|off| base + Duration::from_millis((start_ms + off).saturating_sub(now_ms)))
+        .collect()
+}
+
+/// Remove and return the feeds of `slot`'s delayed re-polls due by `now`.
+fn due_delayed(slot: &mut Slot, now: Instant) -> Vec<Address> {
+    let mut due = Vec::new();
+    slot.delayed.retain(|(at, feed)| {
+        if *at > now {
+            return true;
+        }
+        if !due.contains(feed) {
+            due.push(*feed);
+        }
+        false
+    });
+    due
+}
 /// Don't re-plan the same account more often than this.
 /// Re-plan cooldown per account: starts here and doubles each time the same account is still
 /// liquidatable (a real opportunity gets liquidated and disappears; one that persists is
 /// unworkable — bad debt, no route, too large — and each re-plan costs paid RPC calls).
 const REPLAN_COOLDOWN: Duration = Duration::from_secs(3);
+
+/// Positions below this health factor go in the watchlist: liquidatable after a uniform
+/// collateral price drop of up to 20%.
+const WATCH_HF: f64 = 1.25;
+/// Price drops (percent) the watchlist totals the unlockable bonus for; 0 = liquidatable now.
+const WATCH_DROPS: [f64; 6] = [0.0, 1.0, 2.0, 5.0, 10.0, 20.0];
 const REPLAN_COOLDOWN_MAX: Duration = Duration::from_secs(1_800);
 
 #[derive(Debug, Clone)]
@@ -53,6 +91,8 @@ pub struct RunnerConfig {
     pub sweep_secs: u64,
     /// Fallback at-risk poll period (feed-triggered bursts handle the fast path).
     pub fallback_poll_secs: u64,
+    /// Re-poll offsets after a price-feed transaction (measured RPC visibility; see config).
+    pub burst_offsets: Vec<Duration>,
     /// Passed to adapters building plans.
     pub executor: Address,
 }
@@ -89,6 +129,8 @@ pub enum RunnerEvent {
 pub struct OracleHint {
     pub feed: Address,
     pub answer: f64,
+    /// The same answer exactly (the auction's integer median).
+    pub answer_exact: alloy::primitives::U256,
     pub auction_id: String,
     pub received: Instant,
 }
@@ -109,12 +151,20 @@ struct Slot {
     burst: Option<(Instant, usize)>,
     /// Feed contracts updated since the burst started: only accounts they affect are re-polled.
     burst_feeds: Vec<Address>,
+    /// How long after its block's timestamp a price update takes effect (`feed_unlock_delay`).
+    unlock_delay: Duration,
+    /// Re-polls due when a delayed update takes effect: (when, feed). One set per update, so a
+    /// later update doesn't cancel an earlier one's unlock.
+    delayed: Vec<(Instant, Address)>,
     /// After an index error, don't retry before this (exponential backoff; rate limits).
     index_retry_at: Option<Instant>,
     index_backoff: Duration,
     /// Accounts whose last sweep read showed debt below `min_debt_usd` (repaid or dust): left out
     /// of sweeps except every `DORMANT_FULL_EVERY`-th, which reads everything again.
     dormant: HashSet<AccountRef>,
+    /// Positions the last successful sweep found within `WATCH_HF` (with enough debt), for the
+    /// watchlist file.
+    watch: Vec<(Health, WatchDetail)>,
     /// Sweeps attempted, to schedule the full ones.
     sweeps: u64,
 }
@@ -148,6 +198,8 @@ pub struct Runner {
     /// Plans predicted for a (feed, answer) update, reused by the parallel auction of the same
     /// update (adapters move their prediction state on each `predict`).
     hint_plans: HashMap<(Address, u64), (Instant, Vec<Plan>)>,
+    /// Where each sweep writes the watchlist of near-liquidation positions (JSON), if anywhere.
+    watchlist: Option<std::path::PathBuf>,
 }
 
 /// How long predicted plans are reused for the same update.
@@ -172,6 +224,7 @@ impl Runner {
             for f in adapter.price_feeds() {
                 feeds.watch(f, slots.len());
             }
+            let unlock_delay = adapter.feed_unlock_delay();
             slots.push(Slot {
                 adapter,
                 revision: Default::default(),
@@ -181,9 +234,12 @@ impl Runner {
                 backfilled: false,
                 burst: None,
                 burst_feeds: Vec::new(),
+                unlock_delay,
+                delayed: Vec::new(),
                 index_retry_at: None,
                 index_backoff: INDEX_BACKOFF_MIN,
                 dormant: HashSet::new(),
+                watch: Vec::new(),
                 sweeps: 0,
             });
         }
@@ -206,6 +262,7 @@ impl Runner {
             hints: None,
             shadow: None,
             hint_plans: HashMap::new(),
+            watchlist: None,
         }
     }
 
@@ -249,6 +306,12 @@ impl Runner {
     /// revert (all 11 Arbitrum Aave backruns, 2026-10-08..10).
     pub fn with_held_feeds(mut self, held: HashSet<Address>) -> Self {
         self.held = held;
+        self
+    }
+
+    /// Write the watchlist of near-liquidation positions to `path` after every sweep.
+    pub fn with_watchlist(mut self, path: std::path::PathBuf) -> Self {
+        self.watchlist = Some(path);
         self
     }
 
@@ -376,7 +439,41 @@ impl Runner {
                 failed.push(i);
             }
         }
+        self.write_watchlist();
         failed
+    }
+
+    /// Write every venue's watched positions, with the bonus a liquidator could take at each
+    /// price drop. Off the hot path (after a sweep); the file is replaced atomically.
+    fn write_watchlist(&self) {
+        let Some(path) = self.watchlist.clone() else {
+            return;
+        };
+        let doc = watchlist_json(&self.slots, std::time::SystemTime::now());
+        if let Some(b) = doc["bonus_by_price_drop"].as_array() {
+            let at = |d: f64| {
+                b.iter()
+                    .find(|x| x["drop_pct"].as_f64() == Some(d))
+                    .and_then(|x| x["est_bonus_usd"].as_f64())
+                    .unwrap_or(0.0)
+            };
+            info!(
+                now_usd = format!("{:.0}", at(0.0)),
+                within_5pct_usd = format!("{:.0}", at(5.0)),
+                within_20pct_usd = format!("{:.0}", at(20.0)),
+                "liquidation watchlist"
+            );
+        }
+        tokio::task::spawn_blocking(move || {
+            let tmp = path.with_extension("json.tmp");
+            let res = serde_json::to_vec_pretty(&doc)
+                .map_err(anyhow::Error::from)
+                .and_then(|b| Ok(std::fs::write(&tmp, b)?))
+                .and_then(|()| Ok(std::fs::rename(&tmp, &path)?));
+            if let Err(e) = res {
+                warn!(error = %format!("{e:#}"), path = %path.display(), "watchlist write failed");
+            }
+        });
     }
 
     #[cfg(test)]
@@ -410,6 +507,12 @@ impl Runner {
                     }
                 }
                 let dormant = dormant.len();
+                let watch: Vec<(Health, WatchDetail)> = hs
+                    .iter()
+                    .filter(|h| h.health_factor < WATCH_HF && self.worth_watching(h))
+                    .map(|h| (*h, self.slots[i].adapter.watch_detail(h)))
+                    .collect();
+                self.slots[i].watch = watch;
                 let at_risk: HashMap<AccountRef, Health> = hs
                     .into_iter()
                     .filter(|h| h.health_factor < self.cfg.at_risk_hf && self.worth_watching(h))
@@ -510,16 +613,20 @@ impl Runner {
         }
         let report = mev_oracle::report_answer(st.to, &st.input)
             .filter(|(agg, _)| *agg == feed && !self.held.contains(agg));
+        let exact = mev_oracle::report_answer_exact(st.to, &st.input)
+            .filter(|(agg, _)| *agg == feed && !self.held.contains(agg));
         let mut predicted: Vec<(usize, Plan)> = Vec::new();
         for i in hits.iter().copied() {
             let Some((_, answer)) = report else { break };
-            predicted.extend(
-                self.slots[i]
-                    .adapter
-                    .predict(feed, answer, self.cfg.executor)
-                    .into_iter()
-                    .map(|p| (i, p)),
-            );
+            let adapter = &self.slots[i].adapter;
+            // Exact where the adapter can (integer answer, exact oracle and position math);
+            // the float estimate only for adapters without an exact model.
+            let plans =
+                match exact.and_then(|(_, a)| adapter.predict_exact(feed, a, self.cfg.executor)) {
+                    Some(plans) => plans,
+                    None => adapter.predict(feed, answer, self.cfg.executor),
+                };
+            predicted.extend(plans.into_iter().map(|p| (i, p)));
         }
         predicted.sort_by(|a, b| b.1.bonus_usd.total_cmp(&a.1.bonus_usd));
         {
@@ -548,6 +655,18 @@ impl Runner {
                 slot.burst_feeds.push(feed);
             }
             slot.burst = Some((Instant::now(), 0));
+            if let Some(at) = st
+                .block_timestamp
+                .filter(|_| !slot.unlock_delay.is_zero())
+                .map(|ts| unlock_polls(ts, slot.unlock_delay, std::time::SystemTime::now()))
+            {
+                slot.delayed.extend(at.into_iter().map(|t| (t, feed)));
+                let excess = slot
+                    .delayed
+                    .len()
+                    .saturating_sub(MAX_DELAYED * UNLOCK_POLL_MS.len());
+                slot.delayed.drain(..excess);
+            }
             debug!(protocol = self.slots[i].adapter.id(), tx = %st.hash, "price-feed update in sequencer feed");
             let _ = tx.send(RunnerEvent::FeedTrigger {
                 adapter: self.slots[i].adapter.id(),
@@ -571,13 +690,13 @@ impl Runner {
             let mut predicted: Vec<(usize, Plan)> = Vec::new();
             for &i in &hit {
                 self.bump(i);
-                predicted.extend(
-                    self.slots[i]
-                        .adapter
-                        .predict(h.feed, h.answer, self.cfg.executor)
-                        .into_iter()
-                        .map(|p| (i, p)),
-                );
+                let adapter = &self.slots[i].adapter;
+                // Exact where the adapter can; the float estimate only without an exact model.
+                let plans = match adapter.predict_exact(h.feed, h.answer_exact, self.cfg.executor) {
+                    Some(plans) => plans,
+                    None => adapter.predict(h.feed, h.answer, self.cfg.executor),
+                };
+                predicted.extend(plans.into_iter().map(|p| (i, p)));
             }
             predicted.sort_by(|a, b| b.1.bonus_usd.total_cmp(&a.1.bonus_usd));
             predicted.truncate(MAX_BACKRUNS_PER_UPDATE);
@@ -668,17 +787,85 @@ impl Runner {
                     let now = Instant::now();
                     for i in 0..self.slots.len() {
                         let Some((start, next)) = self.slots[i].burst else { continue };
-                        if now.duration_since(start) < BURST_OFFSETS[next] {
+                        let Some(offset) = self.cfg.burst_offsets.get(next) else {
+                            self.slots[i].burst = None; // no offsets configured: no burst
+                            continue;
+                        };
+                        if now.duration_since(start) < *offset {
                             continue;
                         }
-                        self.slots[i].burst = (next + 1 < BURST_OFFSETS.len()).then_some((start, next + 1));
+                        self.slots[i].burst = (next + 1 < self.cfg.burst_offsets.len()).then_some((start, next + 1));
                         let feeds = self.slots[i].burst_feeds.clone();
                         if !self.poll(i, Some(&feeds), &tx).await { return; }
+                    }
+                    for i in 0..self.slots.len() {
+                        let due = due_delayed(&mut self.slots[i], now);
+                        if !due.is_empty() && !self.poll(i, Some(&due), &tx).await { return; }
                     }
                 }
             }
         }
     }
+}
+
+/// The watchlist document: per venue, the watched positions (closest to liquidation first) and,
+/// across venues, the bonus that a uniform collateral price drop of each `WATCH_DROPS` size would
+/// make liquidatable. "Drop" assumes every collateral price falls together and debt prices hold;
+/// exact for single-collateral positions, an approximation for pooled ones.
+fn watchlist_json(slots: &[Slot], now: std::time::SystemTime) -> serde_json::Value {
+    use serde_json::json;
+    let drop_pct = |hf: f64| ((1.0 - 1.0 / hf) * 100.0).max(0.0);
+    let bonus = |d: &WatchDetail| d.max_repay_usd.zip(d.bonus_rate).map(|(r, b)| r * b);
+    let mut buckets = [(0usize, 0.0f64); WATCH_DROPS.len()];
+    let mut venues = serde_json::Map::new();
+    for s in slots {
+        let mut rows: Vec<&(Health, WatchDetail)> = s.watch.iter().collect();
+        rows.sort_by(|a, b| a.0.health_factor.total_cmp(&b.0.health_factor));
+        let entries: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|(h, d)| {
+                let drop = drop_pct(h.health_factor);
+                let b = bonus(d);
+                for (k, lim) in WATCH_DROPS.iter().enumerate() {
+                    if drop <= *lim {
+                        buckets[k].0 += 1;
+                        buckets[k].1 += b.unwrap_or(0.0);
+                    }
+                }
+                json!({
+                    "account": h.account.to_string(),
+                    "health_factor": h.health_factor,
+                    "debt_usd": h.debt_usd,
+                    "collateral_usd": h.collateral_usd,
+                    "drop_to_liquidation_pct": drop,
+                    "collateral": d.collateral.map(|a| a.to_string()),
+                    "debt": d.debt.map(|a| a.to_string()),
+                    "collateral_price_usd": d.collateral_price_usd,
+                    "liquidation_price_usd": d.liquidation_price_usd,
+                    "max_repay_usd": d.max_repay_usd,
+                    "bonus_rate": d.bonus_rate,
+                    "est_bonus_usd": b,
+                })
+            })
+            .collect();
+        venues.insert(
+            s.adapter.id().to_string(),
+            json!({ "positions": entries.len(), "entries": entries }),
+        );
+    }
+    let at = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    json!({
+        "generated_at_unix": at,
+        "watch_hf": WATCH_HF,
+        "bonus_by_price_drop": WATCH_DROPS
+            .iter()
+            .zip(buckets)
+            .map(|(d, (n, b))| json!({ "drop_pct": d, "positions": n, "est_bonus_usd": b }))
+            .collect::<Vec<_>>(),
+        "venues": venues,
+    })
 }
 
 /// The accounts one sweep of `s` reads: all of them on a full sweep, else the non-dormant ones.
@@ -814,6 +1001,7 @@ mod tests {
             min_debt_usd: 20.0,
             sweep_secs: 3600,
             fallback_poll_secs: 3600,
+            burst_offsets: vec![Duration::from_millis(400), Duration::from_millis(900)],
             executor: Address::ZERO,
         }
     }
@@ -1089,6 +1277,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sweep_writes_watchlist_with_bonus_by_price_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("liq-watchlist.json");
+        let (hf, a) = fake(1.02, AdapterStatus::Live);
+        let mut r = Runner::new(cfg(), vec![a]).with_watchlist(path.clone());
+        r.sweep_all(None).await;
+        for _ in 0..100 {
+            if path.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let doc: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let venue = doc["venues"].as_object().unwrap().values().next().unwrap();
+        assert_eq!(venue["positions"], 1);
+        let e = &venue["entries"][0];
+        assert!(
+            (e["drop_to_liquidation_pct"].as_f64().unwrap() - (1.0 - 1.0 / 1.02) * 100.0).abs()
+                < 1e-9
+        );
+        assert!(
+            e["est_bonus_usd"].is_null(),
+            "no detail from this adapter: bonus unknown"
+        );
+
+        // Bucket math with a known bonus: $100 debt, half repayable at 10% = $5, unlocked by a ~2% drop.
+        r.slots[0].watch[0].1 = WatchDetail {
+            max_repay_usd: Some(50.0),
+            bonus_rate: Some(0.10),
+            ..WatchDetail::default()
+        };
+        let doc = watchlist_json(&r.slots, std::time::UNIX_EPOCH);
+        let b = |d: f64| {
+            doc["bonus_by_price_drop"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|x| x["drop_pct"].as_f64() == Some(d))
+                .unwrap()["est_bonus_usd"]
+                .as_f64()
+                .unwrap()
+        };
+        assert_eq!(b(1.0), 0.0);
+        assert!((b(2.0) - 5.0).abs() < 1e-9);
+        assert!((b(20.0) - 5.0).abs() < 1e-9);
+
+        // A healthy position (HF above WATCH_HF) leaves the watchlist on the next sweep.
+        *hf.lock().unwrap() = 1.5;
+        r.sweep_all(None).await;
+        assert!(r.slots[0].watch.is_empty());
+    }
+
+    #[tokio::test]
     async fn burst_polls_only_accounts_the_updated_feed_affects() {
         let (hf, a) = fake(1.02, AdapterStatus::Live);
         let mut r = Runner::new(cfg(), vec![a]);
@@ -1155,6 +1397,70 @@ mod tests {
         let mut r = Runner::new(c, vec![b]);
         r.sweep(0).await;
         assert!(r.slots[0].at_risk.is_empty());
+    }
+
+    #[test]
+    fn unlock_polls_follow_the_unlocked_blocks_first_flashblocks() {
+        // Update in the block stamped t=1000 s, 10 s delay: the block stamped 1010 is built from
+        // 1008 s, so pending reads see the new round from then. Seen at 999.5 s: polls at
+        // 1008.169 / .321 / .460 s, i.e. 8669 / 8821 / 8960 ms from now.
+        let now = std::time::UNIX_EPOCH + Duration::from_millis(999_500);
+        let before = Instant::now();
+        let at = unlock_polls(1_000, Duration::from_secs(10), now);
+        let ms: Vec<u128> = at
+            .iter()
+            .map(|t| t.duration_since(before).as_millis())
+            .collect();
+        for (got, want) in ms.iter().zip([8_669u128, 8_821, 8_960]) {
+            assert!(got.abs_diff(want) <= 5, "{got} vs {want}");
+        }
+        // Already unlocked: due at once.
+        let late = std::time::UNIX_EPOCH + Duration::from_secs(2_000);
+        assert!(
+            unlock_polls(1_000, Duration::from_secs(10), late)
+                .iter()
+                .all(|t| t.duration_since(before) < Duration::from_millis(50))
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_feed_updates_schedule_polls_that_later_updates_do_not_cancel() {
+        let (_, a) = fake(1.02, AdapterStatus::Live);
+        let mut r = Runner::new(cfg(), vec![a]);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let feed = Address::with_last_byte(0xfe);
+        let now_s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut st = sequenced(Some(feed));
+        st.block_timestamp = Some(now_s);
+        r.on_feed_tx(&st, &tx);
+        assert!(r.slots[0].delayed.is_empty(), "no delay: nothing scheduled");
+
+        r.slots[0].unlock_delay = Duration::from_secs(10);
+        r.on_feed_tx(&sequenced(Some(feed)), &tx);
+        assert!(
+            r.slots[0].delayed.is_empty(),
+            "no block timestamp: nothing guessed"
+        );
+        r.on_feed_tx(&st, &tx);
+        assert!(r.slots[0].burst.is_some(), "the immediate burst still runs");
+        assert_eq!(r.slots[0].delayed.len(), UNLOCK_POLL_MS.len());
+        r.on_feed_tx(&st, &tx);
+        assert_eq!(r.slots[0].delayed.len(), 2 * UNLOCK_POLL_MS.len());
+
+        // Nothing due now; everything due after the unlock, each feed reported once.
+        assert!(due_delayed(&mut r.slots[0], Instant::now()).is_empty());
+        let later = Instant::now() + Duration::from_secs(20);
+        assert_eq!(due_delayed(&mut r.slots[0], later), vec![feed]);
+        assert!(r.slots[0].delayed.is_empty());
+
+        // Bounded: a flood of updates keeps only the newest MAX_DELAYED updates' polls.
+        for _ in 0..(MAX_DELAYED + 3) {
+            r.on_feed_tx(&st, &tx);
+        }
+        assert_eq!(r.slots[0].delayed.len(), MAX_DELAYED * UNLOCK_POLL_MS.len());
     }
 
     #[tokio::test]
@@ -1261,6 +1567,7 @@ mod tests {
         let hint = |id: &str| OracleHint {
             feed: agg,
             answer: 269_591_000_000.0,
+            answer_exact: alloy::primitives::U256::from(269_591_000_000u64),
             auction_id: id.into(),
             received: Instant::now(),
         };
@@ -1302,6 +1609,7 @@ mod tests {
         SequencedTx {
             seq: 1,
             received: Instant::now(),
+            block_timestamp: None,
             hash: *env.tx_hash(),
             to,
             input: Default::default(),
@@ -1343,6 +1651,7 @@ mod tests {
         let (_hf, a) = fake(0.97, AdapterStatus::Live);
         let c = RunnerConfig {
             fallback_poll_secs: 1,
+            burst_offsets: vec![Duration::from_millis(400), Duration::from_millis(900)],
             ..cfg()
         };
         let r = Runner::new(c, vec![a]).with_shadow_schedule(sched);

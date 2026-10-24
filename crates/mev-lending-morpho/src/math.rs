@@ -16,6 +16,13 @@ pub fn incentive_factor(lltv: f64) -> f64 {
     (1.0 / (1.0 - LIQUIDATION_CURSOR * (1.0 - lltv))).min(MAX_LIQUIDATION_INCENTIVE_FACTOR)
 }
 
+/// Debt one liquidation can repay, in the same unit as both inputs: all of it, unless the
+/// collateral runs out first. Morpho seizes `repaid × incentive`, so an underwater position
+/// (collateral below debt × incentive) repays at most `collateral / incentive`; the rest is bad debt.
+pub fn max_repay(debt: f64, collateral: f64, incentive: f64) -> f64 {
+    debt.min(collateral / incentive).max(0.0)
+}
+
 /// Borrow shares -> assets, rounding up (`toAssetsUp`).
 pub fn borrow_assets(shares: f64, total_assets: f64, total_shares: f64) -> f64 {
     (shares * (total_assets + VIRTUAL_ASSETS) / (total_shares + VIRTUAL_SHARES)).ceil()
@@ -68,6 +75,15 @@ mod tests {
         assert!((incentive_factor(0.86) - 1.0 / (1.0 - 0.3 * 0.14)).abs() < 1e-12); // ~4.38%
         assert!((incentive_factor(0.915) - 1.0 / (1.0 - 0.3 * 0.085)).abs() < 1e-12); // ~2.62%
         assert_eq!(incentive_factor(0.0), MAX_LIQUIDATION_INCENTIVE_FACTOR); // capped
+    }
+
+    #[test]
+    fn max_repay_is_capped_by_seizable_collateral() {
+        assert_eq!(max_repay(100.0, 200.0, 1.05), 100.0); // healthy collateral: all debt
+        // Underwater: 3,719 collateral against 131,396 debt (Base USR, 2026-10-24).
+        let r = max_repay(131_396.0, 3_719.0, 1.026);
+        assert!((r * 1.026 - 3_719.0).abs() < 1e-9);
+        assert_eq!(max_repay(10.0, 0.0, 1.05), 0.0);
     }
 
     #[test]
@@ -181,26 +197,84 @@ pub mod exact {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Size {
         pub seized: U256,
-        /// Loan assets the liquidation costs (`seizedAssetsQuoted / LIF`, rounded up).
+        /// Loan assets the liquidation repays at the read totals (`toAssetsUp(repaidShares)`).
         pub repaid: U256,
+        /// Loan assets to flash-borrow: covers the repayment whenever the liquidation lands.
+        pub flash: U256,
     }
 
-    /// Largest liquidation: seize what the debt allows, capped by the collateral, minus a 0.1% haircut
-    /// so share rounding cannot push repayment above the debt.
-    pub fn size(collateral: U256, borrowed: U256, price: U256, lltv: U256) -> Option<Size> {
-        if collateral.is_zero() || borrowed.is_zero() || price.is_zero() {
+    /// `SharesMathLib.toSharesUp`.
+    pub fn to_shares_up(assets: U256, total_assets: U256, total_shares: U256) -> Option<U256> {
+        mul_div_up(
+            assets,
+            total_shares.checked_add(U256::from(VIRTUAL_SHARES))?,
+            total_assets.checked_add(U256::from(VIRTUAL_ASSETS))?,
+        )
+    }
+
+    /// Shares `Morpho.liquidate(seizedAssets = seized, repaidShares = 0)` repays:
+    /// `toSharesUp(wDivUp(mulDivUp(seized, price, 1e36), LIF))`.
+    fn repaid_shares(seized: U256, price: U256, lif: U256, ta: U256, ts: U256) -> Option<U256> {
+        to_shares_up(
+            w_div_up(mul_div_up(seized, price, U256::from(SCALE))?, lif)?,
+            ta,
+            ts,
+        )
+    }
+
+    /// Largest liquidation, exactly: the most collateral (up to all of it) whose repaid shares fit in
+    /// the borrower's `borrow_shares` (`liquidate` reverts beyond that). Checked at the read totals
+    /// `ta`/`ts`: interest accrued before the liquidation lands raises assets per share, so it only
+    /// lowers the shares a given seize repays, and this bound stays valid.
+    ///
+    /// Flash amount: `toAssetsUp(toSharesUp(q))` exceeds the quoted repay `q` by less than one
+    /// share's worth of assets plus one unit (two round-ups). Assets per share grow by interest only
+    /// (~1e-9 per second), so twice its read value bounds it at any realistic landing time.
+    pub fn size(
+        collateral: U256,
+        borrow_shares: U256,
+        ta: U256,
+        ts: U256,
+        price: U256,
+        lltv: U256,
+    ) -> Option<Size> {
+        if collateral.is_zero() || borrow_shares.is_zero() || price.is_zero() {
             return None;
         }
         let lif = incentive_factor(lltv)?;
-        let by_debt = mul_div_down(w_mul_down(borrowed, lif)?, U256::from(SCALE), price)?;
-        let seized = collateral.min(by_debt).checked_mul(U256::from(999u16))? / U256::from(1000u16);
+        let fits =
+            |s: U256| repaid_shares(s, price, lif, ta, ts).is_some_and(|r| r <= borrow_shares);
+        let (mut lo, mut hi) = (U256::ZERO, collateral);
+        if fits(hi) {
+            lo = hi;
+        } else {
+            // Invariant: fits(lo) (zero repays zero shares), !fits(hi).
+            while hi - lo > U256::from(1u8) {
+                let mid = lo + (hi - lo) / U256::from(2u8);
+                if fits(mid) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+        }
+        let seized = lo;
         if seized.is_zero() {
             return None;
         }
-        let quoted = mul_div_up(seized, price, U256::from(SCALE))?;
+        let quoted = w_div_up(mul_div_up(seized, price, U256::from(SCALE))?, lif)?;
+        let shares = to_shares_up(quoted, ta, ts)?;
+        let per_share = mul_div_up(
+            U256::from(1u8),
+            ta.checked_add(U256::from(VIRTUAL_ASSETS))?,
+            ts.checked_add(U256::from(VIRTUAL_SHARES))?,
+        )?;
         Some(Size {
             seized,
-            repaid: w_div_up(quoted, lif)?,
+            repaid: borrow_assets_up(shares, ta, ts)?,
+            flash: quoted
+                .checked_add(per_share.checked_mul(U256::from(2u8))?)?
+                .checked_add(U256::from(1u8))?,
         })
     }
 
@@ -246,14 +320,24 @@ pub mod exact {
         }
 
         #[test]
-        fn size_never_seizes_more_than_exists_or_repays_more_than_the_debt_allows() {
-            let price = u(2 * 10u128.pow(27));
+        fn size_is_the_exact_maximum_the_contract_accepts() {
+            let price = u(2 * 10u128.pow(27)); // 1 collateral (18 dec) = 2000 loan units (6 dec)
             let lltv = u(860_000_000_000_000_000);
-            let s = size(u(10 * 10u128.pow(18)), u(1_750_000_000), price, lltv).unwrap();
-            assert!(s.repaid <= u(1_750_000_000));
-            let t = size(u(5 * 10u128.pow(17)), u(1_750_000_000), price, lltv).unwrap();
-            assert_eq!(t.seized, u(5 * 10u128.pow(17)) * u(999) / u(1000));
-            assert_eq!(size(U256::ZERO, u(1), price, lltv), None);
+            let lif = incentive_factor(lltv).unwrap();
+            // One borrower owes the whole market: 1,750 loan tokens, shares at 1e6 per asset.
+            let (ta, ts) = (u(1_750_000_000), u(1_750_000_000 * 1_000_000));
+            // Debt binds: the seize is maximal (one more unit would repay more shares than owed).
+            let s = size(u(10 * 10u128.pow(18)), ts, ta, ts, price, lltv).unwrap();
+            assert!(repaid_shares(s.seized, price, lif, ta, ts).unwrap() <= ts);
+            assert!(repaid_shares(s.seized + u(1), price, lif, ta, ts).unwrap() > ts);
+            assert!(s.repaid <= ta + u(1), "never repays more than the debt");
+            // Collateral binds: all of it is seized, no haircut.
+            let t = size(u(5 * 10u128.pow(17)), ts, ta, ts, price, lltv).unwrap();
+            assert_eq!(t.seized, u(5 * 10u128.pow(17)));
+            // The flash covers the repayment, within two round-ups of the quote.
+            let q = w_div_up(mul_div_up(t.seized, price, u(SCALE)).unwrap(), lif).unwrap();
+            assert!(t.flash >= t.repaid && t.repaid >= q);
+            assert_eq!(size(U256::ZERO, ts, ta, ts, price, lltv), None);
         }
     }
 }

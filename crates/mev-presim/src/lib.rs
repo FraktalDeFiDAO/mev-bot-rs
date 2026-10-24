@@ -623,6 +623,7 @@ mod tests {
         SequencedTx {
             seq: 1,
             received: Instant::now(),
+            block_timestamp: None,
             hash: *env.tx_hash(),
             to,
             input: input.into(),

@@ -24,7 +24,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use super::{BACKRUN_BONUS_HAIRCUT, BACKRUN_GAS, BACKRUN_GAS_LIMIT, Engine, Plan, now_secs};
+use super::{BACKRUN_GAS_LIMIT, Engine, Plan, Precheck, now_secs};
 
 /// Auctions older than this are forgotten (the window is a couple of seconds).
 const AUCTION_TTL: Duration = Duration::from_secs(60);
@@ -127,7 +127,12 @@ impl Engine {
         hub.auctions.retain(|_, (t, _)| t.elapsed() < AUCTION_TTL);
         let hint = a.hints.as_ref().map(|h| {
             let answer: f64 = h.median_price.to_string().parse().unwrap_or(0.0);
-            (h.aggregator, answer, hub.watched.contains(&h.aggregator))
+            (
+                h.aggregator,
+                answer,
+                hub.watched.contains(&h.aggregator),
+                h.median_price,
+            )
         });
         self.metrics.event(
             "atlas_auction",
@@ -137,12 +142,13 @@ impl Engine {
                 "deadline": a.deadline.to_string(), "control": a.control,
             }),
         );
-        if let Some((feed, answer, true)) = hint
+        if let Some((feed, answer, true, answer_exact)) = hint
             && answer > 0.0
         {
             let _ = hub.hint_tx.send(OracleHint {
                 feed,
                 answer,
+                answer_exact,
                 auction_id: a.id.clone(),
                 received: Instant::now(),
             });
@@ -180,18 +186,28 @@ impl Engine {
         if auction.max_fee_per_gas > U256::from(MAX_AUCTION_GAS_PRICE) {
             return;
         }
-        let Some((hops, base, aave_pool)) = self.liq_precheck(&plan).await else {
+        let Some(pc) = self.liq_precheck(&plan).await else {
             return;
         };
         let (Some(debt_px), Some(native_px)) =
             (self.price(plan.debt_asset), self.price(self.native))
         else {
-            return self.metrics.event("liq_no_price", base);
+            return self.metrics.event("liq_no_price", pc.base);
         };
+        // What the route quote leaves after the flash loan and its fee (fees read on-chain).
+        let Some(gross) = self.quoted_gross_usd(&plan, &pc, debt_px) else {
+            return self.metrics.event("liq_flash_fee_unknown", pc.base);
+        };
+        let backrun_gas = self.backrun_gas(plan.protocol);
+        let Precheck {
+            hops,
+            base,
+            aave_pool,
+            ..
+        } = pc;
         // The oracle fixes the gas price every solver operation pays.
         let gas_price = u128::try_from(auction.max_fee_per_gas).unwrap_or(0) as f64;
-        let gas_usd = BACKRUN_GAS as f64 * gas_price * native_px;
-        let gross = plan.bonus_usd * BACKRUN_BONUS_HAIRCUT;
+        let gas_usd = backrun_gas as f64 * gas_price * native_px;
         let net_usd = gross - gas_usd;
         let ev = json!({ "auction": auction.id, "liq": base, "net_usd": net_usd, "gas_usd": gas_usd,
                          "lead_ms": lead.as_millis() as u64 });

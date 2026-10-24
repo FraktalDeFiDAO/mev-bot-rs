@@ -143,4 +143,57 @@ contract BatchTest is Test {
         vm.expectRevert(ArbExecutor.NotOwner.selector);
         exec.liquidate(address(token), address(token), 1, 0, new ArbExecutor.ProtocolCall[](0), none);
     }
+
+    /// Gas a batch adds per item over calling the same trade directly (self-call, selector check,
+    /// BatchItem event, loop, calldata copy), for 1-4 items at several calldata sizes; logged as
+    /// (item calldata bytes, overhead per item). The engine's per-item allowance comes from these.
+    function test_measureBatchOverheadPerItem() public {
+        for (uint256 pad = 0; pad <= 8192; pad = pad == 0 ? 512 : pad * 4) {
+            bytes memory item = _liqPadded(1000, 1100, pad);
+            uint256 snap = vm.snapshotState();
+            vm.prank(owner);
+            uint256 g0 = gasleft();
+            (bool okd,) = address(exec).call(item);
+            uint256 direct = g0 - gasleft();
+            assertTrue(okd);
+            vm.revertToState(snap);
+            for (uint256 n = 1; n <= 4; n *= 2) {
+                bytes[] memory calls = new bytes[](n);
+                for (uint256 i; i < n; ++i) {
+                    calls[i] = item;
+                }
+                vm.prank(owner);
+                uint256 g = gasleft();
+                exec.batch(calls);
+                uint256 used = g - gasleft();
+                vm.revertToState(snap);
+                int256 per = (int256(used) - int256(n * direct)) / int256(n);
+                // The engine allows PER_ITEM_OVERHEAD_GAS (crates/mev-engine/src/batch.rs) per item:
+                // a higher measurement means that allowance must be re-measured.
+                assertLe(per, 6_753);
+                emit log_named_string(
+                    string.concat("bytes ", vm.toString(item.length), " n ", vm.toString(n)), vm.toString(per)
+                );
+            }
+        }
+    }
+
+    function _liqPadded(uint256 repay, uint256 reward, uint256 pad) internal view returns (bytes memory) {
+        ArbExecutor.ProtocolCall[] memory c = new ArbExecutor.ProtocolCall[](1);
+        c[0] = ArbExecutor.ProtocolCall(
+            address(protocol),
+            bytes.concat(abi.encodeCall(MockProtocol.liquidate, (token, repay, reward)), new bytes(pad)),
+            address(protocol),
+            repay
+        );
+        ArbExecutor.Hop[] memory none = new ArbExecutor.Hop[](0);
+        return abi.encodeCall(ArbExecutor.liquidate, (address(token), address(token), repay, 0, c, none));
+    }
+
+    function _calls(uint256 repay, uint256 reward) internal view returns (ArbExecutor.ProtocolCall[] memory c) {
+        c = new ArbExecutor.ProtocolCall[](1);
+        c[0] = ArbExecutor.ProtocolCall(
+            address(protocol), abi.encodeCall(MockProtocol.liquidate, (token, repay, reward)), address(protocol), repay
+        );
+    }
 }
