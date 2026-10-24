@@ -773,7 +773,7 @@ impl LiquidationAdapter for MorphoAdapter {
 
     /// One collateral and one loan token per market: the position becomes liquidatable when the
     /// collateral price falls by its health factor (loan price unchanged), and Morpho lets a
-    /// liquidator repay all of the debt at the market's incentive.
+    /// liquidator repay all of the debt at the market's incentive, up to what the collateral covers.
     fn watch_detail(&self, h: &Health) -> WatchDetail {
         let snap = self.snapshot.lock().unwrap();
         let Some((id, st)) = snap.markets.get(&h.account.sub_id) else {
@@ -790,6 +790,7 @@ impl LiquidationAdapter for MorphoAdapter {
                 * st.loan_usd
         });
         let hf = h.health_factor;
+        let incentive = math::incentive_factor(f64::from(pm.lltv) / 1e18);
         WatchDetail {
             collateral: Some(pm.collateral),
             debt: Some(pm.loan),
@@ -797,8 +798,8 @@ impl LiquidationAdapter for MorphoAdapter {
             liquidation_price_usd: price_usd
                 .filter(|_| hf.is_finite() && hf > 0.0)
                 .map(|p| p / hf),
-            max_repay_usd: Some(h.debt_usd),
-            bonus_rate: Some(math::incentive_factor(f64::from(pm.lltv) / 1e18) - 1.0),
+            max_repay_usd: Some(math::max_repay(h.debt_usd, h.collateral_usd, incentive)),
+            bonus_rate: Some(incentive - 1.0),
         }
     }
 
