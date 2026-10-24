@@ -520,7 +520,9 @@ impl Pool {
         let fee = self.fee(token_in);
         let raw = if token_in == self.info.token0 {
             // token0 in: price falls to the bucket's lower edge.
-            liquidity * (1.0 / sqrt_at(lower) - 1.0 / sqrt_price)
+            // l (1/lo - 1/s), written without the cancelling difference of reciprocals.
+            let lo = sqrt_at(lower);
+            liquidity * (sqrt_price - lo) / (lo * sqrt_price)
         } else {
             liquidity * (sqrt_at(lower + spacing) - sqrt_price)
         };
@@ -608,20 +610,25 @@ impl Pool {
                 // Sitting on the boundary of a tick to cross: zero distance, then cross it.
                 target = s;
             }
-            // Input needed to reach `target`, and the output it yields, at liquidity `l`.
+            // Input needed to reach `target`, and the output it yields, at liquidity `l`. Differences of
+            // reciprocals are written as `(b - a) / (a b)`: with a large decimal gap the sqrt price is far
+            // from 1, and `1/a - 1/b` would cancel catastrophically (a 1-token swap off by 1.5%).
             let (need, gain) = if zero_for_one {
-                (l * (1.0 / target - 1.0 / s), l * (s - target))
+                (l * (s - target) / (s * target), l * (s - target))
             } else {
-                (l * (target - s), l * (1.0 / s - 1.0 / target))
+                (l * (target - s), l * (target - s) / (s * target))
             };
             if budget <= need {
                 // The swap ends inside this step.
+                let l = l.max(f64::MIN_POSITIVE);
                 let (ds, o) = if zero_for_one {
-                    let s2 = 1.0 / (1.0 / s + budget / l.max(f64::MIN_POSITIVE));
-                    (s2, l * (s - s2))
+                    // 1/s2 = 1/s + budget/l, so s2 = l s / (l + budget s) and s - s2 = budget s² / (l + budget s).
+                    let den = l + budget * s;
+                    (l * s / den, l * budget * s * s / den)
                 } else {
-                    let s2 = s + budget / l.max(f64::MIN_POSITIVE);
-                    (s2, l * (1.0 / s - 1.0 / s2))
+                    let s2 = s + budget / l;
+                    // l (1/s - 1/s2) = l (s2 - s) / (s s2) = budget / (s s2).
+                    (s2, budget / (s * s2))
                 };
                 s = ds;
                 out += o;
