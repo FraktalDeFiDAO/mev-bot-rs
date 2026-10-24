@@ -3956,6 +3956,7 @@ dependencies = [
  "mev-bindings",
  "mev-decode",
  "mev-dex",
+ "mev-risk",
  "mev-types",
 ]
 
