@@ -13,6 +13,7 @@ mev-dex = { workspace = true }
 
 [dev-dependencies]
 mev-decode = { workspace = true }
+mev-risk = { workspace = true }
 
 [lib]
 doctest = false  # no doc examples: skip the empty doc-test runner
