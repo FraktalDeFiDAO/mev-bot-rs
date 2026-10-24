@@ -125,6 +125,14 @@ pub trait LiquidationAdapter: Send + Sync {
         std::time::Duration::ZERO
     }
 
+    /// Contracts whose transactions can add the cash a stuck liquidation needs (Moonwell
+    /// mTokens: a mint or repay into a collateral market whose cash is lent out). When one is
+    /// seen in the sequencer feed, the runner re-plans this venue's liquidatable accounts past
+    /// their re-plan cooldown. Default: none.
+    fn cash_markets(&self) -> Vec<Address> {
+        Vec::new()
+    }
+
     /// Watchlist details for `health`, a position the last sweep read. Cached state only.
     fn watch_detail(&self, _health: &Health) -> WatchDetail {
         WatchDetail::default()

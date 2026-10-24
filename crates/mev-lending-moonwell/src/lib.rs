@@ -564,6 +564,14 @@ impl LiquidationAdapter for MoonwellAdapter {
         self.unlock_delay
     }
 
+    /// Every mToken: liquidating seizes collateral mTokens and redeems them, which needs cash in
+    /// that market (`plan` returns no plan without it). A mint or repay brings cash back (Base
+    /// cbETH 2026-10-23 00:44Z: liquidated by others right after cash arrived, while we waited out
+    /// a cooldown).
+    fn cash_markets(&self) -> Vec<Address> {
+        self.markets.iter().map(|m| m.mtoken).collect()
+    }
+
     /// Collateral is pooled across markets, so there is no single liquidation price; the
     /// watchlist uses the uniform price drop instead. The liquidator seizes `repay × incentive`
     /// and the protocol keeps its seize share of that (`seizeInternal`): the bonus rate is
