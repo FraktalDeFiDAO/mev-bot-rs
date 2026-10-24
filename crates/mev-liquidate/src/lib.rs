@@ -80,7 +80,11 @@ const REPLAN_COOLDOWN: Duration = Duration::from_secs(3);
 const WATCH_HF: f64 = 1.25;
 /// Price drops (percent) the watchlist totals the unlockable bonus for; 0 = liquidatable now.
 const WATCH_DROPS: [f64; 6] = [0.0, 1.0, 2.0, 5.0, 10.0, 20.0];
-const REPLAN_COOLDOWN_MAX: Duration = Duration::from_secs(1_800);
+/// Backoff cap. 30 min missed liquidations that became workable in between (Moonwell
+/// cbETH 2026-10-23: cash arrived, others liquidated, we were cooling down); a re-plan of a
+/// stuck account is a few calls, so every 5 min is cheap. Cash arriving in a market re-plans at
+/// once regardless (`cash_markets`).
+const REPLAN_COOLDOWN_MAX: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
@@ -151,6 +155,9 @@ struct Slot {
     burst: Option<(Instant, usize)>,
     /// Feed contracts updated since the burst started: only accounts they affect are re-polled.
     burst_feeds: Vec<Address>,
+    /// Active re-poll burst after a transaction to one of `cash_markets`: when it started and
+    /// the next offset index. Re-plans the liquidatable accounts past their cooldown.
+    cash_burst: Option<(Instant, usize)>,
     /// How long after its block's timestamp a price update takes effect (`feed_unlock_delay`).
     unlock_delay: Duration,
     /// Re-polls due when a delayed update takes effect: (when, feed). One set per update, so a
@@ -182,6 +189,8 @@ pub struct Runner {
     cfg: RunnerConfig,
     slots: Vec<Slot>,
     feeds: FeedWatcher<usize>,
+    /// Watched `cash_markets` -> venues.
+    cash: FeedWatcher<usize>,
     /// When each account was last planned and its current cooldown.
     last_plan: HashMap<AccountRef, (Instant, Duration)>,
     /// When each account was last backrun (one attempt per account per `BACKRUN_COOLDOWN`).
@@ -215,6 +224,7 @@ impl Runner {
     /// Adapters that aren't `Live` are logged and skipped.
     pub fn new(cfg: RunnerConfig, adapters: Vec<Box<dyn LiquidationAdapter>>) -> Self {
         let mut feeds = FeedWatcher::default();
+        let mut cash = FeedWatcher::default();
         let mut slots = Vec::new();
         for adapter in adapters {
             if adapter.status() != AdapterStatus::Live {
@@ -223,6 +233,9 @@ impl Runner {
             }
             for f in adapter.price_feeds() {
                 feeds.watch(f, slots.len());
+            }
+            for m in adapter.cash_markets() {
+                cash.watch(m, slots.len());
             }
             let unlock_delay = adapter.feed_unlock_delay();
             slots.push(Slot {
@@ -234,6 +247,7 @@ impl Runner {
                 backfilled: false,
                 burst: None,
                 burst_feeds: Vec::new(),
+                cash_burst: None,
                 unlock_delay,
                 delayed: Vec::new(),
                 index_retry_at: None,
@@ -248,13 +262,12 @@ impl Runner {
             watched_feeds = feeds.len(),
             "liquidation runner ready"
         );
-        let feed_set = std::sync::Arc::new(std::sync::RwLock::new(
-            feeds.contracts().into_iter().collect::<HashSet<_>>(),
-        ));
+        let feed_set = std::sync::Arc::new(std::sync::RwLock::new(watched_set(&feeds, &cash)));
         Self {
             cfg,
             slots,
             feeds,
+            cash,
             last_plan: HashMap::new(),
             last_backrun: HashMap::new(),
             held: HashSet::new(),
@@ -332,7 +345,8 @@ impl Runner {
         self.feeds.contracts()
     }
 
-    /// The watched feed contracts as a live set (kept current by `refresh_feeds`).
+    /// The watched feed contracts and cash markets as a live set (kept current by
+    /// `refresh_feeds`): the sequencer-feed fan-out passes only transactions to these.
     pub fn watched_feed_set(&self) -> std::sync::Arc<std::sync::RwLock<HashSet<Address>>> {
         self.feed_set.clone()
     }
@@ -341,12 +355,17 @@ impl Runner {
     /// markets). Returns whether the watched set changed.
     fn refresh_feeds(&mut self) -> bool {
         let mut feeds = FeedWatcher::default();
+        let mut cash = FeedWatcher::default();
         for (i, s) in self.slots.iter().enumerate() {
             for f in s.adapter.price_feeds() {
                 feeds.watch(f, i);
             }
+            for m in s.adapter.cash_markets() {
+                cash.watch(m, i);
+            }
         }
-        let now: HashSet<Address> = feeds.contracts().into_iter().collect();
+        let now = watched_set(&feeds, &cash);
+        self.cash = cash;
         if *self.feed_set.read().unwrap() == now {
             return false;
         }
@@ -538,18 +557,22 @@ impl Runner {
     }
 
     /// Re-check one adapter's at-risk accounts on the fast RPC; plan the liquidatable ones.
-    /// With `feeds`, only accounts one of those price feeds can affect. Returns false when the
-    /// event receiver is gone.
+    /// With `feeds`, only accounts one of those price feeds can affect. With `cash` (cash arrived
+    /// in a market), only the accounts last seen liquidatable, re-planned past their cooldown.
+    /// Returns false when the event receiver is gone.
     async fn poll(
         &mut self,
         i: usize,
         feeds: Option<&[Address]>,
+        cash: bool,
         tx: &mpsc::UnboundedSender<RunnerEvent>,
     ) -> bool {
         let slot = &self.slots[i];
         let accounts: Vec<AccountRef> = slot
             .at_risk
-            .keys()
+            .iter()
+            .filter(|(_, h)| !cash || h.liquidatable())
+            .map(|(a, _)| a)
             .filter(|a| feeds.is_none_or(|fs| fs.iter().any(|f| slot.adapter.affected(*f, a))))
             .copied()
             .collect();
@@ -582,7 +605,7 @@ impl Runner {
                 continue;
             }
             let cooldown = match self.last_plan.get(&h.account) {
-                Some((at, cd)) if at.elapsed() < *cd => continue,
+                Some((at, cd)) if at.elapsed() < *cd && !cash => continue,
                 Some((_, cd)) => (*cd * 2).min(REPLAN_COOLDOWN_MAX),
                 None => REPLAN_COOLDOWN,
             };
@@ -604,6 +627,7 @@ impl Runner {
 
     /// Mark adapters watching the feed contract `to` for a burst of re-polls.
     fn on_feed_tx(&mut self, st: &SequencedTx, tx: &mpsc::UnboundedSender<RunnerEvent>) {
+        self.on_cash_tx(st);
         let hits: Vec<usize> = self.feeds.matches_tx(st.to, &st.input).to_vec();
         let Some(feed) = self.feeds.matched_contract(st.to, &st.input) else {
             return;
@@ -672,6 +696,21 @@ impl Runner {
                 adapter: self.slots[i].adapter.id(),
                 lead: st.received.elapsed(),
             });
+        }
+    }
+
+    /// A transaction to a cash market (`cash_markets`): venues with a liquidatable account
+    /// re-poll those accounts on the burst offsets, past their cooldown. Venues with none skip
+    /// it (cash only matters to a position that is already liquidatable).
+    fn on_cash_tx(&mut self, st: &SequencedTx) {
+        let hits: Vec<usize> = self.cash.matches(st.to).to_vec();
+        for i in hits {
+            let slot = &mut self.slots[i];
+            if !slot.at_risk.values().any(Health::liquidatable) {
+                continue;
+            }
+            slot.cash_burst = Some((Instant::now(), 0));
+            debug!(protocol = slot.adapter.id(), tx = %st.hash, "cash-market transaction in sequencer feed");
         }
     }
 
@@ -778,7 +817,7 @@ impl Runner {
                 }
                 _ = fallback.tick() => {
                     for i in 0..self.slots.len() {
-                        if !self.poll(i, None, &tx).await { return; }
+                        if !self.poll(i, None, false, &tx).await { return; }
                     }
                 }
                 Some(st) = recv_feed(&mut feed) => self.on_feed_tx(&st, &tx),
@@ -796,16 +835,37 @@ impl Runner {
                         }
                         self.slots[i].burst = (next + 1 < self.cfg.burst_offsets.len()).then_some((start, next + 1));
                         let feeds = self.slots[i].burst_feeds.clone();
-                        if !self.poll(i, Some(&feeds), &tx).await { return; }
+                        if !self.poll(i, Some(&feeds), false, &tx).await { return; }
+                    }
+                    for i in 0..self.slots.len() {
+                        let Some((start, next)) = self.slots[i].cash_burst else { continue };
+                        let Some(offset) = self.cfg.burst_offsets.get(next) else {
+                            self.slots[i].cash_burst = None;
+                            continue;
+                        };
+                        if now.duration_since(start) < *offset {
+                            continue;
+                        }
+                        self.slots[i].cash_burst = (next + 1 < self.cfg.burst_offsets.len()).then_some((start, next + 1));
+                        if !self.poll(i, None, true, &tx).await { return; }
                     }
                     for i in 0..self.slots.len() {
                         let due = due_delayed(&mut self.slots[i], now);
-                        if !due.is_empty() && !self.poll(i, Some(&due), &tx).await { return; }
+                        if !due.is_empty() && !self.poll(i, Some(&due), false, &tx).await { return; }
                     }
                 }
             }
         }
     }
+}
+
+/// Contracts whose sequencer-feed transactions the runner wants: price feeds and cash markets.
+fn watched_set(feeds: &FeedWatcher<usize>, cash: &FeedWatcher<usize>) -> HashSet<Address> {
+    feeds
+        .contracts()
+        .into_iter()
+        .chain(cash.contracts())
+        .collect()
 }
 
 /// The watchlist document: per venue, the watched positions (closest to liquidation first) and,
@@ -964,6 +1024,9 @@ mod tests {
         fn affected(&self, feed: Address, _a: &AccountRef) -> bool {
             feed == self.feed
         }
+        fn cash_markets(&self) -> Vec<Address> {
+            vec![CASH_MARKET]
+        }
         /// Below $3000 (ETH/USD, 8 decimals) the fake account becomes liquidatable.
         fn predict(&self, feed: Address, answer: f64, _executor: Address) -> Vec<Plan> {
             if feed != self.feed || answer >= 3_000e8 {
@@ -993,6 +1056,40 @@ mod tests {
         fn assets(&self) -> Vec<Address> {
             vec![]
         }
+    }
+
+    /// The fake venue's cash market.
+    const CASH_MARKET: Address = Address::with_last_byte(0xca);
+
+    #[tokio::test]
+    async fn cash_arriving_replans_a_liquidatable_account_past_its_cooldown() {
+        let (hf, a) = fake(1.02, AdapterStatus::Live);
+        let mut r = Runner::new(cfg(), vec![a]);
+        assert!(r.watched_feed_set().read().unwrap().contains(&CASH_MARKET));
+        r.sweep(0).await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        // Healthy: cash arriving changes nothing, so no burst.
+        r.on_feed_tx(&sequenced(Some(CASH_MARKET)), &tx);
+        assert!(r.slots[0].cash_burst.is_none());
+
+        *hf.lock().unwrap() = 0.97;
+        assert!(r.poll(0, None, false, &tx).await);
+        assert!(matches!(rx.try_recv(), Ok(RunnerEvent::Plan(_))));
+        let acct = *r.slots[0].at_risk.keys().next().unwrap();
+        r.last_plan
+            .insert(acct, (Instant::now(), REPLAN_COOLDOWN_MAX));
+        assert!(r.poll(0, None, false, &tx).await);
+        assert!(rx.try_recv().is_err(), "cooling down");
+
+        // A transaction to the cash market starts a burst that re-plans despite the cooldown.
+        r.on_feed_tx(&sequenced(Some(CASH_MARKET)), &tx);
+        assert_eq!(r.slots[0].cash_burst.map(|b| b.1), Some(0));
+        assert!(r.poll(0, None, true, &tx).await);
+        assert!(matches!(rx.try_recv(), Ok(RunnerEvent::Plan(_))));
+        // Not a price feed: no feed trigger, no price burst.
+        assert!(rx.try_recv().is_err());
+        assert!(r.slots[0].burst.is_none());
     }
 
     fn cfg() -> RunnerConfig {
@@ -1257,7 +1354,7 @@ mod tests {
 
         // A failed venue stays degraded until its own full sweep succeeds.
         let (tx, _) = mpsc::unbounded_channel();
-        r.poll(1, None, &tx).await;
+        r.poll(1, None, false, &tx).await;
         assert!(
             !r.slots[1].confidence.load(Acquire),
             "subset poll cannot certify a failed full sweep"
@@ -1338,10 +1435,10 @@ mod tests {
         *hf.lock().unwrap() = 0.97;
         let (tx, mut rx) = mpsc::unbounded_channel();
         let other = Address::with_last_byte(0x01);
-        assert!(r.poll(0, Some(&[other]), &tx).await);
+        assert!(r.poll(0, Some(&[other]), false, &tx).await);
         assert!(rx.try_recv().is_err(), "unrelated feed must not re-poll");
         let watched = Address::with_last_byte(0xfe);
-        assert!(r.poll(0, Some(&[other, watched]), &tx).await);
+        assert!(r.poll(0, Some(&[other, watched]), false, &tx).await);
         assert!(matches!(rx.try_recv(), Ok(RunnerEvent::Plan(_))));
     }
 
@@ -1358,9 +1455,9 @@ mod tests {
 
         *hf.lock().unwrap() = 0.97; // price drops
         let (tx, mut rx) = mpsc::unbounded_channel();
-        assert!(r.poll(0, None, &tx).await);
+        assert!(r.poll(0, None, false, &tx).await);
         assert!(matches!(rx.try_recv(), Ok(RunnerEvent::Plan(_))));
-        assert!(r.poll(0, None, &tx).await);
+        assert!(r.poll(0, None, false, &tx).await);
         assert!(
             rx.try_recv().is_err(),
             "cooldown prevents immediate re-plan"
@@ -1375,12 +1472,12 @@ mod tests {
                 Duration::from_secs(40),
             ),
         );
-        assert!(r.poll(0, None, &tx).await);
+        assert!(r.poll(0, None, false, &tx).await);
         assert!(matches!(rx.try_recv(), Ok(RunnerEvent::Plan(_))));
         assert_eq!(r.last_plan[&acct].1, Duration::from_secs(80));
         // ...and the backoff resets once the account is healthy again.
         *hf.lock().unwrap() = 1.02;
-        assert!(r.poll(0, None, &tx).await);
+        assert!(r.poll(0, None, false, &tx).await);
         assert!(!r.last_plan.contains_key(&acct));
     }
 
