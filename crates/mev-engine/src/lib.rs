@@ -694,6 +694,7 @@ impl Engine {
                 "compound_v3": cfg.compound_v3.as_ref().filter(|c| c.enabled).map(|c| c.comets.iter().map(|m| format!("{:#x}", m.address)).collect::<Vec<_>>()),
                 "morpho_blue": cfg.morpho.as_ref().filter(|m| m.enabled).map(|m| format!("{:#x}", m.morpho)),
                 "moonwell": cfg.moonwell.as_ref().filter(|m| m.enabled).map(|m| format!("{:#x}", m.comptroller)),
+                "compound_v2": cfg.compound_v2.iter().filter(|f| f.enabled).map(|f| format!("{:#x}", f.comptroller)).collect::<Vec<_>>(),
                 "fluid_vaults": cfg.fluid.as_ref().filter(|f| f.enabled).map(|f| f.vaults.iter().map(|v| format!("{v:#x}")).collect::<Vec<_>>()),
             });
             let dexes: Vec<(String, String, Address)> = cfg
@@ -3568,6 +3569,21 @@ async fn build_liquidation(
         adapters.push(Box::new(
             mev_lending_moonwell::MoonwellAdapter::new(m, arpc.clone(), cache).await?,
         ));
+    }
+    // Other Compound v2 forks. One that fails to start (a fork that changed an interface) is
+    // logged and left out; the other lenders keep running.
+    for f in cfg.compound_v2.iter().filter(|f| f.enabled) {
+        let name = f
+            .name
+            .clone()
+            .unwrap_or_else(|| format!("{:#x}", f.comptroller));
+        let cache = data_dir.join(format!("{name}_borrowers.json"));
+        match mev_lending_moonwell::MoonwellAdapter::new(f.clone(), arpc.clone(), cache).await {
+            Ok(a) => adapters.push(Box::new(a)),
+            Err(e) => {
+                error!(protocol = %name, error = %format!("{e:#}"), "compound v2 fork disabled")
+            }
+        }
     }
     if let Some(f) = cfg.fluid.clone().filter(|f| f.enabled) {
         adapters.push(Box::new(

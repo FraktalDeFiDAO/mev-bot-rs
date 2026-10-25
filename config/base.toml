@@ -128,6 +128,15 @@ address = "0x784efeB622244d2348d4F2522f8860B96fbEcE89"   # AERO
 [[compound_v3.comets]]
 address = "0x2c776041CCFe903071AF44aa147368a9c8EEA518"   # USDS
 
+# Other Compound v2 forks (DECISIONS #181), through the Moonwell adapter (30-day `LiquidateBorrow` census, 2026-10-25).
+[[compound_v2]]
+name = "sonne"                   # 300+ liquidations in 30 days
+enabled = true
+comptroller = "0x1DB2466d9F5e10D7090E7152B68d62703a2245F0"
+from_block = 29940268            # first block with the comptroller's code
+scan_step = 500                  # Pocket's getLogs cap
+redeem_all = false
+
 # Fluid's resolver and DEX factory have the same addresses on Base as on Arbitrum (deterministic deployment; code
 # and vault list read on Base 2026-10-25).
 [fluid]

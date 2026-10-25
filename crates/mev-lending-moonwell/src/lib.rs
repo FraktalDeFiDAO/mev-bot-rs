@@ -107,6 +107,8 @@ struct Market {
 }
 
 pub struct MoonwellAdapter {
+    /// `moonwell`, or the fork's configured name.
+    id: ProtocolId,
     cfg: MoonwellConfig,
     rpc: AdapterRpc,
     markets: Vec<Market>,
@@ -122,6 +124,11 @@ pub struct MoonwellAdapter {
 
 impl MoonwellAdapter {
     pub async fn new(cfg: MoonwellConfig, rpc: AdapterRpc, cache_path: PathBuf) -> Result<Self> {
+        // Leaked once per adapter at startup: protocol ids are `&'static str` everywhere.
+        let id: ProtocolId = match &cfg.name {
+            Some(n) => Box::leak(n.clone().into_boxed_str()),
+            None => ID,
+        };
         let c = IComptroller::new(cfg.comptroller, rpc.fast.clone());
         let mtokens = c.getAllMarkets().call().await.context("getAllMarkets")?;
         let oracle = c.oracle().call().await.context("oracle")?;
@@ -145,7 +152,7 @@ impl MoonwellAdapter {
                 })
             })
             .collect();
-        anyhow::ensure!(!markets.is_empty(), "moonwell: no market answered");
+        anyhow::ensure!(!markets.is_empty(), "{id}: no market answered");
         let index = EventIndex::open(IndexConfig {
             addresses: markets.iter().map(|m| m.mtoken).collect(),
             topics: vec![IMToken::Borrow::SIGNATURE_HASH],
@@ -154,17 +161,17 @@ impl MoonwellAdapter {
             max_requests: 20,
             throttle: Duration::from_millis(500),
             cache_path,
-            name: ID,
+            name: id,
         });
         let (feeds, unlock_delay) = match resolve_feeds(&rpc.fast, oracle, &markets).await {
             Ok(f) => f,
             Err(e) => {
-                warn!(protocol = ID, error = %format!("{e:#}"), "price feeds not resolved; polling only");
+                warn!(protocol = id, error = %format!("{e:#}"), "price feeds not resolved; polling only");
                 (Vec::new(), Duration::ZERO)
             }
         };
         info!(
-            protocol = ID,
+            protocol = id,
             feeds = feeds.len(),
             unlock_delay_s = unlock_delay.as_secs(),
             markets = markets.len(),
@@ -172,9 +179,10 @@ impl MoonwellAdapter {
             close_factor = %close_factor,
             incentive = %incentive,
             borrowers = index.len(),
-            "moonwell adapter ready"
+            "compound v2 adapter ready"
         );
         Ok(Self {
+            id,
             cfg,
             rpc,
             markets,
@@ -317,6 +325,11 @@ fn kept_tokens(seize: U256, protocol_share: U256) -> U256 {
     seize - seize * protocol_share / U256::from(10u64).pow(U256::from(18u8))
 }
 
+/// mTokens to redeem where `redeem(max)` is not available: 1e-4 (and one unit) under `kept`.
+fn redeem_under(kept: U256) -> U256 {
+    kept.saturating_sub(kept / U256::from(10_000u64) + U256::from(1u8))
+}
+
 /// Most mTokens a liquidation may seize: what the borrower holds, and what the market's cash can
 /// redeem once the protocol's share is taken (`kept × rate / 1e18 <= cash`).
 fn seize_limit(balance: U256, cash: U256, rate: U256, protocol_share: U256) -> U256 {
@@ -331,7 +344,7 @@ fn seize_limit(balance: U256, cash: U256, rate: U256, protocol_share: U256) -> U
 #[async_trait]
 impl LiquidationAdapter for MoonwellAdapter {
     fn id(&self) -> ProtocolId {
-        ID
+        self.id
     }
 
     fn status(&self) -> AdapterStatus {
@@ -520,8 +533,16 @@ impl LiquidationAdapter for MoonwellAdapter {
         let collateral_out = kept_tokens(seize, coll_m.protocol_seize_share) * snap.exchangeRate
             / U256::from(10u64).pow(U256::from(18u8));
         let bonus_usd = usd(collateral_out, prices[&cm]) - usd(repay, prices[&dm]);
+        // Without `redeem(max)`, redeem a hair under the read-time seize: interest accrued inside
+        // `liquidateBorrow` raises the exchange rate and so lowers the seize slightly; 1e-4 covers
+        // about a day of accrual, and the rest stays in the executor as dust.
+        let redeem = if self.cfg.redeem_all {
+            REDEEM_ALL
+        } else {
+            redeem_under(kept_tokens(seize, coll_m.protocol_seize_share))
+        };
         Ok(Some(Plan {
-            protocol: ID,
+            protocol: self.id,
             account: h.account,
             debt_asset: debt_m.underlying,
             collateral_asset: coll_m.underlying,
@@ -545,7 +566,7 @@ impl LiquidationAdapter for MoonwellAdapter {
                 ProtocolCall {
                     target: cm,
                     data: IMToken::redeemCall {
-                        redeemTokens: REDEEM_ALL,
+                        redeemTokens: redeem,
                     }
                     .abi_encode()
                     .into(),
@@ -676,6 +697,15 @@ mod tests {
             U256::from(970_000u64)
         );
         assert_eq!(kept_tokens(U256::from(33u64), share), U256::from(33u64)); // 0.99 truncates to 0
+    }
+
+    #[test]
+    fn forks_redeem_a_hair_under_the_kept_seize() {
+        assert_eq!(
+            redeem_under(U256::from(1_000_000u64)),
+            U256::from(999_899u64)
+        );
+        assert_eq!(redeem_under(U256::ZERO), U256::ZERO);
     }
 
     #[test]
