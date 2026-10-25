@@ -136,6 +136,15 @@ auditor = "0x0Aeb0BCB919858C0a4dceC3EeD879985034A597c"
 from_block = 38135747            # first block with the Auditor's code
 scan_step = 500                  # Pocket's getLogs cap
 
+# Euler V2 (DECISIONS #183): 14 liquidations, $7.2k repaid in the 30 days to 2026-10-25; 452 vaults, 189 accept collateral. Addresses from euler-xyz/euler-interfaces (CoreAddresses.json).
+[euler]
+enabled = true
+evc = "0x5301c7dD20bD945D2013b48ed0DEE3A284ca8989"
+vault_factory = "0x7F321498A801A191a93C840750ed637149dDf8D0"
+usd_oracle = "0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156"   # Aave oracle: USD price of a vault's unit of account when it is a token
+from_block = 22285304           # the factory's first block with code
+scan_step = 500
+
 # Other Compound v2 forks (DECISIONS #181), through the Moonwell adapter (30-day `LiquidateBorrow` census, 2026-10-25).
 [[compound_v2]]
 name = "sonne"                   # 300+ liquidations in 30 days

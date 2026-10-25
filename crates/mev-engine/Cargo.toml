@@ -34,6 +34,7 @@ mev-lending-moonwell = { workspace = true }
 mev-oracle = { workspace = true }
 mev-lending-fluid = { workspace = true }
 mev-lending-exactly = { workspace = true }
+mev-lending-euler = { workspace = true }
 mev-lending-silo = { workspace = true }
 mev-lending-radiant = { workspace = true }
 mev-lending-spark = { workspace = true }
