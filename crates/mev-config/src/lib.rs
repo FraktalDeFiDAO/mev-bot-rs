@@ -945,19 +945,19 @@ mod tests {
         let l = c.liquidation.as_ref().unwrap();
         assert!(l.enabled);
         let m = c.morpho.as_ref().unwrap();
-        // The scan endpoint (Pocket) refuses getLogs over 50,000 blocks.
-        assert!(m.enabled && m.scan_step <= 50_000);
+        // The scan endpoint (Pocket) refuses getLogs over 500 blocks (50,000 until 2026-10).
+        assert!(m.enabled && m.scan_step <= 500);
         // Every Base lender with debt is watched (DECISIONS #180), each index under Pocket's cap.
         let a = c.aave.as_ref().unwrap();
-        assert!(a.enabled && a.scan_step <= 50_000);
+        assert!(a.enabled && a.scan_step <= 500);
         assert_eq!(a.manifest.as_ref().unwrap().chain_id, 8453);
         let cv3 = c.compound_v3.as_ref().unwrap();
-        assert!(cv3.enabled && cv3.scan_step <= 50_000 && cv3.comets.len() == 5);
+        assert!(cv3.enabled && cv3.scan_step <= 500 && cv3.comets.len() == 5);
         assert!(c.fluid.as_ref().is_some_and(|f| f.enabled && f.auto_vaults));
         assert!(
             c.moonwell
                 .as_ref()
-                .is_some_and(|m| m.enabled && m.scan_step <= 50_000)
+                .is_some_and(|m| m.enabled && m.scan_step <= 500)
         );
         // Aave's pool also lends what Balancer does not hold (wstETH, cbETH, ...).
         assert!(c.executor_aave_flash && c.aave_flash_pool.is_some());
