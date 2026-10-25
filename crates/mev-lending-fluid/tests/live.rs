@@ -24,7 +24,13 @@ async fn resolver_quotes_decode_for_configured_vaults() {
     )
     .unwrap();
     let c = cfg.fluid.unwrap();
-    let a = FluidAdapter::new(c.clone(), rpc()).await.unwrap();
+    let a = FluidAdapter::new(
+        c.clone(),
+        rpc(),
+        alloy::primitives::address!("82aF49447D8a07e3bd95BD0d56f35241523fBab1"),
+    )
+    .await
+    .unwrap();
     assert!(
         c.vaults.iter().all(|v| a.targets().contains(v)),
         "configured vaults are watched"

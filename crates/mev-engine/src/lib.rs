@@ -3571,7 +3571,8 @@ async fn build_liquidation(
     }
     if let Some(f) = cfg.fluid.clone().filter(|f| f.enabled) {
         adapters.push(Box::new(
-            mev_lending_fluid::FluidAdapter::new(f, arpc.clone()).await?,
+            mev_lending_fluid::FluidAdapter::new(f, arpc.clone(), cfg.token(&cfg.native_token)?)
+                .await?,
         ));
     }
     // Venues not live on this chain report their status; the runner logs and skips them.
