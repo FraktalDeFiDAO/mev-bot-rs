@@ -211,7 +211,8 @@ pub struct CometConfig {
     pub usd_feed: Option<Address>,
 }
 
-/// Moonwell (a Compound v2 fork) adapter: one comptroller, its markets are read on-chain.
+/// Moonwell (a Compound v2 fork) adapter: one comptroller, its markets are read on-chain. The same
+/// adapter serves every other Compound v2 fork (`[[compound_v2]]`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct MoonwellConfig {
     pub enabled: bool,
@@ -219,6 +220,18 @@ pub struct MoonwellConfig {
     /// Never scan `Borrow` events below this block (comptroller deployment).
     pub from_block: u64,
     pub scan_step: u64,
+    /// Protocol id in logs, events and the borrower cache name (`[[compound_v2]]` forks; Moonwell's
+    /// own section leaves it out and is `moonwell`).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `redeem(type(uint256).max)` redeems the whole balance (Moonwell). Forks without that redeem
+    /// a hair under the seize computed at the read instead (`false`).
+    #[serde(default = "default_true")]
+    pub redeem_all: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Compound III adapter.
@@ -679,6 +692,9 @@ pub struct ChainConfig {
     pub morpho: Option<MorphoConfig>,
     #[serde(default)]
     pub moonwell: Option<MoonwellConfig>,
+    /// Other Compound v2 forks, one comptroller each, through the Moonwell adapter.
+    #[serde(default)]
+    pub compound_v2: Vec<MoonwellConfig>,
     pub fluid: Option<FluidConfig>,
     #[serde(default)]
     pub presim: Option<PresimConfig>,
@@ -959,6 +975,12 @@ mod tests {
                 .as_ref()
                 .is_some_and(|m| m.enabled && m.scan_step <= 500)
         );
+        let sonne = c
+            .compound_v2
+            .iter()
+            .find(|f| f.name.as_deref() == Some("sonne"))
+            .unwrap();
+        assert!(sonne.enabled && !sonne.redeem_all && sonne.scan_step <= 500);
         // Aave's pool also lends what Balancer does not hold (wstETH, cbETH, ...).
         assert!(c.executor_aave_flash && c.aave_flash_pool.is_some());
         assert!(c.pending_reads && c.flashblocks_feed.is_some());
@@ -977,6 +999,18 @@ mod tests {
             c.aave.is_some() && c.compound_v3.is_some() && c.morpho.is_some() && c.fluid.is_some()
         );
         assert_eq!(c.pair_addresses().unwrap().len(), c.pairs.len());
+        // Compound v2 forks: unique names (each names its borrower cache), and none relies on
+        // Moonwell's `redeem(max)`.
+        let mut names: Vec<_> = c
+            .compound_v2
+            .iter()
+            .map(|f| f.name.clone().unwrap())
+            .collect();
+        assert!(names.len() >= 9);
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), c.compound_v2.len());
+        assert!(c.compound_v2.iter().all(|f| !f.redeem_all));
         assert_eq!(c.pga.max_tip_usd_per_tx, 1.0);
         assert!(c.pga.feed_min_bot_tip_gwei >= 0.02);
         assert!(

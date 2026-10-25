@@ -131,6 +131,82 @@ usd_oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"   # Aave oracle: loan-
 from_block = 250000000           # before Morpho Blue's Arbitrum deployment
 scan_step = 2000000
 
+# Other Compound v2 forks (DECISIONS #181), through the Moonwell adapter. Found by a 30-day census of every
+# `LiquidateBorrow` on Arbitrum (2026-10-25); each comptroller answered the adapter's reads. `from_block` is the
+# comptroller's first log; 100,000-block steps (arb1 caps multi-address getLogs there). Forks redeem a hair under
+# the seize (`redeem_all = false`). 30-day repaid volume in the comments.
+[[compound_v2]]
+name = "lodestar"                # $500, 300 liquidations (dust); one native market skipped
+enabled = true
+comptroller = "0xa86DD95c210dd186Fa7639F93E4177E97d057576"
+from_block = 111012987
+scan_step = 100000
+redeem_all = false
+
+[[compound_v2]]
+name = "solidlizard-lending"     # $764
+enabled = true
+comptroller = "0x9FfBdfcc508e76ee2b719eF6218879E938eF056C"
+from_block = 172068685
+scan_step = 100000
+redeem_all = false
+
+[[compound_v2]]
+name = "wepiggy"                 # $60
+enabled = true
+comptroller = "0xaa87715E858b482931eB2f6f92E504571588390b"
+from_block = 1
+scan_step = 100000
+redeem_all = false
+
+[[compound_v2]]
+name = "cozy"                    # 689 liquidations, 0.08 ETH in a 254-event sample (dust)
+enabled = true
+comptroller = "0x895879B2c1Fbb6CCFcD101f2D3F3c76363664f92"
+from_block = 5293593
+scan_step = 100000
+redeem_all = false
+
+[[compound_v2]]
+name = "hundred"                 # $19
+enabled = true
+comptroller = "0x0F390559F258eB8591C8e31Cf0905E97cf36ACE2"
+from_block = 1337154
+scan_step = 100000
+redeem_all = false
+
+[[compound_v2]]
+name = "cream"                   # $7
+enabled = true
+comptroller = "0xbadaC56c9aca307079e8B8FC699987AAc89813ee"
+from_block = 293435
+scan_step = 100000
+redeem_all = false
+
+[[compound_v2]]
+name = "neku"                    # 1 liquidation
+enabled = true
+comptroller = "0xD5B649c7d27C13a2b80425daEe8Cb6023015Dc6B"
+from_block = 1676058
+scan_step = 100000
+redeem_all = false
+
+[[compound_v2]]
+name = "venus-lst"               # Venus isolated pool (liquid staked ETH); 1 liquidation
+enabled = true
+comptroller = "0x52bAB1aF7Ff770551BD05b9FC2329a0Bf5E23F16"
+from_block = 245899857
+scan_step = 100000
+redeem_all = false
+
+[[compound_v2]]
+name = "venus-core"              # Venus core pool; no liquidation in the 30 days
+enabled = true
+comptroller = "0x317c1A5739F39046E20b08ac9BeEa3f10fD43326"
+from_block = 216184982
+scan_step = 100000
+redeem_all = false
+
 [fluid]
 enabled = true
 vault_resolver = "0xA5C3E16523eeeDDcC34706b0E6bE88b4c6EA95cC"
