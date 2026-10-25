@@ -229,6 +229,16 @@ fn net_after_flash(out: f64, flash: U256, fee: FlashFee) -> f64 {
     out - f64::from(flash + fee.on(flash))
 }
 
+/// A liquidation whose route quote (cached pool states, the same hops the executor runs) returns
+/// less than this share of the flash loan can only revert `NotProfitable`, so it is not simulated.
+/// The 10% margin absorbs quote error and pool moves since the cache; a real opportunity needs
+/// the quote above the whole loan plus gas.
+const LIQ_QUOTE_FLOOR: f64 = 0.9;
+
+fn quote_short(out: f64, flash: U256) -> bool {
+    out < f64::from(flash) * LIQ_QUOTE_FLOOR
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// Find and simulate opportunities; never send.
@@ -3177,9 +3187,9 @@ impl Engine {
         self.metrics.update(|c| c.liq_planned += 1);
         let Some(Precheck {
             hops,
-            base,
+            mut base,
             aave_pool,
-            ..
+            out,
         }) = self.liq_precheck(&plan).await
         else {
             return;
@@ -3187,6 +3197,13 @@ impl Engine {
         let Some(sim) = &self.sim else {
             return self.metrics.event("liq_candidate", base);
         };
+        // Known traps (Base USR, wbCOIN) sell for a fraction of the debt: every sweep re-planned
+        // them into a simulation that reverted `NotProfitable` (2,312 of 2,378 Base sims, 2026-10-24).
+        if quote_short(out, plan.flash_amount) {
+            base["quoted"] = json!(out);
+            base["flash"] = json!(f64::from(plan.flash_amount));
+            return self.metrics.event("liq_quote_short", base);
+        }
         let (profit, gas) = match sim
             .simulate_liquidation(&plan, &hops, U256::ZERO, aave_pool)
             .await
@@ -4077,5 +4094,20 @@ mod flash_fee_tests {
             net_after_flash(1_000_600.0, U256::from(1_000_000u64), aave),
             100.0
         );
+    }
+
+    #[test]
+    fn a_quote_far_below_the_loan_is_not_simulated() {
+        let flash = U256::from(1_000_000u64);
+        assert!(
+            quote_short(156_000.0, flash),
+            "USR-like: a fraction of the debt"
+        );
+        assert!(quote_short(899_999.0, flash));
+        assert!(
+            !quote_short(900_000.0, flash),
+            "within the margin: simulate"
+        );
+        assert!(!quote_short(1_050_000.0, flash));
     }
 }
