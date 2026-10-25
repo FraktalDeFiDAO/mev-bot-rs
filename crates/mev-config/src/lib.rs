@@ -937,7 +937,7 @@ mod tests {
     }
 
     #[test]
-    fn shipped_base_config_runs_morpho_on_public_endpoints_only() {
+    fn shipped_base_config_watches_every_lender_on_public_endpoints() {
         let c = ChainConfig::load(&repo_config().with_file_name("base.toml")).unwrap();
         assert_eq!(c.chain_id, 8453);
         assert!(c.sequencer_feed.is_none() && !c.atlas.enabled);
@@ -947,8 +947,19 @@ mod tests {
         let m = c.morpho.as_ref().unwrap();
         // The scan endpoint (Pocket) refuses getLogs over 50,000 blocks.
         assert!(m.enabled && m.scan_step <= 50_000);
-        assert!(c.aave.is_none(), "Base Aave is won by SVR auctions");
-        // ...but its pool still lends what Balancer does not hold (wstETH, cbETH, ...).
+        // Every Base lender with debt is watched (DECISIONS #180), each index under Pocket's cap.
+        let a = c.aave.as_ref().unwrap();
+        assert!(a.enabled && a.scan_step <= 50_000);
+        assert_eq!(a.manifest.as_ref().unwrap().chain_id, 8453);
+        let cv3 = c.compound_v3.as_ref().unwrap();
+        assert!(cv3.enabled && cv3.scan_step <= 50_000 && cv3.comets.len() == 5);
+        assert!(c.fluid.as_ref().is_some_and(|f| f.enabled && f.auto_vaults));
+        assert!(
+            c.moonwell
+                .as_ref()
+                .is_some_and(|m| m.enabled && m.scan_step <= 50_000)
+        );
+        // Aave's pool also lends what Balancer does not hold (wstETH, cbETH, ...).
         assert!(c.executor_aave_flash && c.aave_flash_pool.is_some());
         assert!(c.pending_reads && c.flashblocks_feed.is_some());
         assert_eq!(c.symbol(c.token("cbBTC").unwrap()), "cbBTC");

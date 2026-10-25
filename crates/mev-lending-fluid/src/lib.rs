@@ -29,8 +29,6 @@ use tracing::info;
 pub const ID: ProtocolId = "fluid";
 /// Fluid's marker for the chain's native token.
 pub const NATIVE: Address = address!("EeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE");
-/// Arbitrum WETH (native collateral arrives as ETH and is wrapped by the executor).
-pub const WETH: Address = address!("82aF49447D8a07e3bd95BD0d56f35241523fBab1");
 /// Accept up to 1% less collateral per unit debt than quoted (state moves between quote and tx).
 const SLIPPAGE: f64 = 0.99;
 const SLIPPAGE_NUM: u64 = 99;
@@ -135,9 +133,10 @@ pub async fn t1_vaults(
         .collect())
 }
 
-/// ERC20 used for routing/accounting for a Fluid token (native ETH -> WETH).
-pub fn erc20(token: Address) -> Address {
-    if token == NATIVE { WETH } else { token }
+/// ERC20 used for routing/accounting for a Fluid token: native ETH arrives as ETH and the executor
+/// wraps it, so it is the chain's `weth`.
+pub fn erc20(token: Address, weth: Address) -> Address {
+    if token == NATIVE { weth } else { token }
 }
 
 /// Minimum collateral per unit of debt, 1e18-scaled, with the slippage guard applied.
@@ -177,10 +176,12 @@ pub struct FluidAdapter {
     decimals: HashMap<Address, u8>,
     tokens: Vec<Address>,
     feeds: Vec<Address>,
+    /// The chain's wrapped native token (what native collateral is wrapped into).
+    weth: Address,
 }
 
 impl FluidAdapter {
-    pub async fn new(mut cfg: FluidConfig, rpc: AdapterRpc) -> Result<Self> {
+    pub async fn new(mut cfg: FluidConfig, rpc: AdapterRpc, weth: Address) -> Result<Self> {
         if cfg.auto_vaults {
             match t1_vaults(&rpc.fast, cfg.vault_resolver).await {
                 Ok(found) => {
@@ -201,11 +202,12 @@ impl FluidAdapter {
             decimals: HashMap::new(),
             tokens: vec![],
             feeds: vec![],
+            weth,
         };
         let quotes = me.quotes(true).await.context("Fluid resolver")?;
         let mut tokens: Vec<Address> = quotes
             .values()
-            .flat_map(|q| [erc20(q.debt_token), erc20(q.col_token)])
+            .flat_map(|q| [erc20(q.debt_token, weth), erc20(q.col_token, weth)])
             .collect();
         tokens.sort();
         tokens.dedup();
@@ -326,7 +328,7 @@ impl FluidAdapter {
     }
 
     fn usd(&self, token: Address, raw: f64, prices: &HashMap<Address, f64>) -> f64 {
-        let t = erc20(token);
+        let t = erc20(token, self.weth);
         // Unknown decimals: value it at 0 (unpriced, so it is skipped), never assume 18.
         let Some(dec) = self.decimals.get(&t).copied() else {
             return 0.0;
@@ -412,7 +414,7 @@ impl LiquidationAdapter for FluidAdapter {
             protocol: ID,
             account: h.account,
             debt_asset: q.debt_token,
-            collateral_asset: erc20(q.col_token),
+            collateral_asset: erc20(q.col_token, self.weth),
             flash_amount: debt_amt,
             dependencies: vec![],
             expected_collateral: q.col_out,
@@ -445,9 +447,10 @@ mod tests {
 
     #[test]
     fn native_eth_routes_as_weth() {
-        assert_eq!(erc20(NATIVE), WETH);
+        let weth = address!("4200000000000000000000000000000000000006");
+        assert_eq!(erc20(NATIVE, weth), weth);
         let usdc = address!("af88d065e77c8cC2239327C5EDb3A432268e5831");
-        assert_eq!(erc20(usdc), usdc);
+        assert_eq!(erc20(usdc, weth), usdc);
     }
 
     #[test]
