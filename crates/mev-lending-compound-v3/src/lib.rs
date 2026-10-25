@@ -35,7 +35,7 @@ use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
     ProtocolId,
 };
-use mev_lending_index::{EventIndex, IndexConfig, market_key, topic_address};
+use mev_lending_index::{BackgroundIndex, EventIndex, IndexConfig, market_key, topic_address};
 use mev_rpc::{call, decode, multicall};
 use tracing::{info, warn};
 
@@ -110,7 +110,7 @@ pub struct CompoundV3Adapter {
     cfg: CompoundV3Config,
     rpc: AdapterRpc,
     comets: Vec<Comet>,
-    index: EventIndex,
+    index: BackgroundIndex,
     /// Aggregator -> Comets whose collateral it prices.
     feeds: HashMap<Address, HashSet<Address>>,
     /// Aggregator -> (Comet, collateral asset) it prices (for repricing on a predicted update).
@@ -253,7 +253,7 @@ impl CompoundV3Adapter {
                 })
                 .collect()
         });
-        let index = EventIndex::open(IndexConfig {
+        let index = BackgroundIndex::new(EventIndex::open(IndexConfig {
             addresses: comets.iter().map(|c| c.address).collect(),
             topics: vec![IComet::Withdraw::SIGNATURE_HASH],
             from_block: cfg.from_block,
@@ -262,7 +262,7 @@ impl CompoundV3Adapter {
             throttle: Duration::from_millis(500),
             cache_path,
             name: ID,
-        });
+        }));
         info!(
             protocol = ID,
             comets = comets.len(),
@@ -652,17 +652,16 @@ impl LiquidationAdapter for CompoundV3Adapter {
 
     async fn index(&mut self) -> Result<bool> {
         // Withdraw(src indexed, to indexed, amount): base withdrawals create borrows for `src`.
-        self.index
-            .step(&self.rpc.scan, |l| {
-                topic_address(l, 1)
-                    .map(|src| vec![(market_key(l.address()), src)])
-                    .unwrap_or_default()
-            })
-            .await
+        Ok(self.index.run(&self.rpc.scan, move |l| {
+            topic_address(l, 1)
+                .map(|src| vec![(market_key(l.address()), src)])
+                .unwrap_or_default()
+        }))
     }
 
     fn accounts(&self) -> Vec<AccountRef> {
-        let borrowers = self.index.accounts().map(|(m, a)| AccountRef {
+        let known = self.index.accounts();
+        let borrowers = known.iter().map(|(m, a)| AccountRef {
             market: Address::from_word(*m),
             account: *a,
             sub_id: BORROWER,

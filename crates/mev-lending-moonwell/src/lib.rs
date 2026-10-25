@@ -42,7 +42,7 @@ use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
     ProtocolId, WatchDetail,
 };
-use mev_lending_index::{EventIndex, IndexConfig, market_key};
+use mev_lending_index::{BackgroundIndex, EventIndex, IndexConfig, market_key};
 use mev_rpc::{call, decode, multicall};
 use tracing::{info, warn};
 
@@ -115,7 +115,7 @@ pub struct MoonwellAdapter {
     oracle: Address,
     close_factor: U256,
     incentive: U256,
-    index: EventIndex,
+    index: BackgroundIndex,
     /// Aggregators behind the oracle's feeds (empty if they could not be resolved).
     feeds: Vec<Address>,
     /// Longest `maxRoundDelay` among the OEV-wrapped feeds.
@@ -153,7 +153,7 @@ impl MoonwellAdapter {
             })
             .collect();
         anyhow::ensure!(!markets.is_empty(), "{id}: no market answered");
-        let index = EventIndex::open(IndexConfig {
+        let index = BackgroundIndex::new(EventIndex::open(IndexConfig {
             addresses: markets.iter().map(|m| m.mtoken).collect(),
             topics: vec![IMToken::Borrow::SIGNATURE_HASH],
             from_block: cfg.from_block,
@@ -162,7 +162,7 @@ impl MoonwellAdapter {
             throttle: Duration::from_millis(500),
             cache_path,
             name: id,
-        });
+        }));
         let (feeds, unlock_delay) = match resolve_feeds(&rpc.fast, oracle, &markets).await {
             Ok(f) => f,
             Err(e) => {
@@ -202,7 +202,7 @@ impl MoonwellAdapter {
     /// Borrower -> markets it has borrowed from (from the index).
     fn borrowed(&self) -> HashMap<Address, Vec<Address>> {
         let mut out: HashMap<Address, Vec<Address>> = HashMap::new();
-        for (m, a) in self.index.accounts() {
+        for (m, a) in self.index.accounts().iter() {
             out.entry(*a).or_default().push(Address::from_word(*m));
         }
         out
@@ -354,20 +354,18 @@ impl LiquidationAdapter for MoonwellAdapter {
 
     async fn index(&mut self) -> Result<bool> {
         // Borrow(borrower, borrowAmount, accountBorrows, totalBorrows): nothing indexed.
-        self.index
-            .step(&self.rpc.scan, |l| {
-                let d = &l.data().data;
-                if d.len() < 32 {
-                    return Vec::new();
-                }
-                let borrower = Address::from_slice(&d[12..32]);
-                vec![(market_key(l.address()), borrower)]
-            })
-            .await
+        Ok(self.index.run(&self.rpc.scan, move |l| {
+            let d = &l.data().data;
+            if d.len() < 32 {
+                return Vec::new();
+            }
+            let borrower = Address::from_slice(&d[12..32]);
+            vec![(market_key(l.address()), borrower)]
+        }))
     }
 
     fn accounts(&self) -> Vec<AccountRef> {
-        let borrowers: HashSet<Address> = self.index.accounts().map(|(_, a)| *a).collect();
+        let borrowers: HashSet<Address> = self.index.accounts().iter().map(|(_, a)| *a).collect();
         borrowers
             .into_iter()
             .map(|a| AccountRef {
