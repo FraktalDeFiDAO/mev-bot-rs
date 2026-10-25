@@ -694,6 +694,7 @@ impl Engine {
                 "compound_v3": cfg.compound_v3.as_ref().filter(|c| c.enabled).map(|c| c.comets.iter().map(|m| format!("{:#x}", m.address)).collect::<Vec<_>>()),
                 "morpho_blue": cfg.morpho.as_ref().filter(|m| m.enabled).map(|m| format!("{:#x}", m.morpho)),
                 "moonwell": cfg.moonwell.as_ref().filter(|m| m.enabled).map(|m| format!("{:#x}", m.comptroller)),
+                "exactly": cfg.exactly.as_ref().filter(|x| x.enabled).map(|x| format!("{:#x}", x.auditor)),
                 "compound_v2": cfg.compound_v2.iter().filter(|f| f.enabled).map(|f| format!("{:#x}", f.comptroller)).collect::<Vec<_>>(),
                 "fluid_vaults": cfg.fluid.as_ref().filter(|f| f.enabled).map(|f| f.vaults.iter().map(|v| format!("{v:#x}")).collect::<Vec<_>>()),
             });
@@ -3568,6 +3569,12 @@ async fn build_liquidation(
         let cache = data_dir.join("moonwell_borrowers.json");
         adapters.push(Box::new(
             mev_lending_moonwell::MoonwellAdapter::new(m, arpc.clone(), cache).await?,
+        ));
+    }
+    if let Some(x) = cfg.exactly.clone().filter(|x| x.enabled) {
+        let cache = data_dir.join("exactly_borrowers.json");
+        adapters.push(Box::new(
+            mev_lending_exactly::ExactlyAdapter::new(x, arpc.clone(), cache).await?,
         ));
     }
     // Other Compound v2 forks. One that fails to start (a fork that changed an interface) is

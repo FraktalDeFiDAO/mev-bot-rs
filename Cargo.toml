@@ -58,6 +58,7 @@ mev-lending-dolomite = { path = "crates/mev-lending-dolomite" }
 mev-lending-morpho = { path = "crates/mev-lending-morpho" }
 mev-lending-moonwell = { path = "crates/mev-lending-moonwell" }
 mev-lending-fluid = { path = "crates/mev-lending-fluid" }
+mev-lending-exactly = { path = "crates/mev-lending-exactly" }
 mev-lending-compound-v3 = { path = "crates/mev-lending-compound-v3" }
 mev-lending-silo = { path = "crates/mev-lending-silo" }
 mev-lending-aave-v3 = { path = "crates/mev-lending-aave-v3" }

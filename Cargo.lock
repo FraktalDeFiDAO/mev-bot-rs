@@ -3338,6 +3338,7 @@ dependencies = [
  "mev-lending-aave-v3",
  "mev-lending-compound-v3",
  "mev-lending-dolomite",
+ "mev-lending-exactly",
  "mev-lending-fluid",
  "mev-lending-gearbox",
  "mev-lending-moonwell",
@@ -3459,6 +3460,22 @@ dependencies = [
  "async-trait",
  "mev-lending",
  "tokio",
+]
+
+[[package]]
+name = "mev-lending-exactly"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "async-trait",
+ "mev-config",
+ "mev-lending",
+ "mev-lending-index",
+ "mev-oracle",
+ "mev-rpc",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
