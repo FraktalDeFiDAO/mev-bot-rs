@@ -32,7 +32,7 @@ use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
     ProtocolId, WatchDetail,
 };
-use mev_lending_index::{EventIndex, IndexConfig, market_key, topic_address};
+use mev_lending_index::{BackgroundIndex, EventIndex, IndexConfig, market_key, topic_address};
 use mev_rpc::{call, decode, multicall};
 use tracing::{info, warn};
 
@@ -86,7 +86,7 @@ pub struct ExactlyAdapter {
     markets: Vec<Market>,
     /// Liquidator and lenders incentives (fractions, 0.05 = 5%).
     incentive: (f64, f64),
-    index: EventIndex,
+    index: BackgroundIndex,
     feeds: Vec<Address>,
 }
 
@@ -120,7 +120,7 @@ impl ExactlyAdapter {
             })
             .collect();
         anyhow::ensure!(!markets.is_empty(), "exactly: no listed market answered");
-        let index = EventIndex::open(IndexConfig {
+        let index = BackgroundIndex::new(EventIndex::open(IndexConfig {
             addresses: markets.iter().map(|m| m.market).collect(),
             topics: vec![
                 IMarket::Borrow::SIGNATURE_HASH,
@@ -132,7 +132,7 @@ impl ExactlyAdapter {
             throttle: Duration::from_millis(500),
             cache_path,
             name: ID,
-        });
+        }));
         let sources: Vec<Address> = markets
             .iter()
             .map(|m| m.price_feed)
@@ -225,17 +225,15 @@ impl LiquidationAdapter for ExactlyAdapter {
     async fn index(&mut self) -> Result<bool> {
         // Borrow(caller, receiver, borrower, ...) and BorrowAtMaturity(maturity, receiver, borrower, ...):
         // the borrower is topic 3 in both.
-        self.index
-            .step(&self.rpc.scan, |l| {
-                topic_address(l, 3)
-                    .map(|b| vec![(market_key(l.address()), b)])
-                    .unwrap_or_default()
-            })
-            .await
+        Ok(self.index.run(&self.rpc.scan, move |l| {
+            topic_address(l, 3)
+                .map(|b| vec![(market_key(l.address()), b)])
+                .unwrap_or_default()
+        }))
     }
 
     fn accounts(&self) -> Vec<AccountRef> {
-        let borrowers: HashSet<Address> = self.index.accounts().map(|(_, a)| *a).collect();
+        let borrowers: HashSet<Address> = self.index.accounts().iter().map(|(_, a)| *a).collect();
         borrowers
             .into_iter()
             .map(|a| AccountRef {

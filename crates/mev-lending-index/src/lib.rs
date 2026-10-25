@@ -10,7 +10,10 @@
 //! recorded as a coverage gap and retried on later steps instead of aborting the step; block-hash
 //! ancestry detects reorgs and rewinds the forward cursor to the common ancestor.
 
+pub mod background;
 pub mod scanner;
+
+pub use background::BackgroundIndex;
 
 use std::{
     collections::BTreeSet,

@@ -241,3 +241,39 @@ async fn a_lagging_backend_that_lacks_the_tip_does_not_trigger_a_rewind() {
     );
     assert_eq!(idx.len(), 1);
 }
+
+#[tokio::test]
+async fn a_background_index_never_blocks_its_caller_and_publishes_what_it_finds() {
+    // 1,000 blocks in 10-block requests with a throttle: a synchronous step would take seconds.
+    let node = FakeNode::start(NodeState {
+        blocks: chain(1, 1, 1_000),
+        logs: vec![raw_log(1, 900, acct(1), 0), raw_log(1, 40, acct(2), 0)],
+        ..Default::default()
+    })
+    .await;
+    let p = mev_rpc::http_provider(&node.url).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = cfg(dir.path(), 10, 5);
+    c.throttle = Duration::from_millis(20);
+    let mut idx = mev_lending_index::BackgroundIndex::new(EventIndex::open(c));
+    let started = std::time::Instant::now();
+    assert!(!idx.run(&p, extract), "history is not complete yet");
+    assert!(
+        started.elapsed() < Duration::from_millis(50),
+        "run returns at once"
+    );
+    // An account learned elsewhere is visible at once and survives the scan.
+    let extra = (market_key(POOL), acct(9));
+    idx.insert(extra);
+    assert!(idx.accounts().contains(&extra));
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !idx.run(&p, extract) {
+        assert!(std::time::Instant::now() < deadline, "back-fill finished");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let found = idx.accounts();
+    assert!(found.contains(&(market_key(POOL), acct(1))));
+    assert!(found.contains(&(market_key(POOL), acct(2))));
+    assert!(found.contains(&extra), "the edit reached the index");
+    assert!(idx.remove(&extra) && !idx.accounts().contains(&extra));
+}

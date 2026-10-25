@@ -29,7 +29,7 @@ use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
     ProtocolId,
 };
-use mev_lending_index::{EventIndex, IndexConfig, market_key, topic_address};
+use mev_lending_index::{BackgroundIndex, EventIndex, IndexConfig, market_key, topic_address};
 use mev_rpc::{call, decode, multicall};
 use tracing::{info, warn};
 
@@ -66,7 +66,7 @@ pub struct AaveV3Adapter {
     id: ProtocolId,
     cfg: AaveConfig,
     rpc: AdapterRpc,
-    index: EventIndex,
+    index: BackgroundIndex,
     reserves: Vec<Address>,
     decimals: HashMap<Address, u8>,
     /// Aggregator -> `UserConfigurationMap` bits of the reserves it prices.
@@ -102,7 +102,7 @@ impl AaveV3Adapter {
             None => ID,
         };
         migrate_v1_cache(&cache_path, cfg.pool);
-        let index = EventIndex::open(IndexConfig {
+        let index = BackgroundIndex::new(EventIndex::open(IndexConfig {
             addresses: vec![cfg.pool],
             topics: vec![IAavePool::Borrow::SIGNATURE_HASH],
             from_block: cfg.from_block,
@@ -111,7 +111,7 @@ impl AaveV3Adapter {
             throttle: Duration::from_millis(500),
             cache_path,
             name: id,
-        });
+        }));
         let reserves = IAavePool::new(cfg.pool, &rpc.fast)
             .getReservesList()
             .call()
@@ -229,7 +229,7 @@ impl AaveV3Adapter {
             repo,
         )
         .await?;
-        let known: Vec<Address> = self.index.accounts().map(|(_, u)| *u).collect();
+        let known: Vec<Address> = self.index.accounts().iter().map(|(_, u)| *u).collect();
         let n = t.import_known_borrowers(&known)?;
         info!(protocol = self.id, imported = n, "trigger indexer attached");
         self.price_marker = Some(t.marker());
@@ -539,14 +539,11 @@ impl LiquidationAdapter for AaveV3Adapter {
     async fn index(&mut self) -> Result<bool> {
         let pool = self.cfg.pool;
         // Borrow(reserve, user, onBehalfOf indexed, ...): the debt belongs to onBehalfOf (topic 2).
-        let done = self
-            .index
-            .step(&self.rpc.scan, |l| {
-                topic_address(l, 2)
-                    .map(|u| vec![(market_key(pool), u)])
-                    .unwrap_or_default()
-            })
-            .await?;
+        let done = self.index.run(&self.rpc.scan, move |l| {
+            topic_address(l, 2)
+                .map(|u| vec![(market_key(pool), u)])
+                .unwrap_or_default()
+        });
         // Dependency indexing is best effort here: its failures are reported, never fatal to the
         // existing sweep. (Errors inside it are also surfaced as gaps/warnings in the repository.)
         if let Some(t) = &mut self.triggers
@@ -560,6 +557,7 @@ impl LiquidationAdapter for AaveV3Adapter {
     fn accounts(&self) -> Vec<AccountRef> {
         self.index
             .accounts()
+            .iter()
             .map(|(_, u)| self.account(*u))
             .collect()
     }

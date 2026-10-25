@@ -31,7 +31,7 @@ use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
     ProtocolId, WatchDetail,
 };
-use mev_lending_index::{EventIndex, IndexConfig, topic_address};
+use mev_lending_index::{BackgroundIndex, EventIndex, IndexConfig, topic_address};
 use mev_rpc::{call, decode, multicall};
 use tracing::{info, warn};
 
@@ -119,7 +119,7 @@ struct MarketState {
 pub struct MorphoAdapter {
     cfg: MorphoConfig,
     rpc: AdapterRpc,
-    index: EventIndex,
+    index: BackgroundIndex,
     params: Mutex<HashMap<B256, Params>>,
     decimals: Mutex<HashMap<Address, u8>>,
     /// Aggregator -> short ids of markets whose oracle reads it.
@@ -177,7 +177,7 @@ pub fn short_id(id: &B256) -> u64 {
 
 impl MorphoAdapter {
     pub async fn new(cfg: MorphoConfig, rpc: AdapterRpc, cache_path: PathBuf) -> Result<Self> {
-        let index = EventIndex::open(IndexConfig {
+        let index = BackgroundIndex::new(EventIndex::open(IndexConfig {
             addresses: vec![cfg.morpho],
             topics: vec![IMorpho::Borrow::SIGNATURE_HASH],
             from_block: cfg.from_block,
@@ -186,7 +186,7 @@ impl MorphoAdapter {
             throttle: Duration::from_millis(500),
             cache_path,
             name: ID,
-        });
+        }));
         let me = Self {
             cfg,
             rpc,
@@ -264,6 +264,7 @@ impl MorphoAdapter {
     fn market_ids(&self) -> Vec<B256> {
         self.index
             .accounts()
+            .iter()
             .map(|(id, _)| *id)
             .collect::<HashSet<_>>()
             .into_iter()
@@ -411,15 +412,12 @@ impl LiquidationAdapter for MorphoAdapter {
 
     async fn index(&mut self) -> Result<bool> {
         // Borrow(id indexed, caller, onBehalf indexed, receiver indexed, ...): debt is onBehalf's.
-        let done = self
-            .index
-            .step(&self.rpc.scan, |l| {
-                match (l.topics().get(1), topic_address(l, 2)) {
-                    (Some(id), Some(user)) => vec![(*id, user)],
-                    _ => vec![],
-                }
-            })
-            .await?;
+        let done = self.index.run(&self.rpc.scan, move |l| {
+            match (l.topics().get(1), topic_address(l, 2)) {
+                (Some(id), Some(user)) => vec![(*id, user)],
+                _ => vec![],
+            }
+        });
         let ids = self.market_ids();
         let due = self.feeds_at.is_none_or(|t| t.elapsed() >= FEED_REFRESH);
         if ids.len() > self.feeds_markets && due {
@@ -451,6 +449,7 @@ impl LiquidationAdapter for MorphoAdapter {
         let unpriced = self.unpriced.lock().unwrap().clone();
         self.index
             .accounts()
+            .iter()
             .map(|(id, u)| AccountRef {
                 market: morpho,
                 account: *u,

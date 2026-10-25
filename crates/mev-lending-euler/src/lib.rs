@@ -36,7 +36,7 @@ use mev_lending::{
     AccountRef, AdapterRpc, AdapterStatus, Health, LiquidationAdapter, Plan, ProtocolCall,
     ProtocolId,
 };
-use mev_lending_index::{EventIndex, IndexConfig, market_key, topic_address};
+use mev_lending_index::{BackgroundIndex, EventIndex, IndexConfig, market_key, topic_address};
 use mev_rpc::{call, decode, multicall};
 use tracing::info;
 
@@ -112,7 +112,7 @@ pub struct EulerAdapter {
     assets: Vec<Address>,
     /// Decimals of non-USD units of account.
     unit_decimals: HashMap<Address, u8>,
-    index: EventIndex,
+    index: BackgroundIndex,
 }
 
 impl EulerAdapter {
@@ -183,7 +183,7 @@ impl EulerAdapter {
             .collect();
         let mut watched: Vec<Address> = vaults.keys().copied().collect();
         watched.sort_unstable();
-        let index = EventIndex::open(IndexConfig {
+        let index = BackgroundIndex::new(EventIndex::open(IndexConfig {
             addresses: watched,
             topics: vec![IEVault::Borrow::SIGNATURE_HASH],
             from_block: cfg.from_block,
@@ -192,7 +192,7 @@ impl EulerAdapter {
             throttle: Duration::from_millis(500),
             cache_path,
             name: ID,
-        });
+        }));
         info!(
             protocol = ID,
             vaults = all.len(),
@@ -276,19 +276,18 @@ impl LiquidationAdapter for EulerAdapter {
     }
 
     async fn index(&mut self) -> Result<bool> {
-        self.index
-            .step(&self.rpc.scan, |l| {
-                topic_address(l, 1)
-                    .map(|a| vec![(market_key(l.address()), a)])
-                    .unwrap_or_default()
-            })
-            .await
+        Ok(self.index.run(&self.rpc.scan, move |l| {
+            topic_address(l, 1)
+                .map(|a| vec![(market_key(l.address()), a)])
+                .unwrap_or_default()
+        }))
     }
 
     fn accounts(&self) -> Vec<AccountRef> {
         let mut out: Vec<AccountRef> = self
             .index
             .accounts()
+            .iter()
             .map(|(m, a)| AccountRef {
                 market: Address::from_word(*m),
                 account: *a,
