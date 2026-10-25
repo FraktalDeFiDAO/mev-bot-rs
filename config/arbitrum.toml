@@ -131,6 +131,15 @@ usd_oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"   # Aave oracle: loan-
 from_block = 250000000           # before Morpho Blue's Arbitrum deployment
 scan_step = 2000000
 
+# Euler V2 (DECISIONS #183): 3 liquidations, $150 repaid in the 30 days to 2026-10-25; 193 vaults. Addresses from euler-xyz/euler-interfaces (CoreAddresses.json).
+[euler]
+enabled = true
+evc = "0x6302ef0F34100CDDFb5489fbcB6eE1AA95CD1066"
+vault_factory = "0x78Df1CF5bf06a7f27f2ACc580B934238C1b80D50"
+usd_oracle = "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7"   # Aave oracle: USD price of a vault's unit of account when it is a token
+from_block = 300690953           # the factory's first log
+scan_step = 100000
+
 # Other Compound v2 forks (DECISIONS #181), through the Moonwell adapter. Found by a 30-day census of every
 # `LiquidateBorrow` on Arbitrum (2026-10-25); each comptroller answered the adapter's reads. `from_block` is the
 # comptroller's first log; 100,000-block steps (arb1 caps multi-address getLogs there). Forks redeem a hair under

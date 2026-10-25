@@ -1,0 +1,23 @@
+[package]
+name = "mev-lending-euler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+alloy = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+mev-config = { workspace = true }
+mev-lending = { workspace = true }
+mev-lending-index = { workspace = true }
+mev-rpc = { workspace = true }
+mev-bindings = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lib]
+doctest = false  # no doc examples: skip the empty doc-test runner

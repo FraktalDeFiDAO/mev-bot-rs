@@ -234,6 +234,19 @@ fn default_true() -> bool {
     true
 }
 
+/// Euler V2 (Euler Vault Kit) adapter: the vaults the EVK factory lists, through the EVC.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EulerConfig {
+    pub enabled: bool,
+    pub evc: Address,
+    pub vault_factory: Address,
+    /// Asset -> USD oracle (8 decimals) for vaults whose unit of account is a token.
+    pub usd_oracle: Address,
+    /// Never scan borrow events below this block (factory deployment).
+    pub from_block: u64,
+    pub scan_step: u64,
+}
+
 /// Exactly Protocol adapter: one Auditor, its markets are read on-chain.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExactlyConfig {
@@ -704,6 +717,8 @@ pub struct ChainConfig {
     pub moonwell: Option<MoonwellConfig>,
     #[serde(default)]
     pub exactly: Option<ExactlyConfig>,
+    #[serde(default)]
+    pub euler: Option<EulerConfig>,
     /// Other Compound v2 forks, one comptroller each, through the Moonwell adapter.
     #[serde(default)]
     pub compound_v2: Vec<MoonwellConfig>,
@@ -991,6 +1006,11 @@ mod tests {
             c.exactly
                 .as_ref()
                 .is_some_and(|x| x.enabled && x.scan_step <= 500)
+        );
+        assert!(
+            c.euler
+                .as_ref()
+                .is_some_and(|e| e.enabled && e.scan_step <= 500)
         );
         let sonne = c
             .compound_v2
