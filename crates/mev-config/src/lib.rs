@@ -234,6 +234,16 @@ fn default_true() -> bool {
     true
 }
 
+/// Exactly Protocol adapter: one Auditor, its markets are read on-chain.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExactlyConfig {
+    pub enabled: bool,
+    pub auditor: Address,
+    /// Never scan borrow events below this block (Auditor deployment).
+    pub from_block: u64,
+    pub scan_step: u64,
+}
+
 /// Compound III adapter.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CompoundV3Config {
@@ -692,6 +702,8 @@ pub struct ChainConfig {
     pub morpho: Option<MorphoConfig>,
     #[serde(default)]
     pub moonwell: Option<MoonwellConfig>,
+    #[serde(default)]
+    pub exactly: Option<ExactlyConfig>,
     /// Other Compound v2 forks, one comptroller each, through the Moonwell adapter.
     #[serde(default)]
     pub compound_v2: Vec<MoonwellConfig>,
@@ -974,6 +986,11 @@ mod tests {
             c.moonwell
                 .as_ref()
                 .is_some_and(|m| m.enabled && m.scan_step <= 500)
+        );
+        assert!(
+            c.exactly
+                .as_ref()
+                .is_some_and(|x| x.enabled && x.scan_step <= 500)
         );
         let sonne = c
             .compound_v2

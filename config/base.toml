@@ -129,6 +129,13 @@ address = "0x784efeB622244d2348d4F2522f8860B96fbEcE89"   # AERO
 [[compound_v3.comets]]
 address = "0x2c776041CCFe903071AF44aa147368a9c8EEA518"   # USDS
 
+# Exactly Protocol (DECISIONS #182): 125 liquidations, $21.6k repaid in the 30 days to 2026-10-25, by 2 liquidators.
+[exactly]
+enabled = true
+auditor = "0x0Aeb0BCB919858C0a4dceC3EeD879985034A597c"
+from_block = 38135747            # first block with the Auditor's code
+scan_step = 500                  # Pocket's getLogs cap
+
 # Other Compound v2 forks (DECISIONS #181), through the Moonwell adapter (30-day `LiquidateBorrow` census, 2026-10-25).
 [[compound_v2]]
 name = "sonne"                   # 300+ liquidations in 30 days

@@ -105,6 +105,7 @@ mev-bot/
 | L2 | `mev-lending-compound-v3` | Compound III adapter (Live): absorb + buyCollateral, storefront purchases; pure Comet math |
 | L2 | `mev-lending-morpho` | Morpho Blue adapter (Live); pure Morpho math |
 | L2 | `mev-lending-fluid` | Fluid vaults adapter (Live, resolver-driven); native-ETH collateral via executor wrapping |
+| L2 | `mev-lending-exactly` | Exactly Protocol adapter (Base): Auditor-sized `liquidate(borrower, repay, seizeMarket)` |
 | L2 | `mev-lending-silo` | Silo v2 — Inactive (≈ $0.09 total debt on Arbitrum); verified addresses + plan |
 | L2 | `mev-lending-dolomite`, `mev-lending-gearbox` | AuditPending — verified facts + go-live checklists |
 | L2 | `mev-lending-radiant`, `mev-lending-spark` | Inactive (halted after exploits / no SparkLend on Arbitrum) |
