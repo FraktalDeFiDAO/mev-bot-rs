@@ -62,6 +62,8 @@ pub fn reserve_bits(id: u16) -> U256 {
 }
 
 pub struct AaveV3Adapter {
+    /// `aave-v3`, or the fork's configured name.
+    id: ProtocolId,
     cfg: AaveConfig,
     rpc: AdapterRpc,
     index: EventIndex,
@@ -94,6 +96,11 @@ struct Snapshot {
 
 impl AaveV3Adapter {
     pub async fn new(cfg: AaveConfig, rpc: AdapterRpc, cache_path: PathBuf) -> Result<Self> {
+        // Leaked once per adapter at startup: protocol ids are `&'static str` everywhere.
+        let id: ProtocolId = match &cfg.name {
+            Some(n) => Box::leak(n.clone().into_boxed_str()),
+            None => ID,
+        };
         migrate_v1_cache(&cache_path, cfg.pool);
         let index = EventIndex::open(IndexConfig {
             addresses: vec![cfg.pool],
@@ -103,7 +110,7 @@ impl AaveV3Adapter {
             max_requests: 20,
             throttle: Duration::from_millis(500),
             cache_path,
-            name: ID,
+            name: id,
         });
         let reserves = IAavePool::new(cfg.pool, &rpc.fast)
             .getReservesList()
@@ -184,13 +191,14 @@ impl AaveV3Adapter {
             }
         }
         info!(
-            protocol = ID,
+            protocol = id,
             reserves = reserves.len(),
             price_feeds = feed_masks.len(),
             borrowers_cached = index.len(),
             "adapter ready"
         );
         Ok(Self {
+            id,
             cfg,
             rpc,
             index,
@@ -223,7 +231,7 @@ impl AaveV3Adapter {
         .await?;
         let known: Vec<Address> = self.index.accounts().map(|(_, u)| *u).collect();
         let n = t.import_known_borrowers(&known)?;
-        info!(protocol = ID, imported = n, "trigger indexer attached");
+        info!(protocol = self.id, imported = n, "trigger indexer attached");
         self.price_marker = Some(t.marker());
         self.triggers = Some(t);
         Ok(())
@@ -298,7 +306,7 @@ impl AaveV3Adapter {
                     }
                 }
             }
-            Err(e) => warn!(protocol = ID, error = %format!("{e:#}"), "user reserve bitmaps"),
+            Err(e) => warn!(protocol = self.id, error = %format!("{e:#}"), "user reserve bitmaps"),
         }
     }
 
@@ -461,7 +469,7 @@ impl AaveV3Adapter {
                     answers,
                 };
             }
-            Err(e) => warn!(protocol = ID, error = %format!("{e:#}"), "prediction snapshot"),
+            Err(e) => warn!(protocol = self.id, error = %format!("{e:#}"), "prediction snapshot"),
         }
     }
 
@@ -493,7 +501,7 @@ impl AaveV3Adapter {
         }
         .abi_encode();
         Some(Plan {
-            protocol: ID,
+            protocol: self.id,
             account,
             debt_asset: p.debt,
             collateral_asset: p.collateral,
@@ -521,7 +529,7 @@ fn flash_amount(debt: U256) -> Option<U256> {
 #[async_trait]
 impl LiquidationAdapter for AaveV3Adapter {
     fn id(&self) -> ProtocolId {
-        ID
+        self.id
     }
 
     fn status(&self) -> AdapterStatus {
@@ -544,7 +552,7 @@ impl LiquidationAdapter for AaveV3Adapter {
         if let Some(t) = &mut self.triggers
             && let Err(e) = t.step().await
         {
-            warn!(protocol = ID, error = %format!("{e:#}"), "trigger index step");
+            warn!(protocol = self.id, error = %format!("{e:#}"), "trigger index step");
         }
         Ok(done)
     }

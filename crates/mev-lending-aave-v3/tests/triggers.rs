@@ -362,6 +362,7 @@ struct Rig {
 fn aave_cfg(manifest: Option<AaveManifest>) -> AaveConfig {
     AaveConfig {
         enabled: true,
+        name: None,
         pool: POOL,
         data_provider: Address::ZERO,
         oracle: ORACLE,

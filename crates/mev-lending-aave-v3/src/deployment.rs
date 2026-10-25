@@ -187,6 +187,7 @@ mod tests {
     fn cfg() -> AaveConfig {
         AaveConfig {
             enabled: true,
+            name: None,
             pool: POOL,
             data_provider: Address::ZERO,
             oracle: ORACLE,

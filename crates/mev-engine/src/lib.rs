@@ -696,6 +696,7 @@ impl Engine {
                 "moonwell": cfg.moonwell.as_ref().filter(|m| m.enabled).map(|m| format!("{:#x}", m.comptroller)),
                 "exactly": cfg.exactly.as_ref().filter(|x| x.enabled).map(|x| format!("{:#x}", x.auditor)),
                 "euler_v2": cfg.euler.as_ref().filter(|e| e.enabled).map(|e| format!("{:#x}", e.evc)),
+                "aave_forks": cfg.aave_forks.iter().filter(|f| f.enabled).map(|f| format!("{:#x}", f.pool)).collect::<Vec<_>>(),
                 "compound_v2": cfg.compound_v2.iter().filter(|f| f.enabled).map(|f| format!("{:#x}", f.comptroller)).collect::<Vec<_>>(),
                 "fluid_vaults": cfg.fluid.as_ref().filter(|f| f.enabled).map(|f| f.vaults.iter().map(|v| format!("{v:#x}")).collect::<Vec<_>>()),
             });
@@ -3552,6 +3553,23 @@ async fn build_liquidation(
                 "ALERT: Aave deployment check failed; Aave liquidations disabled (live). \
                  Re-pin [aave.manifest] after verifying the upgrade, then restart"
             );
+        }
+    }
+    // Aave v3 forks: the same deployment pin, per fork. A fork that fails to start or whose pin
+    // fails (live) is logged and left out; the other lenders keep running.
+    for f in cfg.aave_forks.iter().filter(|f| f.enabled) {
+        let name = f.name.clone().unwrap_or_else(|| format!("{:#x}", f.pool));
+        let pinned = mev_lending_aave_v3::deployment::verify_deployment(&arpc.fast, f).await;
+        if !aave_pin_allows(mode, pinned.as_ref().err()) {
+            if let Err(e) = &pinned {
+                error!(protocol = %name, error = %e, "ALERT: Aave fork deployment check failed; disabled (live)");
+            }
+            continue;
+        }
+        let cache = data_dir.join(format!("{name}_borrowers.json"));
+        match mev_lending_aave_v3::AaveV3Adapter::new(f.clone(), arpc.clone(), cache).await {
+            Ok(a) => adapters.push(Box::new(a)),
+            Err(e) => error!(protocol = %name, error = %format!("{e:#}"), "aave fork disabled"),
         }
     }
     if let Some(c) = cfg.compound_v3.clone().filter(|c| c.enabled) {
