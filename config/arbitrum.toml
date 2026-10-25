@@ -105,6 +105,48 @@ pool_implementation_code_hash = "0x9018e99643e0c9b7506f6c8233da851241f5bfddb0615
 verified_block = 514414210
 source = "https://github.com/aave-dao/aave-address-book/blob/38f57964f2ae776b371b1d7115c901136edb38ca/src/AaveV3Arbitrum.sol"
 
+# Aave v3 forks with Aave's interfaces (DECISIONS #184), through the Aave adapter, each with its own pinned deployment.
+# 30-day census (2026-10-25) repaid volume in DECISIONS #184. YLDR is not here: its data provider drops the stable-debt
+# fields and does not match the adapter's decoding.
+[[aave_forks]]
+name = "mahalend"                   # Arbitrum MahaLend Market
+enabled = true
+pool = "0x88c6a98430Cc833E168430DaC427e9796C9EC576"
+data_provider = "0xE76C1D2a7a56348574810e83D38c07D47f0641F3"
+oracle = "0x8c931b3B362aB66a376A19cF25835a259ed60265"
+from_block = 78309437               # first log
+scan_step = 2000000
+
+[aave_forks.manifest]
+chain_id = 42161
+pool_addresses_provider = "0x4a7B5CC0A043cdf3d059dD5e4D8e2F370Ee2a59d"
+pool = "0x88c6a98430Cc833E168430DaC427e9796C9EC576"
+oracle = "0x8c931b3B362aB66a376A19cF25835a259ed60265"
+pool_implementation = "0x8F8dA3B85d854B1b4210e30C3118Ca7E7B0EAd70"
+pool_implementation_code_hash = "0xfb07e22693a8b84f4ad53141ab51fae330c22b000acc37ce94be72d67da6de8e"
+verified_block = 518049154
+source = "PoolAddressesProvider getPool/getPriceOracle and the EIP-1967 slot, read on-chain at verified_block (2026-10-25)"
+
+[[aave_forks]]
+name = "avalon"                   # Arbitrum Avalon Market
+enabled = true
+pool = "0xe1ee45DB12ac98d16F1342a03c93673d74527b55"
+data_provider = "0xEc579d2cE07401258710199Ff12a5bb56e086a6F"
+oracle = "0x16d0D4D24305aE29161A42F51D15dc8586BBdC9B"
+from_block = 210832307              # first log
+scan_step = 2000000
+
+[aave_forks.manifest]
+chain_id = 42161
+pool_addresses_provider = "0xc48790B692B6e622d494d09317F1450e21DBa4b4"
+pool = "0xe1ee45DB12ac98d16F1342a03c93673d74527b55"
+oracle = "0x16d0D4D24305aE29161A42F51D15dc8586BBdC9B"
+pool_implementation = "0x438D55ea027578c0d8bEf51B3548CDb127F6cBC7"
+pool_implementation_code_hash = "0x511facf4535dd32c330c8e54c75c80b05ed9d525d248ccc4a15fe44baa8b6525"
+verified_block = 518049164
+source = "PoolAddressesProvider getPool/getPriceOracle and the EIP-1967 slot, read on-chain at verified_block (2026-10-25)"
+
+
 [compound_v3]
 enabled = true
 from_block = 87000000            # first Arbitrum Comet (USDC.e), May 2023

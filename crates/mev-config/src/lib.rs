@@ -174,6 +174,10 @@ impl Default for LiquidationShadowConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AaveConfig {
     pub enabled: bool,
+    /// Protocol id in logs, events and the borrower cache name (`[[aave_forks]]`; Aave's own
+    /// section leaves it out and is `aave-v3`).
+    #[serde(default)]
+    pub name: Option<String>,
     pub pool: Address,
     pub data_provider: Address,
     pub oracle: Address,
@@ -715,6 +719,9 @@ pub struct ChainConfig {
     pub morpho: Option<MorphoConfig>,
     #[serde(default)]
     pub moonwell: Option<MoonwellConfig>,
+    /// Aave v3 forks with Aave's pool, data-provider and oracle interfaces, through the Aave adapter.
+    #[serde(default)]
+    pub aave_forks: Vec<AaveConfig>,
     #[serde(default)]
     pub exactly: Option<ExactlyConfig>,
     #[serde(default)]
@@ -1012,6 +1019,14 @@ mod tests {
                 .as_ref()
                 .is_some_and(|e| e.enabled && e.scan_step <= 500)
         );
+        assert_eq!(c.aave_forks.len(), 6);
+        assert!(c.aave_forks.iter().all(|f| {
+            f.scan_step <= 500
+                && f.name.is_some()
+                && f.manifest
+                    .as_ref()
+                    .is_some_and(|m| m.chain_id == 8453 && m.pool == f.pool)
+        }));
         let sonne = c
             .compound_v2
             .iter()

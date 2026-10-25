@@ -107,6 +107,124 @@ pool_implementation_code_hash = "0x46a99baf41f90e39818ded14f4d45885fe6293496e72c
 verified_block = 53053856
 source = "PoolAddressesProvider getPool/getPriceOracle/getPoolDataProvider and the EIP-1967 slot, read on-chain at verified_block; matches https://github.com/aave-dao/aave-address-book/blob/main/src/AaveV3Base.sol"
 
+# Aave v3 forks with Aave's interfaces (DECISIONS #184), through the Aave adapter, each with its own pinned deployment.
+# 30-day census (2026-10-25) repaid volume in DECISIONS #184. YLDR is not here: its data provider drops the stable-debt
+# fields and does not match the adapter's decoding.
+[[aave_forks]]
+name = "seamless"                   # Base Seamless Market
+enabled = true
+pool = "0x8F44Fd754285aa6A2b8B9B97739B79746e0475a7"
+data_provider = "0x2A0979257105834789bC6b9E1B00446DFbA8dFBa"
+oracle = "0xFDd4e83890BCcd1fbF9b10d71a5cc0a738753b01"
+from_block = 3318602                # first block with code
+scan_step = 500                  # Pocket cap
+
+[aave_forks.manifest]
+chain_id = 8453
+pool_addresses_provider = "0x0E02EB705be325407707662C6f6d3466E939f3a0"
+pool = "0x8F44Fd754285aa6A2b8B9B97739B79746e0475a7"
+oracle = "0xFDd4e83890BCcd1fbF9b10d71a5cc0a738753b01"
+pool_implementation = "0x16e48501634Dfbb52F556430d788c110E5bDA6Cf"
+pool_implementation_code_hash = "0x87eb30606f841505efb8537f9bb8aad231e37f7599fb76965fec21c6743befd5"
+verified_block = 53057541
+source = "PoolAddressesProvider getPool/getPriceOracle and the EIP-1967 slot, read on-chain at verified_block (2026-10-25)"
+
+[[aave_forks]]
+name = "extra-xlend"                   # Base Extra X Lending Market
+enabled = true
+pool = "0x09b11746DFD1b5a8325e30943F8B3D5000922E03"
+data_provider = "0x1566DA4640b6a0b32fF309b07b8df6Ade40fd98D"
+oracle = "0xe4f11109EeE64a9a6BEB5D3BCf4a5d9c70054DEc"
+from_block = 24648114               # first block with code
+scan_step = 500                  # Pocket cap
+
+[aave_forks.manifest]
+chain_id = 8453
+pool_addresses_provider = "0x1E35e657d469F134ea9cfE52E28949586f1a9c29"
+pool = "0x09b11746DFD1b5a8325e30943F8B3D5000922E03"
+oracle = "0xe4f11109EeE64a9a6BEB5D3BCf4a5d9c70054DEc"
+pool_implementation = "0xeA00Bdcc4Add0a0AfAfA80A00b47ff50cF46cC93"
+pool_implementation_code_hash = "0xf10e9f5ed98a405429a7a2b9cd3a2fcfda5990b2205bf5ff76b5c7b3fb67bf23"
+verified_block = 53057545
+source = "PoolAddressesProvider getPool/getPriceOracle and the EIP-1967 slot, read on-chain at verified_block (2026-10-25)"
+
+[[aave_forks]]
+name = "avalon-solvbtc"                   # Base Avalon SolvBTC Market
+enabled = true
+pool = "0x6374a1F384737bcCCcD8fAE13064C18F7C8392e5"
+data_provider = "0xA9D15C669940a757Ab76C6604f2f8f1e198f7D50"
+oracle = "0x1e013aCD4540A2b7803405eb0433386A5aaD9D80"
+from_block = 19959774               # first block with code
+scan_step = 500                  # Pocket cap
+
+[aave_forks.manifest]
+chain_id = 8453
+pool_addresses_provider = "0x952356Ef923Fa292289872102855966050Ba3dFf"
+pool = "0x6374a1F384737bcCCcD8fAE13064C18F7C8392e5"
+oracle = "0x1e013aCD4540A2b7803405eb0433386A5aaD9D80"
+pool_implementation = "0xDC041aFacE653446759824b9588Ed71201b5049e"
+pool_implementation_code_hash = "0xa412a4afc7c2dda40e755041aa8b850c88bd23c31f2dac2c8da11bf7e81b9266"
+verified_block = 53057549
+source = "PoolAddressesProvider getPool/getPriceOracle and the EIP-1967 slot, read on-chain at verified_block (2026-10-25)"
+
+[[aave_forks]]
+name = "base-market-35297537"                   # Base Market
+enabled = true
+pool = "0x35297537A1F8C67D3F7ab017A303F746982B3031"
+data_provider = "0x43A5803c5f1Cb6241858669ad6F63fe5B3882434"
+oracle = "0x0B9252d63cb44eFa7f18911Ee2259cB40d0c2965"
+from_block = 7342277                # first block with code
+scan_step = 500                  # Pocket cap
+
+[aave_forks.manifest]
+chain_id = 8453
+pool_addresses_provider = "0xFdf9DD6542E37B56Ccf59975246d5aEae7Aa832f"
+pool = "0x35297537A1F8C67D3F7ab017A303F746982B3031"
+oracle = "0x0B9252d63cb44eFa7f18911Ee2259cB40d0c2965"
+pool_implementation = "0x177a56705cE9A043cfD330eF479c4c37Af3E584C"
+pool_implementation_code_hash = "0x08f479f6a1337e6cc84faf2d387a283d334b65110c5a6563382bf50ce74ac05a"
+verified_block = 53057553
+source = "PoolAddressesProvider getPool/getPriceOracle and the EIP-1967 slot, read on-chain at verified_block (2026-10-25)"
+
+[[aave_forks]]
+name = "base-market-6abea1a2"                   # Base Market
+enabled = true
+pool = "0x6aBEa1a2B47f09C779Cb3D52B85097cB2BFaBcb0"
+data_provider = "0x32aB5e8ad83d4afbEe7103d7ed4A9CAF7B76F195"
+oracle = "0x08a5C6c44eF82718d6f55A3329C4799Ae1455281"
+from_block = 2583703                # first block with code
+scan_step = 500                  # Pocket cap
+
+[aave_forks.manifest]
+chain_id = 8453
+pool_addresses_provider = "0x593C2d762B1CDe79101D946Ca7816eeaF17Ad744"
+pool = "0x6aBEa1a2B47f09C779Cb3D52B85097cB2BFaBcb0"
+oracle = "0x08a5C6c44eF82718d6f55A3329C4799Ae1455281"
+pool_implementation = "0x2dbd09fFAEf6Ba869800233619046d830aD58fAd"
+pool_implementation_code_hash = "0x47a7f49b9f82f8fbaa74416bdab9a0a422a2f252d307b03b2873127cda01bd2a"
+verified_block = 53057557
+source = "PoolAddressesProvider getPool/getPriceOracle and the EIP-1967 slot, read on-chain at verified_block (2026-10-25)"
+
+[[aave_forks]]
+name = "alux"                   # Base Alux Market
+enabled = true
+pool = "0x7a8AE9bB9080670e2BAFb6Df3EA62968F4Ad8a88"
+data_provider = "0x12f471aBC19678940d1CE9bc95B7Bc3BF0af1C55"
+oracle = "0xf20e1784E87Fcf02CFd91c49E6cF6A69B5e50F0F"
+from_block = 17716292               # first block with code
+scan_step = 500                  # Pocket cap
+
+[aave_forks.manifest]
+chain_id = 8453
+pool_addresses_provider = "0xf7F56d8a155aF8A726dfDa80790c7a4fbf21CDf8"
+pool = "0x7a8AE9bB9080670e2BAFb6Df3EA62968F4Ad8a88"
+oracle = "0xf20e1784E87Fcf02CFd91c49E6cF6A69B5e50F0F"
+pool_implementation = "0x3daa7BD2a8968569fD2dD7de826E0fB52a55acFA"
+pool_implementation_code_hash = "0xcbbb3d26c35284350e5669c024cdd680f79c972ed774d97465d13a952df0518e"
+verified_block = 53057561
+source = "PoolAddressesProvider getPool/getPriceOracle and the EIP-1967 slot, read on-chain at verified_block (2026-10-25)"
+
+
 [compound_v3]
 enabled = true
 from_block = 2197588             # first Base Comet (USDbC), checked 2026-10-25
