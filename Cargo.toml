@@ -32,7 +32,7 @@ axum = { version = "0.8", features = ["ws"] }
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }
 tokio-util = { version = "=0.7.19", default-features = false }
 httpdate = "=1.0.3"
-rusqlite = { version = "0.40", features = ["bundled", "hooks", "limits"] }
+rusqlite = { version = "0.41", features = ["bundled", "hooks", "limits"] }
 redb = "4.3"
 
 seqscope-core = { path = "crates/seqscope-core" }
