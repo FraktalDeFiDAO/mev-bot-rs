@@ -3,6 +3,21 @@
 version = 4
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2fb6cfd47bf496ff64095c20eaba0c201404ee38714d4142fcfa1dc334fcc7a"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5c1865780388bfa186411ab5f247819487fc4864c6e9c3106611fa347586e1"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "alloy"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1227,6 +1242,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "6.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34c6783f42c21c952ad7112b354f0ba2f10760e9decea5b1b60523d6e270faaf"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
 ]
 
 [[package]]
@@ -2705,7 +2730,6 @@ name = "mev-bindings"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "mev-lending",
  "mev-types",
 ]
 
@@ -2727,10 +2751,12 @@ dependencies = [
  "alloy",
  "mev-protocol",
  "mev-protocol-aave-v3",
+ "mev-protocol-aerodrome",
  "mev-protocol-balancer",
  "mev-protocol-camelot",
  "mev-protocol-compound-v3",
  "mev-protocol-cow",
+ "mev-protocol-dolomite",
  "mev-protocol-fluid",
  "mev-protocol-kyber",
  "mev-protocol-morpho-blue",
@@ -2746,16 +2772,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mev-lending"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "async-trait",
- "serde",
-]
-
-[[package]]
 name = "mev-protocol"
 version = "0.1.0"
 dependencies = [
@@ -2764,6 +2780,14 @@ dependencies = [
 
 [[package]]
 name = "mev-protocol-aave-v3"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-aerodrome"
 version = "0.1.0"
 dependencies = [
  "alloy",
@@ -2796,6 +2820,14 @@ dependencies = [
 
 [[package]]
 name = "mev-protocol-cow"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "mev-protocol",
+]
+
+[[package]]
+name = "mev-protocol-dolomite"
 version = "0.1.0"
 dependencies = [
  "alloy",
@@ -2903,6 +2935,7 @@ name = "mev-risk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "mev-types",
  "serde",
  "serde_json",
  "tracing",
@@ -2916,6 +2949,7 @@ dependencies = [
  "anyhow",
  "futures",
  "mev-bindings",
+ "serde_json",
  "tokio",
  "tower",
  "tracing",
@@ -2928,6 +2962,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "base64 0.23.1",
+ "brotli-decompressor",
  "futures",
  "mev-rpc",
  "serde",
@@ -3665,9 +3700,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "once_cell",
